@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shadow Warrior</title>
+<link rel="stylesheet" href="jfsw.css">
+</head>
+<body>
+<main id="stage">
+  <canvas id="canvas" width="640" height="480" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+  <div id="overlay" role="status">
+    <h1>Shadow Warrior</h1>
+    <progress id="progress" max="100" value="0" hidden></progress>
+    <p id="status">Loading...</p>
+    <button id="start" type="button" hidden>Click to start</button>
+    <button id="reload" type="button" hidden>Reload the page</button>
+  </div>
+</main>
+<p id="help" hidden>
+  Keyboard and mouse as in the desktop game (the mouse is captured when you click the picture).
+  <b>Escape</b> opens the menu; it also releases the mouse.
+</p>
+<pre id="testinfo" hidden></pre>
+
+<script src="jfsw.js"></script>
+<script async src="sw.js"></script>
+</body>
+</html>

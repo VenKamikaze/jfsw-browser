@@ -1,0 +1,83 @@
+:root {
+  color-scheme: dark light;
+  --bg: #0c0c10;
+  --fg: #e6e2d8;
+  --muted: #9a958a;
+  --accent: #e0a000;
+  --accent-ink: #1a1200;
+  --bad: #ff7a70;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ececf0;
+    --fg: #1c1a16;
+    --muted: #5d584e;
+    --accent: #b87800;
+    --accent-ink: #ffffff;
+    --bad: #b3261e;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 16px;
+}
+#stage {
+  position: relative;
+  line-height: 0;
+  background: #000;
+  max-width: 100%;
+}
+canvas#canvas {
+  display: block;
+  /* jfsw.js fits the canvas to the window once the game is running (fit()); the
+     drawing size is whatever video mode the game chose. */
+  max-width: 100%;
+  image-rendering: pixelated;
+  outline: none;
+}
+#overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+  line-height: 1.45;
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+}
+#overlay[hidden] { display: none; }
+#overlay h1 { margin: 0; font-size: 1.3rem; letter-spacing: .14em; text-transform: uppercase; }
+#status { margin: 0; max-width: 36em; color: var(--muted); min-height: 1.45em; }
+#status.error { color: var(--bad); }
+progress { width: min(320px, 70%); height: 10px; accent-color: var(--accent); }
+progress[hidden], button[hidden] { display: none; }
+button {
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 12px 30px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+button:focus-visible { outline: 3px solid var(--fg); outline-offset: 3px; }
+#help { margin: 0; max-width: 60em; color: var(--muted); font-size: .9rem; text-align: center; }
+#help[hidden], #testinfo[hidden] { display: none; }
+#testinfo { margin: 0; font-size: .8rem; color: var(--muted); max-width: 100%; overflow: auto; }
+@media (max-width: 520px) { body { padding: 0 8px; } }

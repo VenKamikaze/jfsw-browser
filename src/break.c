@@ -959,7 +959,7 @@ int AutoBreakSprite(short BreakSprite, short type)
     SPRITEp bp = &sprite[BreakSprite];
     BREAK_INFOp break_info;
     extern void DoWallBreakMatch( short match );
-    int SpawnBreakFlames(SHORT SpriteNum);
+    int SpawnBreakFlames(SHORT SpriteNum, SHORT enemy);
 
     break_info = FindSpriteBreakInfo(bp->picnum);
 
@@ -1009,7 +1009,7 @@ int AutoBreakSprite(short BreakSprite, short type)
     if (TEST(break_info->flags, BF_KILL) || break_info->breaknum == -1)
         {
         if (TEST(break_info->flags, BF_FIRE_FALL))
-            SpawnBreakFlames(BreakSprite);
+            SpawnBreakFlames(BreakSprite, -1);   // 2nd argument is unused; WebAssembly needs the call to match the definition
 
         RESET(bp->cstat, CSTAT_SPRITE_BLOCK|CSTAT_SPRITE_BLOCK_HITSCAN);
         SET(bp->cstat, CSTAT_SPRITE_INVISIBLE);

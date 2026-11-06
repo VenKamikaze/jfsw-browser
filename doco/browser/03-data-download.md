@@ -7,7 +7,7 @@ The browser build gets its game data the way decision D8 describes. The page dow
 ## Read first
 
 - [`README.md`](README.md): D8, D11 (only the shareware GRP is offered for download by default), Q2 (the data source, and that it has **no CORS headers** and is a zip inside a zip).
-- [`code-facts.md`](code-facts.md): §6 (the search path, `grpfiles.cache`, portable mode) and what brief 02 added (§12 and later).
+- [`code-facts.md`](code-facts.md): §6 (the search path, `grpfiles.cache`, portable mode) and what brief 02 added (§13).
 - The Outcome of [02](02-emscripten-port.md): how `web/jfsw.js` starts the game today. The GRP is fetched from `?data=` (default: `swshare.grp` next to the page) into `/data/sw.grp` (on the search path, not persisted), with no cache. The game's directory is `/persist` on IDBFS, in portable mode (`user_profiles_disabled`), and holds `sw.cfg`, saves and `grpfiles.cache`. This brief replaces the uncached fetch.
 - `src/grpscan.c`: the known GRPs (name, CRC32, size) and how `grpfiles.cache` is keyed (name, size, mtime).
 
@@ -39,7 +39,7 @@ The browser build gets its game data the way decision D8 describes. The page dow
 
 ### 4. No re-checksum on reload
 
-- The game re-checksums the GRP on every start today, because `/data/sw.grp` is written with a new mtime each time and `grpfiles.cache` is keyed by name, size and mtime (code-facts §6 and §12).
+- The game re-checksums the GRP on every start today, because `/data/sw.grp` is written with a new mtime each time and `grpfiles.cache` is keyed by name, size and mtime (code-facts §6 and §13).
 - Give the file a stable mtime (e.g. the cache entry's stored time, through `FS.utime`) so the game's persisted `grpfiles.cache` hits. The test checks that the game doesn't print `Checksumming` on the second load. No engine change should be needed; if one is, keep it small, under `__EMSCRIPTEN__`.
 
 ### 5. File picker

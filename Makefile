@@ -183,6 +183,10 @@ endif
 ifeq ($(PLATFORM),DARWIN)
 	OURLDFLAGS+= -framework Foundation
 endif
+ifeq ($(PLATFORM),EMSCRIPTEN)
+	# Browser: the page puts the GRP in /data (a folder that is not persisted).
+	OURCPPFLAGS+= -DDATADIR=\"/data\"
+endif
 
 ifeq ($(RENDERTYPE),SDL)
 	OURCFLAGS+= $(SDLCONFIG_CFLAGS)
@@ -212,7 +216,12 @@ endif
 
 # TARGETS
 .PHONY: clean veryclean all
+ifeq ($(PLATFORM),EMSCRIPTEN)
+all: wasm
+include Makefile.emscripten
+else
 all: sw$(EXESUFFIX) build$(EXESUFFIX)
+endif
 
 include Makefile.deps
 

@@ -1933,6 +1933,12 @@ ExitMenus(void)
     ControlPanelType = ct_mainmenu;
     UsingMenus = FALSE;
 
+#ifdef __EMSCRIPTEN__
+    // A browser tab can be closed or reloaded at any time and the game then never reaches
+    // its normal exit, which is where sw.cfg is written. Write it whenever the menus are left.
+    CONFIG_WriteSetup();
+#endif
+
     if (LoadGameOutsideMoveLoop)
         return;
 
