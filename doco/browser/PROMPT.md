@@ -8,7 +8,7 @@ vnet was built for the same job in [`VenKamikaze/BitRiot`](https://github.com/Ve
 
 ## 0. Where things stand (hand-off; keep this up to date after every merge)
 
-**6 Nov 2026: brief 00 merged into `claude`. Next: briefs 01 and 02, in parallel.**
+**6 Nov 2026: brief 00 merged into `claude`; briefs 01 and 02 written and running in parallel (worktrees `/home/user/wt-01`, `/home/user/wt-02`).**
 
 - **Answers** are recorded in [`README.md`](README.md): submodules stay, on the user's forks (Q1 b); shareware data from a verified mirror (Q2); "Start now" is in (Q3); music later (Q4); upstream-friendly where cheap (Q5, default).
 - **Repos:** the work spans four GitHub repos, all attached to the session with push access: `VenKamikaze/jfsw-browser` (this one), and the forks `VenKamikaze/jfbuild`, `VenKamikaze/jfaudiolib` and `VenKamikaze/jfmact`. The forks existed already (this prompt originally said they didn't), and they contain the commits jfsw pins.
@@ -17,7 +17,7 @@ vnet was built for the same job in [`VenKamikaze/BitRiot`](https://github.com/Ve
 - **Test data:** `scripts/fetch-test-data.sh` (brief 00) downloads and verifies the shareware GRP. The source is `https://image.dosgamesarchive.com/games/3dsw12.zip` (MD5 `d77564e8764feeb1509dd0d534fb8952`); `web.archive.org` resets connections from the cloud container, `archive.org/download/3dsw12/3dsw12.zip` is the same file.
 - **Bit Riot reference material** is on Bit Riot's `claude` branch, not `master`. Fetch it by URL (`git fetch https://github.com/VenKamikaze/BitRiot claude`) if the local clone has a `claude/…` remote branch, which blocks a plain fetch.
 - **Brief 00 landed:** submodules on the forks, `ext/vnet` at `v0.4.0`, `scripts/setup.sh`, `setup-emsdk.sh` (default install in `~/.cache/jfsw-browser/emsdk`, shared by all worktrees), `fetch-test-data.sh`, `run-headless.sh`, tests in `tests/`, and the verified [`code-facts.md`](code-facts.md) and [`building.md`](building.md). The orphan branch `emscripten-ports` holds the SDL2, Ogg and Vorbis port archives, because GitHub archive URLs answer 403 in the cloud container.
-- **Next:** write briefs 01 and 02 (drafts exist in the coordinator's scratchpad; if lost, write them from §5 and `code-facts.md`), merge them via a docs branch, then run them in parallel in separate worktrees.
+- **Next:** review, fix and merge 01 and 02 (both change jfbuild: merge the second one's jfbuild branch on top of the first's, per "Working across repos"). Then write 03 and 04.
 
 ## 1. Set up
 
