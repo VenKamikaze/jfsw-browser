@@ -113,4 +113,100 @@ Playwright with local HTTP servers (Chromium and Playwright are preinstalled; ne
 
 ## Outcome
 
-_Not started._
+Status: **review** (branch `browser/03-data-download` in jfsw-browser; no engine change, so jfbuild, jfaudiolib and jfmact are untouched). Not tested: Firefox (not installed here), a real GPU or network, a person.
+
+**What landed**
+
+- `web/data.js` (new): CRC-32, download with progress and checks, the IndexedDB cache, the picked file. `web/grptable.js` (new): the table of known GRPs, a copy of `grpfiles[]` in `src/grpscan.c`. `web/config.js` (new): the one place a host edits (`url`, declared `size` and `crc32`, `revalidate`). `web/index.html`, `web/jfsw.js`, `web/jfsw.css`: progress, the data line ("Game data: Shareware Version, downloaded ... from ..., kept in this browser"), "Use your own copy of the game data...", "Download again", "Use the download instead", "Try again", the error text. `Makefile.emscripten` copies the three new files into `build-wasm/`.
+- `doco/browser/data-hosting.md` (new): what to serve, MIME type, compression (measured), cache headers, CORS, Apache example. `building.md` and `code-facts.md` (new section 14) updated.
+- Tests: `tests/web/data.js` (150 checks, tests 1 to 9 of the brief plus revalidation and "Download again"), `tests/web/grptable.js` (8 checks, no browser), `tests/web/dataserver.js` (the test server: gzip, ETag, CORS, errors, dropped connections; records every request).
+
+**How it works**
+
+1. `jfsw.js` mounts `/persist` as before, then calls `JfswData.load()`. The URL is `?data=` or `config.js`'s `url`; the declared `size` and `crc32` apply only to the configured URL.
+2. Cache lookup. A record is used with **no network request** when: its key is the same absolute URL, its config signature (schema, declared size, declared crc32) is the same as now, its stored bytes are as long as `size`, and its CRC32 and size are in the table as a game that can start (shareware or registered; the add-ons are refused for now). **Nothing is recomputed on a hit**: the CRC32 was checked when the record was stored.
+3. Otherwise it downloads (`fetch` with `cache: 'no-store'`), computing the CRC32 chunk by chunk, then checks, in this order: HTTP status; truncation (the connection dropped, or fewer bytes than the declared size or a trustworthy `Content-Length`); too many bytes (aborted as soon as the declared size is passed); the declared `crc32`; the table (known; same size as a known GRP but another CRC32: "damaged"; starts with `KenSilverman` but shorter than a known GRP: "looks cut off"; anything else: "not a data file the game knows", with size and CRC32; an add-on: refused). Only a file that passes is stored and handed to the game.
+4. A failed check ends in the state `needdata`: the message on the page names the URL (or the file), the problem and the numbers; "Try again" and the picker are offered; no `sw.grp` is written and `main` is never called, so the engine's "Failed to load PALETTE.DAT!" cannot be what a person sees.
+5. **When the cache is revalidated or replaced:** (a) the configured URL, declared size or declared crc32 differs from what the record was stored under: downloaded again; (b) "Download again": downloaded again; (c) **opt-in** `revalidate: true` in `config.js` (or `?test=1&revalidate=1`): a conditional request (`If-None-Match` from the stored ETag, `If-Modified-Since` from `Last-Modified`); `304` keeps the copy, `200` replaces it, a network failure keeps it with a notice. Default: never, so a reload makes no request. Records for other URLs are deleted on every load. The picked file lives under its own key (`local`) and a `source` setting says which is in use; "Use the download instead" deletes the picked copy and switches back.
+6. The file is written to `/data/sw.grp` and given a modification time equal to the record's stored time (`FS.utime`), so the game's own `grpfiles.cache` (in `/persist`) hits and the game does not print `Checksumming` on the second start.
+7. `navigator.storage.persist()` is asked after the first successful store. Chrome decides by itself, silently (it grants for sites that are installed, bookmarked or visited often and refuses a new profile; headless Chromium here answered `false`); Firefox shows the person a permission prompt. I could only observe the Chromium answer. Without it the browser may evict the cached file under storage pressure; the page then just downloads it again.
+8. **Quota / no IndexedDB:** a failed store (`QuotaExceededError` from `put()` or from the transaction) does not stop the game: the page says "The browser has no space left to keep the game data. The game will start, but the data will be downloaded again next time." If IndexedDB cannot be opened, "This browser would not let the page keep the game data (...), so it is downloaded each time." (and the existing note that saves and settings will not be kept).
+
+**Numbers**
+
+- **CRC32 time:** 95 to 116 ms for the 26,056,769 bytes in headless Chromium (slice-by-4, computed chunk by chunk as the download arrives, so it overlaps the network); 33 ms in Node. Done on the main thread; a worker was not worth it.
+- **gzip on `swshare.grp`:** 26,056,769 bytes become 11,565,085 at level 6 (44.4 %, saves 55.6 %), 12,283,846 at level 1, 11,522,170 at level 9; Brotli quality 5 gives 10,956,970 (42.1 %). Full table in `data-hosting.md`.
+- **Real-quota check:** `Storage.overrideQuotaForOrigin` through the DevTools protocol (1 MB) made Chromium itself refuse the store; the notice appeared and the game started. The `?test=1&idb=quota` hook throws the same `QuotaExceededError` inside the same `put()`.
+
+**Test hooks (only with `?test=1`)**: `idb=quota` (the cache's `put()` throws a `QuotaExceededError` `DOMException`; the real one from the browser takes the same path, and the real-quota run above confirms it), `idb=off` (every `indexedDB.open` fails with an `InvalidStateError` error event, which is what an old Firefox private window did; it hits the game's IDBFS and the data cache alike), `revalidate=1|0`, `window.jfswDownloadLog` (every progress report), `window.jfswData`, `window.jfswDataError`.
+
+**Tests** (Chromium; run in this order on the final tree)
+
+- `node tests/web/grptable.js`: **8 passed, 0 failed** (the table in `web/grptable.js` equals the one parsed out of `src/grpscan.c`, and the comparison notices a changed CRC32, a changed size and a missing row; `config.js` declares a table entry; the page's CRC-32 equals the standard check value and zlib's for inputs of 0 to 65,537 bytes and the real GRP).
+- `node tests/web/data.js`: **150 passed, 0 failed** (about 2 minutes). Sections: 1 first load (progress reported 15 to 700 times, strictly increasing, ends at the whole file; one request at the server; record in IndexedDB with size and CRC32; the game reaches the main menu); 2 cached second load (no request reaches the server, the page says the data is from the browser, the menu is reached, no `Checksumming`); 3 corrupt (one bit flipped), truncated (short file; connection dropped half way; short file with nothing declared), each: clear message, game not started, nothing handed to the game, nothing cached, and the right file loads afterwards; 4 unknown (random bytes of the right size and of another size, a text file, with and without a declared size): size and CRC32 in the message; 5 HTTP 404 and 500, a cross-origin server without CORS (the CORS hint appears; the same file loads when the server sends the header), nothing listening; 6 gzip (on the fly and pre-compressed with a compressed `Content-Length`), with a declared size (the percentage is of the declared size, ends at exactly 100, never past it) and without (no total claimed, indeterminate bar, megabytes only); 7 file picker (bad file refused, good file accepted and cached under its own key, reload starts without picking and with no request for any data URL, no `Checksumming`, switching back to the download); 8 quota (hook, and Chromium's real quota set to 1 MB over the DevTools protocol) and no IndexedDB; 9 config changes (new URL: downloaded again and the old record deleted; changed declared size: downloaded again and refused because the file no longer matches); 10 "Download again", `ETag` kept, no revalidation by default, opt-in revalidation (`If-None-Match`, 304, a changed ETag replaces the file); 11 the plain page has no test hooks.
+- Brief 02's tests on the same tree (wasm rebuilt, native `./sw` rebuilt with `make veryclean && make -j4`): `smoke.js` **26 passed, 0 failed**; `persist.js` **15 passed, 0 failed**; `determinism.js` **20 passed, 1 failed**: the failure is the unchanged "no stall over 100 ms" check (this run: median 16.8 ms, p95 37, p99 77, max 187 ms, load 3.0 on 4 cores; software-rendered headless Chromium, needs real hardware as reported in brief 02). Native and wasm `.dms` files are still identical, both directions.
+
+**Proof the tests can fail** (`DATA_`DATA_SABOTAGE=<name>` on the otherwise unchanged tests (150 checks):
+
+| Sabotage | What is damaged | Result |
+|---|---|---|
+| `nocache` (test 2) | the cache lookup always misses | 142 passed, **8 failed**: "second load: NO request for the GRP reached the server" (the server saw the request), "the page says the data comes from the browser", "the game did NOT checksum the GRP again", and the same idea in the unchanged-config, ETag, "Download again" and revalidation checks |
+| `nocrc` (test 3) | no CRC32 check: `verify()` accepts anything, and the table lookup knows every file | 121 passed, **29 failed**: corrupt, random and text files are accepted, handed to the game and cached |
+| `nosize` (test 3, 5) | no size checks while downloading (truncation, too many bytes) | 147 passed, **3 failed**: "truncated (short file)", "text file (default config)" and "config change (declared size)" (without the size check, the table check still refuses these, but with a different message); the other truncation cases are caught by the table and by the dropped connection |
+| `nocheck` (test 3) | both of the above | 111 passed, **39 failed**: the corrupt, truncated, random, text and picker-bad-file checks (the size and the CRC32 are the only defences) |
+| `nopickcache` (test 7) | the picked file is not stored | **4 failed**, then the run stops (it cannot go on without the file): "the picked file is cached under its own key", "reload starts from the cached local copy without picking again", "no request for the GRP reached the server", "the page offers Click to start" |
+| `nomtime` (§4) | no `FS.utime`: the file gets a new modification time on every load | **2 failed**: "second load: the game did NOT checksum the GRP again" (`Checksumming sw.grp` printed) and "picker, reload: the game did not checksum it again" |
+
+(Counts are from the runs on the final tree; the sabotaged copy of `data.js` or `jfsw.js` is built in memory and served by the test server only.)=<name> node tests/web/data.js` serves a damaged copy of the page's own code from the test server; nothing in the repository changes)
+
+`DATA_SABOTAGE=<name>` on the otherwise unchanged tests (150 checks):
+
+| Sabotage | What is damaged | Result |
+|---|---|---|
+| `nocache` (test 2) | the cache lookup always misses | 142 passed, **8 failed**: "second load: NO request for the GRP reached the server" (the server saw the request), "the page says the data comes from the browser", "the game did NOT checksum the GRP again", and the same idea in the unchanged-config, ETag, "Download again" and revalidation checks |
+| `nocrc` (test 3) | no CRC32 check: `verify()` accepts anything, and the table lookup knows every file | 121 passed, **29 failed**: corrupt, random and text files are accepted, handed to the game and cached |
+| `nosize` (test 3, 5) | no size checks while downloading (truncation, too many bytes) | 147 passed, **3 failed**: "truncated (short file)", "text file (default config)" and "config change (declared size)" (without the size check, the table check still refuses these, but with a different message); the other truncation cases are caught by the table and by the dropped connection |
+| `nocheck` (test 3) | both of the above | 111 passed, **39 failed**: the corrupt, truncated, random, text and picker-bad-file checks (the size and the CRC32 are the only defences) |
+| `nopickcache` (test 7) | the picked file is not stored | **4 failed**, then the run stops (it cannot go on without the file): "the picked file is cached under its own key", "reload starts from the cached local copy without picking again", "no request for the GRP reached the server", "the page offers Click to start" |
+| `nomtime` (§4) | no `FS.utime`: the file gets a new modification time on every load | **2 failed**: "second load: the game did NOT checksum the GRP again" (`Checksumming sw.grp` printed) and "picker, reload: the game did not checksum it again" |
+
+(Counts are from the runs on the final tree; the sabotaged copy of `data.js` or `jfsw.js` is built in memory and served by the test server only.)
+
+**Findings and corrections**
+
+- The brief said to compute the CRC32 "off the main thread if it's slow enough to matter". It is not (about 100 ms, overlapped with the download), so it is on the main thread.
+- The brief's test 4 (a GRP-sized file of random bytes) gets the message "the size of Shareware Version but its checksum is wrong ... damaged" rather than "not a data file", because the size is a known one; a random file of another size gets "not a data file the game knows". Both show size and CRC32, and both are tested.
+- The declared size of the default config is enough to catch a truncated or wrong file before the table is consulted, so test 5's cross-origin and test 3's cases cover two checks each; the table check is exercised with `?data=` (which ignores the declared size).
+- `code-facts.md` section 13 said brief 03 "can keep the mtime stable or ship the cache entry": the mtime is what was done (section 14 has the details); no engine change.
+- The `Checksumming` line still appears once on the very first start, and again the first time a different GRP is used (the cache keeps one entry per name).
+- `tests/web/data.js` takes about 2 minutes; the sabotage runs are the same script.
+
+**Concerns**
+
+- Firefox and a real network were not tried. Firefox-specific: storing a 26 MB `ArrayBuffer` in IndexedDB (fine in Chromium, needs checking), the persistent-storage prompt, `FS.utime`, the file picker's `accept=".grp"`, and what a private window does (older Firefox fails `indexedDB.open`; newer versions use memory-only storage with a small quota: both end in the same notices).
+- A 26 MB file in IndexedDB costs the visitor 26 MB of disk; the page does not offer to delete it other than "Download again" (which replaces it) and the browser's own site-data controls.
+- The whole file is held in memory a few times during a download (the destination buffer, the structured clone for IndexedDB, the Emscripten file). Peak was not measured; a phone with 1 GB of RAM may struggle (touch is out of scope here).
+- If a host sets `size` in `config.js` wrongly (say, after replacing the file), every visitor sees an error: that is intended, and the message says what the page expected.
+- The first click on "Use your own copy..." opens the OS file dialog; `<input type=file>` cannot be opened without a user gesture, which is why it is a visible control and not automatic.
+
+**Play-test steps (Arch Linux, pacman)**
+
+```
+sudo pacman -S --needed base-devel git unzip python nodejs npm
+git clone --recurse-submodules -b claude https://github.com/VenKamikaze/jfsw-browser    # after this branch is merged; until then: -b browser/03-data-download
+cd jfsw-browser
+scripts/setup-emsdk.sh && scripts/build-wasm.sh && scripts/fetch-test-data.sh
+mkdir -p /tmp/swsite && cp build-wasm/* /tmp/swsite/ && cp testdata/swshare.grp /tmp/swsite/
+cd /tmp/swsite && python3 -m http.server 8000 --bind 127.0.0.1
+```
+
+Use Chromium (or Chrome) and Firefox in turn; for each, a fresh profile or a private window for step 1 (in Chrome DevTools, Application, Storage, "Clear site data" resets the page between steps; in Firefox, Settings, Privacy, Manage Data).
+
+1. **First load.** Open `http://127.0.0.1:8000/`. You should see "Downloading the game data: x MB of 24.9 MB (n%)" with a bar moving to 100 %, then "Ready." and the line "Game data: Shareware Version, downloaded just now from 127.0.0.1:8000/swshare.grp (24.9 MB). It is kept in this browser." (Firefox may show a permission prompt about storing data persistently: allow it, then decline it in a second run, and say which you did.) Click "Click to start", get to the main menu.
+2. **Reload.** Press F5. The page should be ready within a second with no bar, and the line should say "downloaded <date> ... kept in this browser". In the terminal running `http.server` no new `GET /swshare.grp` line may appear. Start the game: it should reach the menu faster than the first time (no 26 MB checksum; DevTools console shows `Scanning for GRP files...` without `Checksumming`).
+3. **Download again.** On the start screen press "Download again": the bar runs again and `http.server` logs one more `GET /swshare.grp`.
+4. **A bad URL.** Open `http://127.0.0.1:8000/?data=/nothere.grp`: the page says the URL answered 404, that the game has not been started, and offers "Try again" and "Use your own copy...". Then `?data=http://127.0.0.1:8001/swshare.grp` (nothing listening, or start a second `python3 -m http.server 8001 --bind 127.0.0.1` in another directory holding the GRP: it sends no CORS headers): the message must mention Access-Control-Allow-Origin and the network failure. Also try a cut-off or damaged file: `head -c 10000000 swshare.grp > /tmp/swsite/short.grp` and open `?data=/short.grp` ("looks cut off ... 10,000,000 bytes"); `cp swshare.grp bad.grp; printf 'X' | dd of=bad.grp bs=1 seek=1000000 conv=notrunc` then `?data=/bad.grp` ("damaged"). Nothing may be remembered after these (DevTools, Application, IndexedDB, `jfsw-data` shows no new row).
+5. **File picker.** Open `http://127.0.0.1:8000/?data=/nothere.grp`, click "Use your own copy of the game data...", choose `testdata/swshare.grp` (a registered `sw.grp`, if you own it, also works). The page should say "your own copy"; click start and play. Reload that URL: it starts again with no picking and no request. Press "Use the download instead" (with `?data=` removed from the address, or with the real GRP on the server) to go back.
+6. **Things only a person can see:** the layout on a narrow window; whether the picker button is usable by keyboard (Tab, Enter); the wording of each message; in Chrome, whether the Application tab shows Storage "Persistent: no"/"yes"; in a private window (Firefox) that the game still starts and the notice about the data being downloaded each time shows; with the DevTools network panel throttled to Slow 3G, that the bar and the megabytes move smoothly. In Chrome, DevTools, Application, Storage, set a small storage limit ("Simulate custom storage quota") and reload to see the quota notice for real.
+
+Report anything that differs. To run the tests on your own machine: `npm i playwright && npx playwright install chromium`, then `node tests/web/data.js` (about 2 minutes) and `node tests/web/grptable.js`.

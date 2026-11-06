@@ -25,9 +25,9 @@ const KEY = (port, p) => `url:http://127.0.0.1:${port}${p}`;
 // ---- sabotage: patched copies of the page's code -------------------------------------------------------------
 const PATCHES = {
   nocache: ['data.js', [['var cached = cache && !o.force ?', 'var cached = false && !o.force ?']]],
-  nocrc: ['data.js', [['function verify(bytes, crc, what, declared) {', 'function verify(bytes, crc, what, declared) { return GRPS[1];']]],
+  nocrc: ['data.js', [['function verify(bytes, crc, what, declared) {', 'function verify(bytes, crc, what, declared) { return GRPS[1];'], ['function identify(crc, size) {', 'function identify(crc, size) { return GRPS[1];']]],
   nosize: ['data.js', [['if (expect && got < expect) {', 'if (false) {'], ['if (declared && got + c.length > declared) {', 'if (false) {']]],
-  nocheck: ['data.js', [['function verify(bytes, crc, what, declared) {', 'function verify(bytes, crc, what, declared) { return GRPS[1];'], ['if (expect && got < expect) {', 'if (false) {'], ['if (declared && got + c.length > declared) {', 'if (false) {']]],
+  nocheck: ['data.js', [['function verify(bytes, crc, what, declared) {', 'function verify(bytes, crc, what, declared) { return GRPS[1];'], ['function identify(crc, size) {', 'function identify(crc, size) { return GRPS[1];'], ['if (expect && got < expect) {', 'if (false) {'], ['if (declared && got + c.length > declared) {', 'if (false) {']]],
   nopickcache: ['data.js', [["return store(rec).then(function (stored) { return result(rec, 'picked'", "return Promise.resolve(false).then(function (stored) { return result(rec, 'picked'"]]],
   nomtime: ['jfsw.js', [['FS.utime(path, ms, ms);', '']]],
 };
@@ -75,6 +75,7 @@ async function cacheRecords(page) {
 }
 // Click start; wait for a real picture; skip the intro; the main menu is drawn.
 async function reachMenu(page, label) {
+  if (!(await visible(page, '#start'))) { t.check(false, `${label}: the page offers "Click to start"`, await statusText(page)); return; }
   await page.click('#start');
   let stats = null;
   const t0 = Date.now();
@@ -167,7 +168,7 @@ async function main() {
       t.check(Object.keys((await cacheRecords(r.page)) || {}).length === 0, 'corrupt: nothing was cached');
       // The right file afterwards.
       good();
-      await r.page.click('#retry');
+      if (await visible(r.page, '#retry')) { await r.page.click('#retry'); } else { await r.page.evaluate(() => { try { indexedDB.deleteDatabase('jfsw-data'); } catch (e) { /* none */ } }); await r.page.reload(); }   // (the else branch is only for sabotaged runs, where the bad file was accepted)
       await waitLoaded(r.page);
       t.check((await st(r.page)) === 'ready', 'corrupt, then the right file: loads normally after "Try again"', await statusText(r.page));
       t.check(!!(await cacheRecords(r.page))[KEY(PORT, '/swshare.grp')], 'corrupt, then the right file: now cached');
