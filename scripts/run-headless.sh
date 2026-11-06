@@ -89,17 +89,43 @@ export HOME="$workdir" SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
 # (for instance the OOM killer, status 137) is not mistaken for a timeout.
 flag="$workdir/.run-headless-timeout"
 rm -f "$flag"
+gpid=""
+wpid=""
+# freeze the watchdog, kill its sleep, then the watchdog (it must not reach its kill)
+stop_watchdog() {
+    [ -n "$wpid" ] || return 0
+    kill -STOP "$wpid" 2>/dev/null
+    pkill -P "$wpid" 2>/dev/null
+    kill -KILL "$wpid" 2>/dev/null
+    wait "$wpid" 2>/dev/null
+    wpid=""
+}
+# If this script is interrupted or terminated, take the game down with it.
+# Background jobs of a non-interactive shell ignore SIGINT, so without this a
+# Ctrl-C (or a test harness stopping us) leaves the game running with its work
+# directory deleted under it.
+on_signal() {
+    trap - INT TERM HUP
+    stop_watchdog
+    if [ -n "$gpid" ]; then
+        kill -TERM "$gpid" 2>/dev/null
+        for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$gpid" 2>/dev/null || break; sleep 0.5; done
+        kill -KILL "$gpid" 2>/dev/null
+        wait "$gpid" 2>/dev/null
+    fi
+    exit "$1"
+}
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
+trap 'on_signal 129' HUP
 "$sw" -nosetup "$@" &
 gpid=$!
 ( sleep "$secs"; : > "$flag"; kill -TERM "$gpid" 2>/dev/null; sleep 5; kill -KILL "$gpid" 2>/dev/null ) &
 wpid=$!
 wait "$gpid"
 rc=$?
-# freeze the watchdog, kill its sleep, then the watchdog (it must not reach its kill)
-kill -STOP "$wpid" 2>/dev/null
-pkill -P "$wpid" 2>/dev/null
-kill -KILL "$wpid" 2>/dev/null
-wait "$wpid" 2>/dev/null
+trap - INT TERM HUP
+stop_watchdog
 if [ -e "$flag" ]; then
     rm -f "$flag"
     echo "run-headless: stopped after ${secs}s" >&2

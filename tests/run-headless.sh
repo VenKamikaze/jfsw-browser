@@ -53,6 +53,33 @@ mkdir -p "$work/caller"; echo here > "$work/caller/file"
 check "mktemp failure exits 125" "$(cat "$work/rc5")" 125
 [ "$(cat "$work/caller/file" 2>/dev/null)" = here ] && ok "caller's directory survives a mktemp failure" || bad "caller's directory was wiped"
 
+# 7. a signal to this script takes the game down with it (background jobs of
+# a non-interactive shell ignore SIGINT, so the game would otherwise be left
+# running with its work directory deleted)
+mkfake pidsleeper "echo \$\$ > '$work/game.pid'; trap 'exit 0' TERM; while :; do sleep 1; done"
+# Job control on (set -m) so the script itself is not started with SIGINT
+# ignored, as a plain background job of this non-interactive test would be (a
+# Ctrl-C in a terminal reaches it normally).
+for sig in INT TERM; do
+    rm -f "$work/game.pid"
+    set -m
+    "$script" --grp "$grp" --sw "$work/pidsleeper" --timeout 60 >/dev/null 2>&1 &
+    spid=$!
+    set +m
+    for _ in $(seq 50); do [ -s "$work/game.pid" ] && break; sleep 0.1; done
+    gpid="$(cat "$work/game.pid" 2>/dev/null)"
+    kill -"$sig" "$spid"
+    wait "$spid"; src=$?
+    want=130; [ "$sig" = TERM ] && want=143
+    check "SIG$sig to the script: its status" "$src" "$want"
+    if [ -n "$gpid" ] && ! kill -0 "$gpid" 2>/dev/null; then
+        ok "SIG$sig to the script stops the game"
+    else
+        bad "SIG$sig to the script left the game ($gpid) running"
+        [ -n "$gpid" ] && kill -KILL "$gpid" 2>/dev/null
+    fi
+done
+
 # 6. bad inputs
 run --sw "$work/nonexistent"; check "missing binary is 125" "$rc" 125
 run --sw "$work/exit0" --timeout abc; check "bad timeout is 2" "$rc" 2

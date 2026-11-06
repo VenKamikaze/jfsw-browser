@@ -12,7 +12,7 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 
 | # | Brief | Repos touched | Depends on | Status |
 |---|---|---|---|---|
-| 00 | [Repo set-up, baseline, code facts](00-setup.md) | jfsw-browser | Q1 | review |
+| 00 | [Repo set-up, baseline, code facts](00-setup.md) | jfsw-browser | Q1 | done |
 | 01 | vnet transport for mmulti (native) | jfsw-browser, jfbuild | 00 | not written |
 | 02 | Emscripten port | jfsw-browser, jfbuild, jfaudiolib | 00, Q2 | not written |
 | 03 | Data download from a URL | jfsw-browser | 02 | not written |
