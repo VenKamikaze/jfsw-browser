@@ -101,7 +101,7 @@ scripts/build-wasm.sh veryclean         # and the libraries and build-wasm/
 
 That is `emmake make -j4 USE_POLYMOST=0 USE_OPENGL=0` after sourcing the emsdk (the software renderer only, D6). `Makefile` includes `Makefile.emscripten` when the compiler is `emcc`; `jfbuild/Makefile.shared` and `jfaudiolib/Makefile.shared` recognise `wasm32-unknown-emscripten` as `PLATFORM=EMSCRIPTEN`. There is no startup window, no GTK and no editor (`build`); the network code is `mmulti_null.c` (single player) until the vnet transport is built for the browser (brief 04).
 
-Objects are named `*.wasm.o` and libraries `lib*.wasm.a`, so a native build and a browser build live in the same tree without touching each other (`make clean` in one does not remove the other's objects, except `src/version-auto.c`, which both regenerate). The output is in `build-wasm/` (git-ignored): `index.html`, `jfsw.js`, `jfsw.css` (copied from `web/`), `sw.js` and `sw.wasm`. About 25 s for a full build on 4 cores once the system libraries are cached (they are built on first use).
+Objects are named `*.wasm.o` and libraries `lib*.wasm.a`, so a native build and a browser build live in the same tree without touching each other (`make clean` in one does not remove the other's objects, except `src/version-auto.c`, which both regenerate). The output is in `build-wasm/` (git-ignored): `index.html`, `jfsw.js`, `jfsw.css`, `config.js`, `grptable.js`, `data.js` (copied from `web/`), `sw.js` and `sw.wasm`. About 25 s for a full build on 4 cores once the system libraries are cached (they are built on first use).
 
 Debug build (function names in traces, run-time assertions) into another directory: `scripts/build-wasm.sh WASM_DEBUG=1 WASMDIR=build-wasm-debug`.
 
@@ -111,12 +111,12 @@ Link options: `-sASYNCIFY` (the game's loops block; `jfbuild/src/sdlayer2.c` han
 
 ```sh
 scripts/fetch-test-data.sh                     # testdata/swshare.grp
-cd build-wasm && ln -sf ../testdata/swshare.grp .     # the dev data loader fetches ./swshare.grp
+cd build-wasm && ln -sf ../testdata/swshare.grp .     # config.js says: download ./swshare.grp
 python3 -m http.server 8000 --bind 127.0.0.1
 # open http://127.0.0.1:8000/ in Chromium or Firefox, click "Click to start"
 ```
 
-`?data=<url>` loads the GRP from elsewhere (it must send CORS headers if it is on another origin). The game keeps `sw.cfg`, saved games and the log in IndexedDB (the folder `/persist`); the GRP is in memory only. Page options and test hooks (`?test=1`) are described at the top of `web/jfsw.js`.
+The page downloads the GRP named in `config.js` (default: `swshare.grp` next to the page), checks it, keeps it in its own IndexedDB database (`jfsw-data`) and writes it to `/data/sw.grp` for the game; a reload makes no request for it. `?data=<url>` loads the GRP from elsewhere (it must send CORS headers if it is on another origin), and the page offers "Use your own copy..." for a `.grp` on disk. See [`data-hosting.md`](data-hosting.md). The game keeps `sw.cfg`, saved games and the log in IndexedDB (the folder `/persist`); `/data` is in memory only. To forget the cached data while testing: DevTools, Application, IndexedDB, delete `jfsw-data` (or press "Download again"). Page options and test hooks (`?test=1`) are described at the top of `web/jfsw.js`.
 
 ### 6.4 Browser tests
 
@@ -125,9 +125,11 @@ scripts/build-wasm.sh && make -j4           # the determinism test needs the nat
 node tests/web/smoke.js                     # canvas is drawn, menu reached, keyboard, audio, pointer, Escape, no errors
 node tests/web/determinism.js               # native against wasm: sync bytes, frame times
 node tests/web/persist.js                   # settings and saves survive a reload (also one without quitting, and one 500 ms after a save)
+node tests/web/data.js                      # game data: download, cache, errors, picker, quota, config changes (about 2 minutes)
+node tests/web/grptable.js                  # web/grptable.js agrees with src/grpscan.c (no browser)
 ```
 
-They use the preinstalled Chromium through Playwright (`require('playwright')`; never run `playwright install`), serve `build-wasm/` and `testdata/swshare.grp` on 127.0.0.1 ports 48101 and up, and clean up after themselves.
+They use the preinstalled Chromium through Playwright (`require('playwright')`; never run `playwright install`), serve `build-wasm/` and `testdata/swshare.grp` on 127.0.0.1 ports 48101 and up (data.js: 48201 and 48202), and clean up after themselves.
 
 ## 7. Layout of what brief 00 added
 

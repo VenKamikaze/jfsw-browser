@@ -8,7 +8,7 @@ vnet was built for the same job in [`VenKamikaze/BitRiot`](https://github.com/Ve
 
 ## 0. Where things stand (hand-off; keep this up to date after every merge)
 
-**6 Nov 2026: briefs 00, 01 and 02 merged into `claude` (02: play-test pending); 03 in progress. The user will pause before brief 04 (token budget): after 03, stop with this hand-off up to date. F1 is on hold.**
+**6 Nov 2026: briefs 00 to 03 merged into `claude` (02 and 03: play-test pending). PAUSED here at the user's request (token budget), before brief 04. F1 is on hold. Resume only when the user asks.**
 
 - **Answers** are recorded in [`README.md`](README.md): submodules stay, on the user's forks (Q1 b); shareware data from a verified mirror (Q2); "Start now" is in (Q3); music later (Q4); upstream-friendly where cheap (Q5, default).
 - **Repos:** the work spans four GitHub repos, all attached to the session with push access: `VenKamikaze/jfsw-browser` (this one), and the forks `VenKamikaze/jfbuild`, `VenKamikaze/jfaudiolib` and `VenKamikaze/jfmact`. The forks existed already (this prompt originally said they didn't), and they contain the commits jfsw pins.
@@ -21,7 +21,9 @@ vnet was built for the same job in [`VenKamikaze/BitRiot`](https://github.com/Ve
 - **Bug policy** (README, "Bugs found in the original game"; `bugs.md`): game-breaking, reproducible bugs in things a normal multiplayer game uses get a brief and a fix branch from `master`, after checking upstream; others are noted. **F1** (co-op freeze at tic 1522) is briefed and **on hold** at the user's request; it blocks 04's full-level test.
 - **Brief 02 landed:** the Emscripten build (`scripts/build-wasm.sh`, output in `build-wasm/`), the shell page in `web/`, IDBFS saves and settings, and the browser tests in `tests/web/` (smoke, persist, determinism; native and wasm sync bytes identical). The browser build links `mmulti_null.c` (no networking) until brief 04. **Play-test pending**: the steps are in 02's Outcome. The "no stall over 100 ms" frame check fails in this container (software-rendering headless Chromium); it needs real hardware.
 - **After moving a submodule pointer, run `make veryclean && make -j4`:** top-level `make` reuses a stale `jfbuild/libengine.a` (`bugs.md` L9).
-- **Next:** finish 03 ([`03-data-download.md`](03-data-download.md)): implement, review, fix, verify, merge. Then pause: 04 (browser netplay) and F1 wait for the user.
+- **Brief 03 landed:** `web/config.js` (the one file a host edits), `web/data.js` (checked download with progress and stall detection, IndexedDB cache re-checksummed on every hit, file picker, clear errors), `web/grptable.js` (tested against `src/grpscan.c`), [`data-hosting.md`](data-hosting.md) (Apache example checked on Apache 2.4.58). A reload makes no request and the game doesn't re-checksum. Play-test pending (steps in 03's Outcome).
+- **First thing next session: a flaky `tests/web/smoke.js` check from brief 02's fix round.** "a release asked for by the game does not open the menu" fails in about 3 of 5 runs on `claude` (always 54292 pixels), and "Down moves the menu cursor" failed once. The repeatable count suggests a real race in `web/jfsw.js`'s Escape synthesis (the `pointerlockchange` handler and the `exitPointerLock` wrapper): a release the game asked for is sometimes taken for the player's Escape and opens the menu. Find the cause and fix the page (or the test, only if the test is wrong); never loosen it. Run `smoke.js` at least 10 times after the fix.
+- **Then:** brief 04 (browser netplay) is not written yet; write it from §5 and the Outcomes of 01 and 02 (hidden tabs, `RELAY_AUTO`, replace `mmulti_null.c` in the Emscripten build, cross-play determinism; the sync check is weak, `bugs.md` L11-L12). Its full-level test needs F1 (on hold).
 
 ## 1. Set up
 

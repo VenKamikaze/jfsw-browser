@@ -6,12 +6,21 @@
 // main, and say so on the page if the game ends or crashes.
 //
 // Query string:
-//   ?data=<url>   fetch the GRP from this URL (default: swshare.grp next to this page).
-//                 Dev loader, no cache; brief 03 replaces it.
+//   ?data=<url>   fetch the GRP from this URL instead of the one in config.js (size and CRC32 of config.js
+//                 are then not checked; the file must still be a GRP the game knows).
 //   ?test=1       test hooks (below). Nothing else here reads the other options.
 //   ?args=...     game arguments, space separated (test only), e.g. "-level1 -dpdemo1".
 //   ?files=a,b    URLs of files to put in the game's directory before main (test only).
 //   ?persist=0    keep the game's directory in memory only (test only).
+//   ?idb=off      every IndexedDB open fails, as in an old private window (test only).
+//   ?idb=quota    storing the game data in the cache fails with a QuotaExceededError (test only).
+//   ?stall=<ms>   how long without a byte before a download is called stalled (default 30000; test only).
+//   ?revalidate=1|0  overrides config.js's `revalidate` (test only).
+//
+// The game data (brief 03): data.js downloads and checks the GRP, keeps it in its own IndexedDB cache and
+// hands the bytes here; this file writes them to /data/sw.grp with a stable modification time (so the game's
+// own grpfiles.cache, kept in /persist, recognises the file and the game does not checksum it again) and
+// shows the progress, the messages and the "use your own copy" picker.
 //
 // Test hooks, with ?test=1: window.jfswTest = { FS, readFile(name), writeFile(name, bytes),
 // listFiles(), start() }; Module.jfswFrameLog (see sdlayer2.c) is an array of frame times;
@@ -22,8 +31,21 @@
   var params = new URLSearchParams(location.search);
   var TEST = params.get('test') === '1';
   var PERSIST = !(TEST && params.get('persist') === '0');
+  if (TEST && params.get('idb') === 'off') {
+    // Test hook: what an old Firefox private window did: opening a database fails (for the game's IDBFS and the data cache).
+    var failing = function () {
+      var req = {};
+      setTimeout(function () {
+        req.error = new DOMException('simulated: IndexedDB is not available', 'InvalidStateError');
+        if (req.onerror) { req.onerror({ target: req, type: 'error', preventDefault: function () {}, stopPropagation: function () {} }); }
+      }, 0);
+      return req;
+    };
+    Object.defineProperty(window, 'indexedDB', { configurable: true, value: { open: failing, deleteDatabase: failing, cmp: function () { return 0; } } });
+  }
   var storageNote = '';
-  var DATA_URL = params.get('data') || 'swshare.grp';
+  var CFG = (window.JFSW_CONFIG && window.JFSW_CONFIG.data) || {};
+  var DATA_OVERRIDE = params.get('data');
   var DATA_DIR = '/data';        // on the game's search path (DATADIR in the Makefile); not persisted
   var HOME_DIR = '/persist';     // the game's current directory: sw.cfg, saves, sw.log; IndexedDB
   var GRP_NAME = 'sw.grp';
@@ -35,6 +57,12 @@
   var progressEl = document.getElementById('progress');
   var startBtn = document.getElementById('start');
   var reloadBtn = document.getElementById('reload');
+  var retryBtn = document.getElementById('retry');
+  var dataInfoEl = document.getElementById('datainfo');
+  var dataCtl = document.getElementById('datactl');
+  var pickInput = document.getElementById('pick');
+  var redownloadBtn = document.getElementById('redownload');
+  var useDownloadBtn = document.getElementById('usedownload');
   var helpEl = document.getElementById('help');
   var testInfoEl = document.getElementById('testinfo');
 
@@ -45,7 +73,7 @@
 
   window.jfswOut = [];
   window.jfswErr = [];
-  window.jfswState = 'loading';   // loading, ready, running, ended, error
+  window.jfswState = 'loading';   // loading, needdata (no usable game data: pick a file or retry), ready, running, ended, error
   window.jfswSyncs = 0;           // completed writes to IndexedDB
 
   function setState(s) { window.jfswState = s; }
@@ -64,6 +92,8 @@
     overlay.hidden = false;
     progressEl.hidden = true;
     startBtn.hidden = true;
+    retryBtn.hidden = true;
+    dataCtl.hidden = true;
     reloadBtn.hidden = false;
     showStatus(message, isError);
     reloadBtn.focus();
@@ -231,6 +261,130 @@
     }, function (e) { throw new Error(label + ': could not fetch ' + url + ' (' + describe(e) + ')'); });
   }
 
+  // ---- Game data --------------------------------------------------------------------------------------
+
+  var prepared = false;       // the first game data is in place and the page is otherwise ready
+  var gen = 0;                // each acquire() has a number; the answer of an older one (cancelled by a pick) is ignored
+  var loadCtl = null;
+
+  function dataOptions(extra) {
+    return Object.assign({
+      url: DATA_OVERRIDE || CFG.url || 'swshare.grp',
+      size: DATA_OVERRIDE ? 0 : (CFG.size || 0),
+      crc32: DATA_OVERRIDE ? '' : (CFG.crc32 || ''),
+      revalidate: (TEST && params.has('revalidate')) ? params.get('revalidate') === '1' : !!CFG.revalidate,
+      hooks: { quota: TEST && params.get('idb') === 'quota' },
+      stallMs: TEST && params.has('stall') ? +params.get('stall') : 30000,
+      keepUrls: DATA_OVERRIDE ? [CFG.url || 'swshare.grp'] : [],
+      onProgress: onDataProgress,
+      onStatus: function (t) { showStatus(t); }
+    }, extra || {});
+  }
+
+  var lastDraw = 0;
+  function onDataProgress(got, total) {
+    if (TEST) { window.jfswDownloadLog.push({ got: got, total: total, t: Math.round(performance.now()) }); }
+    var now = performance.now();
+    if (now - lastDraw < 40 && (!total || got < total)) { return; }
+    lastDraw = now;
+    progressEl.hidden = false;
+    if (total) {
+      progressEl.max = 100;
+      progressEl.value = 100 * got / total;
+      showStatus('Downloading the game data: ' + JfswData.mb(got) + ' of ' + JfswData.mb(total) + ' (' + Math.floor(100 * got / total) + '%)');
+    } else {
+      progressEl.removeAttribute('value');      // indeterminate: the total is not known (or the response is compressed)
+      showStatus('Downloading the game data: ' + JfswData.mb(got));
+    }
+  }
+
+  function setControls(on, opts) {
+    opts = opts || {};
+    dataCtl.hidden = !on;
+    pickInput.disabled = !on;
+    redownloadBtn.hidden = !(on && opts.redownload);
+    useDownloadBtn.hidden = !(on && opts.useDownload);
+  }
+
+  function writeGrp(res) {
+    var path = DATA_DIR + '/' + GRP_NAME;
+    FS.writeFile(path, res.bytes);
+    // A modification time that only changes when the data does: the game keeps (name, size, mtime, CRC32)
+    // in grpfiles.cache and only checksums the 26 MB again when one of them differs.
+    var ms = Math.floor(res.storedAt / 1000) * 1000;
+    FS.utime(path, ms, ms);
+  }
+
+  function describeData(res) {
+    var size = JfswData.mb(res.size);
+    if (res.source === 'local') { return 'Game data: ' + res.name + ', your own copy (' + (res.fileName || 'picked file') + ', ' + size + ').' + (res.cached ? ' It is kept in this browser.' : ''); }
+    var where = res.url.replace(/^https?:\/\//, '').replace(/\?.*$/, '');
+    if (res.from === 'network') { return 'Game data: ' + res.name + ', downloaded just now from ' + where + ' (' + size + ').' + (res.cached ? ' It is kept in this browser.' : ''); }
+    return 'Game data: ' + res.name + ', downloaded ' + new Date(res.storedAt).toLocaleString() + ' from ' + where + ' (' + size + '), kept in this browser' +
+      (res.from === 'revalidated' ? ' (the server says it is still current).' : '.');
+  }
+
+  function dataReady(res) {
+    writeGrp(res);
+    window.jfswData = { source: res.source, from: res.from, name: res.name, size: res.size, crc: res.crc, cached: res.cached, notes: res.notes, crcMs: res.crcMs, downloadMs: res.downloadMs, storedAt: res.storedAt };
+    dataInfoEl.hidden = false;
+    dataInfoEl.textContent = describeData(res);
+    progressEl.hidden = true;
+    setControls(true, { redownload: res.source === 'download', useDownload: res.source === 'local' });
+    var after = prepared ? Promise.resolve() : finishPrepare();
+    return after.then(function () {
+      prepared = true;
+      var notes = res.notes.join(' ');
+      showStatus('Ready.' + (storageNote ? storageNote : '') + (notes ? ' ' + notes : ''), !!(storageNote || notes));
+      startBtn.hidden = false;
+      startBtn.focus();
+      setState('ready');
+    });
+  }
+
+  function dataFailed(e) {
+    window.jfswDataError = { kind: e && e.kind, message: describe(e), size: e && e.size, crc: e && e.crc };
+    progressEl.hidden = true;
+    startBtn.hidden = true;
+    dataInfoEl.hidden = true;
+    var text = (e && e.name === 'DataError') ? e.message : 'The game data could not be loaded: ' + describe(e);
+    showStatus(text + '\nThe game has not been started. You can try again, or use your own copy of the game data (a .grp file).', true);
+    retryBtn.hidden = false;
+    setControls(true, {});
+    setState('needdata');
+  }
+
+  // Gets the game data (downloading it, or from the cache, or from a picked file) and puts it where the game looks.
+  // A new call cancels the one before (picking a file while a download runs).
+  function acquire(extra) {
+    if (loadCtl) { loadCtl.abort(); }
+    var ctl = loadCtl = new AbortController();
+    var mine = ++gen;
+    setState('loading');
+    startBtn.hidden = true;
+    retryBtn.hidden = true;
+    setControls(true, {});          // the picker stays usable: it cancels a download that is slow or stuck
+    progressEl.hidden = true;
+    dataInfoEl.hidden = true;
+    showStatus('Loading game data...');
+    return JfswData.load(dataOptions(Object.assign({ signal: ctl.signal }, extra))).then(function (res) {
+      if (mine === gen) { return dataReady(res); }
+    }, function (e) {
+      if (mine === gen) { dataFailed(e); }
+    }).then(function () { if (mine === gen) { loadCtl = null; } }, function (e) {
+      if (mine === gen) { loadCtl = null; finish('Could not start: ' + describe(e), true); }
+    });
+  }
+
+  retryBtn.addEventListener('click', function () { acquire(); });
+  redownloadBtn.addEventListener('click', function () { if (window.jfswState === 'ready') { acquire({ force: true }); } });
+  useDownloadBtn.addEventListener('click', function () { if (window.jfswState === 'ready') { acquire({ useDownload: true }); } });
+  pickInput.addEventListener('change', function () {
+    var file = pickInput.files && pickInput.files[0];
+    pickInput.value = '';
+    if (file && ['ready', 'needdata', 'loading'].indexOf(window.jfswState) >= 0 && FS) { acquire({ file: file }); }
+  });
+
   function prepare() {
     FS = Module.FS;
     FS.mkdir(DATA_DIR);
@@ -251,25 +405,20 @@
       // and the log all go in the current directory (code-facts section 6).
       if (!exists(HOME_DIR + '/user_profiles_disabled')) { FS.writeFile(HOME_DIR + '/user_profiles_disabled', ''); }
       FS.chdir(HOME_DIR);
-      showStatus('Loading game data...');
-      return fetchBytes(DATA_URL, 'Game data');
-    }).then(function (bytes) {
-      FS.writeFile(DATA_DIR + '/' + GRP_NAME, bytes);
-      if (!TEST) { return; }
-      var files = (params.get('files') || '').split(',').filter(Boolean);
-      if (files.length && PERSIST) { throw new Error('?files= puts files in the game\'s folder, which is saved to IndexedDB: add persist=0'); }
-      return files.reduce(function (p, url) {
-        return p.then(function () {
-          return fetchBytes(url, 'Test file').then(function (b) { FS.writeFile(HOME_DIR + '/' + url.split('/').pop().split('?')[0], b); });
-        });
-      }, Promise.resolve());
-    }).then(function () {
+      return acquire();
+    });
+  }
+
+  // After the first game data is in place: the test files, then the syncing of /persist.
+  function finishPrepare() {
+    var files = TEST ? (params.get('files') || '').split(',').filter(Boolean) : [];
+    if (files.length && PERSIST) { return Promise.reject(new Error('?files= puts files in the game\'s folder, which is saved to IndexedDB: add persist=0')); }
+    return files.reduce(function (p, url) {
+      return p.then(function () {
+        return fetchBytes(url, 'Test file').then(function (b) { FS.writeFile(HOME_DIR + '/' + url.split('/').pop().split('?')[0], b); });
+      });
+    }, Promise.resolve()).then(function () {
       startSyncing();
-      progressEl.hidden = true;
-      showStatus('Ready.' + storageNote, !!storageNote);
-      startBtn.hidden = false;
-      startBtn.focus();
-      setState('ready');
     });
   }
 
@@ -342,6 +491,7 @@
   // ---- Test hooks -------------------------------------------------------------------------------------
 
   if (TEST) {
+    window.jfswDownloadLog = [];
     Module.jfswFrameLog = capped([], 50000);
     Module.jfswYieldLog = capped([], 50000);
     testInfoEl.hidden = false;
