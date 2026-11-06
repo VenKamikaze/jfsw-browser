@@ -164,7 +164,7 @@ Fixes after review (all in jfsw-browser; jfbuild and jfaudiolib did not change):
 
 ```
 sudo pacman -S --needed base-devel git unzip python nodejs npm go   # go is not needed here
-git clone --recurse-submodules -b browser/02-emscripten-port https://github.com/VenKamikaze/jfsw-browser
+git clone --recurse-submodules -b claude https://github.com/VenKamikaze/jfsw-browser
 cd jfsw-browser
 scripts/setup-emsdk.sh                    # downloads Emscripten 6.0.13 (about 400 MB) into ~/.cache/jfsw-browser/emsdk
 scripts/build-wasm.sh                     # about 3 minutes the first time (it builds Emscripten's libraries and SDL2)
@@ -182,6 +182,17 @@ Things only a person can check (a headless browser cannot):
 - **Pointer lock**: does the first click after Escape grab the pointer and reach the game as a mouse button too?
 - **Audio latency**: the game asks for 4096-sample buffers and SDL resamples to the browser's rate, so about 90 ms: does shooting feel late?
 - **A private window**: IndexedDB can be unavailable there. The page now starts and says saves and settings will not be kept; check the message shows and the game plays.
+- **Menu sliders**: in Options, Sound (F4), do Left and Right move the volume sliders? While fixing the settings test, the arrow keys never moved the volume slider in headless Chromium (Enter on a toggle did work), so this may be a real input problem in the browser build.
 - **Ctrl+W**: Ctrl is the fire key, so Ctrl+W (or Ctrl+Tab) closes the tab. There is no way to stop that from a page; just see whether it bites.
 
 If the SDL2 download is blocked on your network, see `building.md` section 6.1.
+
+### Coordinator verification and merge
+
+- Read the fix-round diffs. The only game-source change is `ExitMenus()` calling `CONFIG_WriteSetup()` under `__EMSCRIPTEN__`, which reads settings and writes `sw.cfg` and touches no game state. Also read the page's sync queue and `FS.close` hook in `web/jfsw.js`: a request during a write is queued, several share one follow-up write, and a failed write doesn't block the queue.
+- On a clean wasm and native build with nothing else running: `tests/run-headless.sh` 17/0, `smoke.js` 26/0, `persist.js` 15/0. The settings check was flaky (failed 2 of 4 runs: the volume key presses were lost); after the second small fix it passed 6 of 6 for the implementer and 2 of 2 for the coordinator. `determinism.js` 20/1: native and wasm `.dms` identical in both directions; the only failure is the stall check (median 16.8 ms, p95 37.3, p99 85.9 to 87.2, max 303 to 337 ms, load 2.7 to 3.5 from the test's own software-rendering Chromium). It is left failing and unverified here; it needs a run on real hardware (play-test above).
+- **Merged with brief 01** (`claude` merged into this branch, `8d43fa8` and `8a3c9c8`): the forks' `claude` branches got this brief's jfbuild (`27edad9`, a clean merge on top of 01's) and jfaudiolib (`a9d4ecb`) branches, and the submodules point there. `code-facts.md`: brief 01's section stays §12, this brief's is §13. On the combined tree: the wasm build, smoke 26/0, persist 15/0 and determinism 20/1 (as above), `run-headless` 17/0, `fetch-test-data` 28/0, and the native `make test` (see below).
+- **Two things the merge showed:**
+  - The stale-library trap (`bugs.md` L9) bit: after the submodule pointer moved, `make` linked the old `jfbuild/libengine.a` (`undefined reference to mmulti_vnet_errormsg`). `make veryclean && make -j4` fixed it.
+  - Brief 01's UDP comparison test chose its baseline as the merge-base with `claude`, which broke once 01 was on `claude`. It was fixed on `browser/01b-test-baseline`, merged into `claude` first (see 01's Outcome).
+- Reviewed by an independent read-only reviewer (verdict: merge after fixes; no blocking issues; all four should-fix items and the nits addressed). Merged into `claude` with `--no-ff`. Status: **done (play-test pending)**.
