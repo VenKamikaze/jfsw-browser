@@ -27,6 +27,8 @@ vnet was built for the same job in [`VenKamikaze/BitRiot`](https://github.com/Ve
 
 ## 2. What the code does (verify in brief 00)
 
+> **Superseded.** Brief 00 verified this section; the verified facts, with file:line references and the corrections, are in [`code-facts.md`](code-facts.md). Read that instead. Corrections to the text below: `main` is in `jfbuild/src/sdlayer2.c` and calls `app_main` (`game.c:3372`); the player count does drop when players quit (it never rises); the open slot is assigned in `getpacket`, not `initmultiplayerscycle`; `grpscan.c` lists six GRPs, not four; the `USE_GLES2` define is in `jfbuild/include/build.h:20`; the shareware GRP caps a network game at 4 players and `MultiSharewareCheck` exits above that.
+
 **Networking:** `jfbuild/src/mmulti.c` (1243 lines) behind `jfbuild/include/mmulti.h`.
 - The game calls `initmultiplayersparms`, `initmultiplayerscycle`, `sendpacket`, `getpacket`, `flushpackets`, `uninitmultiplayers`, and reads the globals `numplayers`, `myconnectindex`, `connecthead`, `connectpoint2[]`, `networkmode`.
 - One UDP socket, IPv4 and IPv6 (`sockaddr_storage`), default port `0x5bd9` (23513), `-p<port>`.

@@ -97,4 +97,59 @@ Q1 (answered). Push access to `VenKamikaze/jfsw-browser` (granted).
 
 ## Outcome
 
-_Not started._
+Status: **review** (branch `browser/00-setup`; the coordinator marks it done after review and merge). No game, engine or fork code changed; no fork repo was pushed.
+
+**What landed**
+
+- `.gitmodules`: absolute URLs for the three forks, `branch = claude` for jfbuild and jfaudiolib, `branch = master` for jfmact. Pins unchanged (`40a98be`, `68be97f`, `731c0cc`). `ext/vnet` added at `v0.4.0` (`eb1feeb`). A throwaway compile of all 13 `ext/vnet/src/*.c` with `gcc -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra` and with the project's `-std=c99 -W -Wall -fno-strict-aliasing` gave no warnings.
+- `scripts/setup.sh` (apt and pacman, `--no-gtk`), `scripts/setup-emsdk.sh` (emsdk revision `d7b4130`, Emscripten 6.0.13, default `EMSDK_DIR` `~/.cache/jfsw-browser/emsdk`, `--with-ports`), `scripts/fetch-test-data.sh`, `scripts/run-headless.sh`, `tests/fetch-test-data.sh`.
+- Orphan branch `emscripten-ports` (pushed, one commit): SDL2 `release-2.32.10.zip` (taken from Bit Riot's branch), `libogg-1.3.5.zip` and `libvorbis-1.3.7.zip` (downloaded from the `releases/download` URLs, which were reachable here), `SHA512SUMS` and a README. All three SHA-512 values equal the `HASH` in the pinned emsdk's `tools/ports/{sdl2,ogg,vorbis}.py`. Library archives only.
+- `doco/browser/code-facts.md` (every PROMPT §2 claim marked, plus the extra topics) and `doco/browser/building.md`.
+- `.gitignore` now lists `/testdata/`.
+
+**Corrections to PROMPT §2** (details in `code-facts.md` §1; PROMPT §2 now carries a pointer): `main` is `jfbuild/src/sdlayer2.c:254`, `app_main` is `game.c:3372`; the slot is assigned in `getpacket` (`mmulti.c:~1066`), not `initmultiplayerscycle`; `CommPlayers` can drop when players quit; the GRP table has six entries and the files are matched by CRC32 and size, not name; the `USE_GLES2` define is `build.h:20` (`glbuild.c:142` is a debug callback); `-nosetup` does not stop the GTK window on a first run without `sw.cfg`; shareware `MultiSharewareCheck` calls `exit(0)` above 4 players; absolute paths do not work in `SWGRP` or `-g`; `-dp` needs `-level#`; `-demosyncrecord` records during playback and a `-demosynctest` mismatch exits 0.
+
+**Tests**
+
+- `tests/fetch-test-data.sh`: 23 passed, 0 failed (good zip; second run no-op and untouched; truncated zip; zip with one flipped byte; right size and wrong CRC; wrong size; stale bad GRP removed or replaced; the script's constants equal `src/grpscan.c`). Every failing case exits non-zero and leaves an empty destination.
+- With the CRC check line removed from `scripts/fetch-test-data.sh`: 21 passed, 2 failed (`GRP of the right size and the wrong CRC (exited 0)` and `wrong CRC: destination holds: swshare.grp`). Restored: 23 of 23.
+
+**Native build** (fresh `git clone --recurse-submodules -b browser/00-setup`, `scripts/setup.sh`, `make -j4`): green with the defaults (14 warnings) and, after `make veryclean`, with `USE_POLYMOST=0 USE_OPENGL=0` (10 warnings). Both build `sw` and `build`. About 15 s each.
+
+**Headless run** (manual check):
+
+```
+$ scripts/run-headless.sh --timeout 6 --workdir /tmp/wd1 -level1 -drdemo1     # records; stopped by the timeout
+run-headless: stopped after 6s            (exit 124; the game itself quits cleanly on SIGTERM)
+$ scripts/run-headless.sh --workdir /tmp/wd1 -level1 -dpdemo1                 # plays back
+...
+Music driver is No Sound                  (exit 0, by itself, after about 6 s)
+```
+
+The log shows `Scanning for GRP files...`, ` Checksumming swshare.grp`, `GRP file: swshare.grp`, `SHADOW WARRIOR(tm) (Shareware Version)`, `Setting video mode 640x480`, `FX driver is SDL`. A demo recorded with the software build plays back to the end in the OpenGL build too (exit 0). `ALSADrv: snd_seq_open err -2` is harmless noise. There is no built-in "run N frames and quit"; the demo playback is the only run that ends by itself (see `code-facts.md` §7).
+
+**Clean-cache emsdk** (fresh `EMSDK_DIR`, empty Emscripten cache):
+
+```
+$ EMSDK_DIR=$PWD/emsdk-clean scripts/setup-emsdk.sh --with-ports
+... Done installing SDK 'sdk-releases-eb132757325583b787fe9414b09afea9442b72ad-64bit'.
+seeded port sdl2 from release-2.32.10.zip
+seeded port ogg from libogg-1.3.5.zip
+seeded port vorbis from libvorbis-1.3.7.zip
+emsdk 6.0.13 is installed in .../emsdk-clean
+$ emcc sdl.c -sUSE_SDL=2 -o sdl.js            # 7.8 s: "generating port: libSDL2.a", no download
+$ emcc ov.c -sUSE_OGG=1 -sUSE_VORBIS=1 -o ov.js && node ov.js
+Xiph.Org libVorbis 1.3.7
+```
+
+Re-running the script prints `Emscripten ports already seeded`. The whole install takes about 40 s (the toolchain is a 312 MB download from `storage.googleapis.com`).
+
+**Blocked hosts:** none. The `github.com/xiph/*/releases/download/...` URLs for libogg and libvorbis were reachable (only `/archive/` URLs are blocked). `image.dosgamesarchive.com` worked.
+
+**For later briefs**
+
+- Brief 01: `mmulti.c` has `netinit`/`netsend`/`netread` as its only socket users; vnet needs C11 per file (the project builds with `-std=c99`).
+- Brief 02: `Makefile.shared` already forces `USE_ASM=0`; under `emcc` `PLATFORM` is `UNKNOWN`, so check the Linux-only Makefile blocks; every wait is a busy loop with no sleep (`code-facts.md` §5); `wasm32` vs `x86_64` demo/sync compatibility is unverified.
+- Brief 05: limit hosting to 4 players on the shareware GRP.
+- Brief 03: `user_profiles_disabled` in the cwd is the engine's own switch for reading and writing everything in the working directory; use it for the browser data folder.
+
