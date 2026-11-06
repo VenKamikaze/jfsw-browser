@@ -13,8 +13,15 @@
     <h1>Shadow Warrior</h1>
     <progress id="progress" max="100" value="0" hidden></progress>
     <p id="status">Loading...</p>
+    <p id="datainfo" hidden></p>
     <button id="start" type="button" hidden>Click to start</button>
+    <button id="retry" type="button" hidden>Try again</button>
     <button id="reload" type="button" hidden>Reload the page</button>
+    <div id="datactl" hidden>
+      <label class="btn secondary" id="picklabel">Use your own copy of the game data...<input id="pick" type="file" accept=".grp,.GRP"></label>
+      <button id="redownload" class="secondary" type="button" hidden>Download again</button>
+      <button id="usedownload" class="secondary" type="button" hidden>Use the download instead</button>
+    </div>
   </div>
 </main>
 <p id="help" hidden>
@@ -23,6 +30,9 @@
 </p>
 <pre id="testinfo" hidden></pre>
 
+<script src="config.js"></script>
+<script src="grptable.js"></script>
+<script src="data.js"></script>
 <script src="jfsw.js"></script>
 <script async src="sw.js"></script>
 </body>
