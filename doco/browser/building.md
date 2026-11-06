@@ -77,7 +77,7 @@ source ~/.cache/jfsw-browser/emsdk/emsdk_env.sh
 emcc --version                          # 6.0.13
 ```
 
-`EMSDK_DIR=/some/dir` changes the install location. The default is outside the worktree so that several worktrees share one install.
+`EMSDK_DIR=/some/dir` changes the install location. The default is outside the worktree so that several worktrees share one install. `EM_CACHE=/some/dir` (optional) makes both `setup-emsdk.sh --with-ports` and `build-wasm.sh` use a private Emscripten cache instead of the emsdk's own (`emsdk_env.sh` clears the variable; both scripts put it back): `EM_CACHE=$HOME/em-cache scripts/setup-emsdk.sh --with-ports && EM_CACHE=$HOME/em-cache scripts/build-wasm.sh`.
 
 `--with-ports` is for networks that block GitHub archive URLs (the cloud container answers 403). Emscripten downloads its ports from GitHub on first use; with `--with-ports` they are taken from the orphan branch `emscripten-ports` of this repository (archives of SDL2 2.32.10, libogg 1.3.5, libvorbis 1.3.7), checked against the SHA-512 in the pinned emsdk's `tools/ports/*.py`, and unpacked into Emscripten's cache the way Emscripten would, so `-sUSE_SDL=2` and `-sUSE_OGG=1 -sUSE_VORBIS=1` download nothing. It fetches that branch with git, so run it from a clone with the `origin` remote. It does not take Emscripten's cache lock, so don't run it while `emcc` is running. If the emsdk pin in the script changes, refresh the branch. (Outside such a network none of this is needed: the first `emcc` call with `-sUSE_SDL=2` downloads SDL2 and builds it, about 10 s.)
 
@@ -122,9 +122,9 @@ python3 -m http.server 8000 --bind 127.0.0.1
 
 ```sh
 scripts/build-wasm.sh && make -j4           # the determinism test needs the native ./sw too
-node tests/web/smoke.js                     # canvas is drawn, menu reached, no errors
+node tests/web/smoke.js                     # canvas is drawn, menu reached, keyboard, audio, pointer, Escape, no errors
 node tests/web/determinism.js               # native against wasm: sync bytes, frame times
-node tests/web/persist.js                   # settings and saves survive a reload
+node tests/web/persist.js                   # settings and saves survive a reload (also one without quitting, and one 500 ms after a save)
 ```
 
 They use the preinstalled Chromium through Playwright (`require('playwright')`; never run `playwright install`), serve `build-wasm/` and `testdata/swshare.grp` on 127.0.0.1 ports 48101 and up, and clean up after themselves.

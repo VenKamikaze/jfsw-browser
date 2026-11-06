@@ -82,6 +82,52 @@ async function analysePng(page, png) {
     }, b64);
   } finally { await side.close(); }
 }
+// Number of light pixels (r+g+b > 520) in a region of the page: text drawn on a dark menu. Used to see
+// that a menu shows something (a saved game's name) where an empty one shows nothing.
+async function brightPixels(page, clip) {
+  const png = await page.screenshot({ clip, type: 'png' });
+  const side = await page.context().newPage();
+  try {
+    return await side.evaluate(async (data) => {
+      const bmp = await createImageBitmap(await (await fetch('data:image/png;base64,' + data)).blob());
+      const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+      const g = c.getContext('2d'); g.drawImage(bmp, 0, 0);
+      const px = g.getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < px.length; i += 4) { if (px[i] + px[i + 1] + px[i + 2] > 520) { n++; } }
+      return n;
+    }, png.toString('base64'));
+  } finally { await side.close(); }
+}
+// Number of pixels (of the clip) that differ noticeably between two moments: `action` is awaited between the
+// two screenshots (null = nothing, to measure how much the picture changes by itself).
+async function changedPixels(page, clip, action, waitMs) {
+  const a = await page.screenshot({ clip, type: 'png' });
+  if (action) { await action(); }
+  await page.waitForTimeout(waitMs || 800);
+  const b = await page.screenshot({ clip, type: 'png' });
+  const side = await page.context().newPage();
+  try {
+    return await side.evaluate(async ({ da, db }) => {
+      const load = async (d) => {
+        const bmp = await createImageBitmap(await (await fetch('data:image/png;base64,' + d)).blob());
+        const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+        const g = c.getContext('2d'); g.drawImage(bmp, 0, 0);
+        return g.getImageData(0, 0, c.width, c.height).data;
+      };
+      const pa = await load(da), pb = await load(db);
+      let n = 0;
+      for (let i = 0; i < pa.length; i += 4) {
+        if (Math.abs(pa[i] - pb[i]) + Math.abs(pa[i + 1] - pb[i + 1]) + Math.abs(pa[i + 2] - pb[i + 2]) > 60) { n++; }
+      }
+      return n;
+    }, { da: a.toString('base64'), db: b.toString('base64') });
+  } finally { await side.close(); }
+}
+
+// The first save slot's name field in the load/save menus (viewport 1000x800, canvas at the top).
+const SLOT1 = { x: 35, y: 98, width: 410, height: 37 };
+
 // The picture is "not blank" if it has several distinct colours.
 const MIN_COLORS = 8;
 function notBlank(stats) { return stats.colors >= MIN_COLORS; }
@@ -141,4 +187,4 @@ async function runGame(env, opts) {
   return Object.assign(result, { state, errors, files, seconds, t0 });
 }
 
-module.exports = { tap, quitGame, runGame, warpScript, root, BUILD, GRP, check, summary, start, stop, open, waitState, canvasStats, analysePng, notBlank, MIN_COLORS, pct };
+module.exports = { changedPixels, brightPixels, SLOT1, tap, quitGame, runGame, warpScript, root, BUILD, GRP, check, summary, start, stop, open, waitState, canvasStats, analysePng, notBlank, MIN_COLORS, pct };

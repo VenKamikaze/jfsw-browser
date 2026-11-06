@@ -35,7 +35,8 @@ const SW = path.join(t.root, 'sw');
 const DEMO_SECONDS = 150;                   // what tests/tools/synth_input.c was asked to play
 const NAME = 'jfsw1';                       // demo name; the game limits it to 11 characters
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jfsw-det-'));
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jfsw-det-'));   // removed at the end
+process.on('exit', () => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) { /* best effort */ } });
 const gunzip = (f) => zlib.gunzipSync(fs.readFileSync(f));
 function put(name, buf) { const f = path.join(tmp, name); fs.writeFileSync(f, buf); return f; }
 

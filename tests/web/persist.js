@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Saves and settings persist across a page reload (brief 02, test 4).
+// Saves and settings persist across a page reload (brief 02, test 4, and its fix round).
 //
 //   node tests/web/persist.js
 //
@@ -10,6 +10,8 @@
 const t = require('./lib.js');
 
 const PORT = 48103;
+const RELOAD_AFTER_MS = +(process.env.RELOAD_AFTER_MS || 250); const SAVE_TRIES = 3;  // how soon after a save reached its full size the page is reloaded (without quitting)
+const SETTLE_MS = 1500;        // how long after leaving the menus the page is reloaded in the settings test
 
 async function session(env, context, query, quit) {
   const page = await context.newPage();
@@ -56,13 +58,61 @@ async function main() {
       // And the game can use it: load it.
       await p2.click('#start');
       await p2.waitForTimeout(5000);
-      await t.tap(p2, 'F3');
+      await t.tap(p2, 'F3');                    // the load menu lists the restored save by name in slot 1
       await p2.waitForTimeout(1500);
-      const stats = await t.canvasStats(p2);
-      t.check(t.notBlank(stats), 'the game runs on the restored files (load menu drawn)');
+      const text = await t.brightPixels(p2, t.SLOT1);
+      t.check(text > 50, `the game sees the restored save: its name is drawn in slot 1 of the load menu (${text} light pixels)`);
+      await t.tap(p2, 'Enter');                 // load it
+      await p2.waitForTimeout(500);
+      await t.tap(p2, 'y');
+      await p2.waitForTimeout(3000);
+      t.check((await p2.evaluate(() => window.jfswState)) === 'running', 'the game is still running after loading it');
       const log = await p2.evaluate(() => window.jfswOut.join('\n'));
       t.check(!/Error|ERROR/.test(log), 'no error in the game output');
       await context.close();
+    }
+    // --- settings survive a reload without quitting: F4 sound menu, change the sound volume, Escape ---
+    {
+      const read = async (p) => p.evaluate(() => { const b = window.jfswTest.readFile('sw.cfg'); return b ? new TextDecoder().decode(b) : null; });
+      const volume = (cfg) => { const m = cfg && /FXVolume = (\d+)/.exec(cfg); return m ? +m[1] : null; };
+      const context = await env.browser.newContext({ viewport: { width: 1000, height: 800 } });
+      const page = await context.newPage();
+      await page.goto(env.base + q); await t.waitState(page, 'ready');
+      await page.click('#start'); await page.waitForTimeout(4000);
+      t.check((await read(page)) === null, 'settings: no sw.cfg before anything is changed');
+      await t.tap(page, 'F4'); await page.waitForTimeout(800);
+      for (const k of ['ArrowDown', 'ArrowLeft', 'ArrowLeft', 'ArrowLeft', 'ArrowLeft']) { await t.tap(page, k, 300); await page.waitForTimeout(300); }
+      await t.tap(page, 'Escape');
+      for (let i = 0; i < 3 && (await read(page)) === null; i++) { await page.waitForTimeout(1000); if ((await read(page)) === null) { await t.tap(page, 'Escape'); } }
+      await page.waitForTimeout(SETTLE_MS);
+      const before = volume(await read(page));
+      t.check(before !== null && before < 192, `settings: leaving the menus wrote sw.cfg with the new sound volume (${before}, default 192)`);
+      await page.reload();                      // no quit: the game never reaches its exit
+      await t.waitState(page, 'ready');
+      const after = volume(await read(page));
+      t.check(after === before, `settings: after a reload ${SETTLE_MS} ms later, without quitting, the sound volume is still ${before} (got ${after})`);
+      await context.close();
+    }
+    // --- a save made just before a reload: three tries, each in a fresh browser profile ---
+    {
+      let kept = 0;
+      for (let i = 0; i < SAVE_TRIES; i++) {
+        const context = await env.browser.newContext({ viewport: { width: 1000, height: 800 } });
+        const page = await context.newPage();
+        await page.goto(env.base + q); await t.waitState(page, 'ready');
+        await page.click('#start'); await page.waitForTimeout(5000);
+        await t.tap(page, 'F6'); await page.waitForTimeout(1500);
+        await page.keyboard.type('quick', { delay: 80 });
+        await page.keyboard.press('Enter');
+        // The file is created when the save starts; wait until it has its full size (about 300 KB).
+        await page.waitForFunction(() => { const b = window.jfswTest.readFile('game0.sav'); return b && b.length > 200000; }, null, { timeout: 8000, polling: 10 });
+        await page.waitForTimeout(RELOAD_AFTER_MS);
+        await page.reload();
+        await t.waitState(page, 'ready');
+        if ((await page.evaluate(() => window.jfswTest.listFiles())).includes('game0.sav')) { kept++; }
+        await context.close();
+      }
+      t.check(kept === SAVE_TRIES, `save: reloaded ${RELOAD_AFTER_MS} ms after game0.sav reached its full size, the save was still there in ${kept} of ${SAVE_TRIES} tries`);
     }
     // --- memory only: the same steps lose everything ---
     {
@@ -75,6 +125,10 @@ async function main() {
       await t.waitState(p2, 'ready');
       const files = await p2.evaluate(() => window.jfswTest.listFiles());
       t.check(!files.includes('game0.sav') && !files.includes('sw.cfg'), 'control run (persist=0): after a reload the files are gone, so the check can fail', files.join(','));
+      await p2.click('#start'); await p2.waitForTimeout(5000);
+      await t.tap(p2, 'F3'); await p2.waitForTimeout(1500);
+      const empty = await t.brightPixels(p2, t.SLOT1);
+      t.check(empty < 10, `control run: with no save the load menu's slot 1 is empty (${empty} light pixels), so the slot check can fail`);
       await context.close();
     }
   } finally { await t.stop(env); }

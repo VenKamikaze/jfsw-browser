@@ -17,6 +17,9 @@
 # The default EMSDK_DIR is outside the worktree ($XDG_CACHE_HOME or ~/.cache, then
 # jfsw-browser/emsdk) so that several worktrees share one install.
 #
+# EM_CACHE=DIR (optional): seed (and build-wasm.sh use) a private Emscripten cache instead of the
+# emsdk's own.
+#
 # --with-ports (-sUSE_SDL=2, -sUSE_OGG=1 -sUSE_VORBIS=1): Emscripten fetches its
 # ports from GitHub archive URLs, which some networks block (the cloud container
 # answers 403). The repository's orphan branch `emscripten-ports` holds those
@@ -69,7 +72,9 @@ vorbis|libvorbis-1.3.7.zip|https://github.com/xiph/vorbis/releases/download/v1.3
 '
     # In a subshell: emsdk_env.sh unsets EMSDK_DIR.
     # shellcheck disable=SC1091
-    cache="$(. "$EMSDK_DIR/emsdk_env.sh" >/dev/null 2>&1; em-config CACHE)"
+    # emsdk_env.sh clears EM_CACHE; put a caller's value back so that the ports are seeded into the
+    # cache that scripts/build-wasm.sh (which does the same) will use.
+    cache="$(saved="${EM_CACHE:-}"; . "$EMSDK_DIR/emsdk_env.sh" >/dev/null 2>&1; [ -z "$saved" ] || export EM_CACHE="$saved"; em-config CACHE)"
     emports="$EMSDK_DIR/upstream/emscripten/tools/ports"
 
     pending=""

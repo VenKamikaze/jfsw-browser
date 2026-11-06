@@ -4,6 +4,9 @@
 //   node tests/web/smoke.js            # uses build-wasm/ and testdata/swshare.grp
 //   WASM_DIR=build-wasm-debug node tests/web/smoke.js
 //   SMOKE_SABOTAGE=blank node tests/web/smoke.js   # hides the canvas: the picture checks must FAIL
+//   SMOKE_SABOTAGE=nokey node tests/web/smoke.js   # presses no key: the keyboard check must FAIL
+//   SMOKE_SABOTAGE=noesc node tests/web/smoke.js   # the pointer is released like the game does it: the Escape check must FAIL
+//   SMOKE_SHOT=file.png                            # also save a screenshot of the page
 //
 // Loads the page with ?test=1, clicks "Click to start", gets to the main menu and checks that the
 // canvas is not blank, that the keyboard drives the menu, and that nothing threw. The picture is
@@ -14,6 +17,8 @@ const t = require('./lib.js');
 
 const PORT = 48101;
 const SABOTAGE = process.env.SMOKE_SABOTAGE === 'blank';
+const SABOTAGE_NOESC = process.env.SMOKE_SABOTAGE === 'noesc';   // release the pointer the way the game does: no Escape reaches it, that check must FAIL
+const SABOTAGE_NOKEY = process.env.SMOKE_SABOTAGE === 'nokey';   // do not press the key: the key check must FAIL
 
 async function main() {
   const env = await t.start(PORT);
@@ -73,15 +78,15 @@ async function main() {
     await page.waitForTimeout(1500);
     const menu1 = await t.canvasStats(page);
     t.check(t.notBlank(menu1), `the main menu is drawn (${menu1.colors} colours)`);
-    // The keyboard drives the menu: Down moves the highlight, Up moves it back.
-    await page.keyboard.press('ArrowDown');
+    // The keyboard drives the menu: Down moves the cursor (the little yin-yang left of the items). The menu
+    // animates by itself, so count the pixels that change in the cursor's column with and without the key.
+    const CURSOR = { x: 90, y: 90, width: 90, height: 370 };
+    const idle = await t.changedPixels(page, CURSOR, null, 800);
+    const moved = await t.changedPixels(page, CURSOR, SABOTAGE_NOKEY ? null : () => t.tap(page, 'ArrowDown'), 800);
+    t.check(moved > 300 && moved > 3 * idle + 100, `Down moves the menu cursor (${moved} pixels changed in the cursor column; ${idle} with no key)`);
+    await t.tap(page, 'ArrowUp');
     await page.waitForTimeout(800);
-    const menu2 = await t.canvasStats(page);
-    await page.keyboard.press('ArrowUp');
-    await page.waitForTimeout(800);
-    const menu3 = await t.canvasStats(page);
-    t.check(menu2.hash !== menu1.hash || menu2.hash !== menu3.hash, 'Down changes the picture (the keyboard reaches the game)');
-    t.check(menu3.colors >= t.MIN_COLORS && t.notBlank(menu2), 'the menu is still drawn after the key presses');
+    t.check(t.notBlank(await t.canvasStats(page)), 'the menu is still drawn after the key presses');
 
     // The game goes on running: frames keep being presented.
     const frames = await page.evaluate(() => Module.jfswFrameLog.length);
@@ -100,25 +105,42 @@ async function main() {
     await page.mouse.click(500, 300);
     await page.waitForTimeout(500);
     t.check(await page.evaluate(() => document.pointerLockElement === document.getElementById('canvas')), 'a click on the picture locks the pointer');
-    // Escape reaches the game even though the browser takes it to leave pointer lock: the page passes it on.
-    await page.evaluate(() => document.exitPointerLock());
-    await page.waitForTimeout(500);
-    t.check(!(await page.evaluate(() => document.pointerLockElement)), 'the pointer is released (the game asked for it)');
-    // The browser leaving pointer lock by itself (the user pressed Escape; the key never arrives): the page gives the game an Escape.
-    await page.mouse.click(500, 300);
-    await page.waitForTimeout(500);
-    await page.evaluate(() => { window.__esc = 0; window.addEventListener('keydown', (e) => { if (e.code === 'Escape') { window.__esc++; } }); });
-    await page.evaluate(() => Document.prototype.exitPointerLock.call(document));
-    await page.waitForTimeout(600);
-    t.check((await page.evaluate(() => window.__esc)) === 1, 'when the browser takes the pointer (Escape), the game still gets an Escape');
     t.check((await page.evaluate(() => window.jfswState)) === 'running', 'the game is still running');
     t.check(errors.length === 0, 'no uncaught page error, dialog or alert', errors.join(' | '));
     t.check(consoleErrors.length === 0, 'no console.error', consoleErrors.slice(0, 3).join(' | '));
     const log = await menuLog();
     t.check(/GRP file: sw\.grp/.test(log) && /Shareware Version/.test(log), 'the game found the shareware GRP');
     t.check(!/out of sync|Error|ERROR/.test(log), 'no error text in the game output');
-    await page.screenshot({ path: process.env.SMOKE_SHOT || '/tmp/jfsw-smoke.png' });
+    if (process.env.SMOKE_SHOT) { await page.screenshot({ path: process.env.SMOKE_SHOT }); }
     await context.close();
+
+    // --- 3. Escape. In a level (E1L3), when the browser takes the pointer (the user pressed Escape; the key itself never
+    // reaches the page) the game must still get an Escape: its menu opens. A deliberate release by the game must not.
+    {
+      const e = await t.open(env, '?test=1&persist=0&args=' + encodeURIComponent('-level3 -s1'));   // a quiet level: little moves by itself
+      await t.waitState(e.page, 'ready');
+      await e.page.click('#start');
+      await e.page.waitForTimeout(5000);
+      const MENU = { x: 150, y: 110, width: 520, height: 380 };    // where the menu text appears
+      const lock = async () => {
+        for (let i = 0; i < 5 && !(await e.page.evaluate(() => !!document.pointerLockElement)); i++) { await e.page.mouse.click(500, 300); await e.page.waitForTimeout(500); }
+        return e.page.evaluate(() => document.pointerLockElement === document.getElementById('canvas'));
+      };
+      t.check(await lock(), 'in a level, a click locks the pointer');
+      await e.page.waitForTimeout(2000);    // the click also swung the fist
+      const byItself = await t.changedPixels(e.page, MENU, null, 800);
+      // (a) the game itself lets go of the pointer: no Escape is sent, nothing opens
+      const ctrl = await t.changedPixels(e.page, MENU, () => e.page.evaluate(() => document.exitPointerLock()), 800);
+      t.check(ctrl < 30000, `a release asked for by the game does not open the menu (${ctrl} pixels changed; ${byItself} by themselves)`);
+      t.check(!(await e.page.evaluate(() => !!document.pointerLockElement)), 'the pointer was released');
+      t.check(await lock(), 'a click locks the pointer again');
+      await e.page.waitForTimeout(2000);    // the click also swung the fist
+      // (b) the browser takes the pointer (as for Escape): the page passes an Escape on and the menu opens
+      const opened = await t.changedPixels(e.page, MENU, () => e.page.evaluate((real) => (real ? Document.prototype.exitPointerLock.call(document) : document.exitPointerLock()), !SABOTAGE_NOESC), 1200);
+      t.check(opened > 45000, `when the browser takes the pointer (as Escape does) the game's menu opens (${opened} pixels changed)`);
+      t.check(e.errors.length === 0, 'no page error in the level', e.errors.join(' | '));
+      await e.context.close();
+    }
   } finally {
     await t.stop(env);
   }

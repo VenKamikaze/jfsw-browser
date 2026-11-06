@@ -22,10 +22,12 @@
   var params = new URLSearchParams(location.search);
   var TEST = params.get('test') === '1';
   var PERSIST = !(TEST && params.get('persist') === '0');
+  var storageNote = '';
   var DATA_URL = params.get('data') || 'swshare.grp';
   var DATA_DIR = '/data';        // on the game's search path (DATADIR in the Makefile); not persisted
   var HOME_DIR = '/persist';     // the game's current directory: sw.cfg, saves, sw.log; IndexedDB
   var GRP_NAME = 'sw.grp';
+  var CLOSE_DELAY_MS = 10;       // after a file written by the game is closed, wait this long, then write to IndexedDB
 
   var canvas = document.getElementById('canvas');
   var overlay = document.getElementById('overlay');
@@ -72,6 +74,12 @@
     return (e && (e.message || e.reason && (e.reason.message || e.reason))) || String(e);
   }
 
+  // An array that keeps at most `max` of the newest entries (the game pushes about 60 a second).
+  function capped(arr, max) {
+    arr.push = function (v) { Array.prototype.push.call(this, v); if (this.length > max) { this.splice(0, this.length - max / 2); } return this.length; };
+    return arr;
+  }
+
   var Module = {
     canvas: canvas,
     noInitialRun: true,
@@ -106,10 +114,20 @@
   };
   window.Module = Module;
 
-  // A trap in WebAssembly, or an error in the page's own code, would otherwise just freeze the picture.
-  window.addEventListener('error', function (e) { if (running) { finish('Something went wrong: ' + describe(e) + '. Reload the page to try again.', true); } });
+  // A trap in WebAssembly, or an error in the game's own scripts, would otherwise just freeze the picture.
+  // Errors from elsewhere (a browser extension, say) are logged and the game goes on.
+  function fromGame(err, file) {
+    if (typeof WebAssembly !== 'undefined' && err instanceof WebAssembly.RuntimeError) { return true; }
+    var where = (file || '') + ' ' + ((err && err.stack) || '');
+    return /(^|\/)(sw|jfsw)\.(js|wasm)/.test(where) || /sw\.wasm/.test(where);
+  }
+  window.addEventListener('error', function (e) {
+    if (running && fromGame(e.error, e.filename)) { finish('Something went wrong: ' + describe(e) + '. Reload the page to try again.', true); }
+    else { console.warn('page error (not from the game):', describe(e)); }
+  });
   window.addEventListener('unhandledrejection', function (e) {
-    if (running) { finish('Something went wrong: ' + describe(e) + '. Reload the page to try again.', true); }
+    if (running && fromGame(e.reason)) { finish('Something went wrong: ' + describe(e) + '. Reload the page to try again.', true); }
+    else { console.warn('unhandled rejection (not from the game):', describe(e)); }
   });
 
   // ---- Files ------------------------------------------------------------------------------------------
@@ -136,29 +154,53 @@
   }
 
   var lastSignature = '';
-  var syncing = false;
+  var writing = false;
+  var current = Promise.resolve();
+  var queued = null;
   var syncTimer = 0;
+  var closeTimer = 0;
 
-  function syncNow() {
-    if (!PERSIST || syncing) { return Promise.resolve(); }
-    syncing = true;
+  function run() {
+    writing = true;
     lastSignature = persistSignature();
-    return syncfs(false).then(function () { window.jfswSyncs++; }).then(function () { syncing = false; },
-      function (e) { syncing = false; console.warn('Saving to the browser failed:', e); throw e; });
+    current = syncfs(false).then(function () { window.jfswSyncs++; writing = false; },
+      function (e) { writing = false; console.warn('Saving to the browser failed:', e); throw e; });
+    return current;
   }
+  // Writes the persisted folder to IndexedDB. A request that arrives while a write is running is not
+  // dropped: one more write follows it (several requests share that one), and the returned promise
+  // settles when the write that covers this request has finished.
+  function syncNow() {
+    if (!PERSIST) { return Promise.resolve(); }
+    if (!writing) { return run(); }
+    if (!queued) {
+      var go = function () { queued = null; return run(); };
+      queued = current.then(go, go);
+    }
+    return queued;
+  }
+  function syncIfChanged() { if (persistSignature() !== lastSignature) { syncNow().catch(function () {}); } }
 
   function startSyncing() {
     if (!PERSIST) { return; }
     lastSignature = persistSignature();
-    // Config and saves are written by the game with plain file calls and there is no hook for that,
-    // so look for changes once a second and when the tab is hidden.
-    syncTimer = setInterval(function () {
-      if (!syncing && persistSignature() !== lastSignature) { syncNow().catch(function () {}); }
-    }, 1000);
-    document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState === 'hidden' && !syncing && persistSignature() !== lastSignature) { syncNow().catch(function () {}); }
-    });
-    window.addEventListener('pagehide', function () { if (!syncing && persistSignature() !== lastSignature) { syncNow().catch(function () {}); } });
+    // The game writes its files with plain C file calls. Watch the closes of files opened for writing in
+    // the persisted folder (a save game, sw.cfg) and write to IndexedDB a moment after the last one.
+    var realClose = FS.close;
+    FS.close = function (stream) {
+      var path = stream && stream.path;
+      var wrote = stream && (stream.flags & 3) !== 0;
+      var r = realClose.apply(FS, arguments);
+      if (wrote && path && path.indexOf(HOME_DIR + '/') === 0 && path !== HOME_DIR + '/sw.log' && path.indexOf('symbols missing') < 0) {
+        clearTimeout(closeTimer);
+        closeTimer = setTimeout(function () { syncNow().catch(function () {}); }, CLOSE_DELAY_MS);
+      }
+      return r;
+    };
+    // A safety net for anything that was changed without a close (and is not sw.log).
+    syncTimer = setInterval(syncIfChanged, 1000);
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') { syncIfChanged(); } });
+    window.addEventListener('pagehide', syncIfChanged);
   }
   function stopSyncing() { clearInterval(syncTimer); }
 
@@ -197,7 +239,12 @@
     if (PERSIST) {
       FS.mount(Module.IDBFS, {}, HOME_DIR);
       showStatus('Loading saved settings...');
-      ready = syncfs(true);
+      // Private windows and blocked site data can make IndexedDB fail: play without keeping anything.
+      ready = syncfs(true).catch(function (e) {
+        PERSIST = false;
+        storageNote = ' Saved games and settings will not be kept: this browser would not let the page use its storage (' + describe(e) + ').';
+        console.warn('IndexedDB unavailable:', e);
+      });
     }
     return ready.then(function () {
       // The game's own "portable" switch: with this file in the current directory, sw.cfg, saved games
@@ -210,6 +257,7 @@
       FS.writeFile(DATA_DIR + '/' + GRP_NAME, bytes);
       if (!TEST) { return; }
       var files = (params.get('files') || '').split(',').filter(Boolean);
+      if (files.length && PERSIST) { throw new Error('?files= puts files in the game\'s folder, which is saved to IndexedDB: add persist=0'); }
       return files.reduce(function (p, url) {
         return p.then(function () {
           return fetchBytes(url, 'Test file').then(function (b) { FS.writeFile(HOME_DIR + '/' + url.split('/').pop().split('?')[0], b); });
@@ -218,7 +266,7 @@
     }).then(function () {
       startSyncing();
       progressEl.hidden = true;
-      showStatus('Ready.');
+      showStatus('Ready.' + storageNote, !!storageNote);
       startBtn.hidden = false;
       startBtn.focus();
       setState('ready');
@@ -294,8 +342,8 @@
   // ---- Test hooks -------------------------------------------------------------------------------------
 
   if (TEST) {
-    Module.jfswFrameLog = [];
-    Module.jfswYieldLog = [];
+    Module.jfswFrameLog = capped([], 50000);
+    Module.jfswYieldLog = capped([], 50000);
     testInfoEl.hidden = false;
     testInfoEl.textContent = 'test mode: args=' + JSON.stringify(gameArgs()) + ' persist=' + PERSIST;
     window.jfswTest = {
