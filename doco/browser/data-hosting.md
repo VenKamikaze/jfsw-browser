@@ -46,7 +46,7 @@ The GRP compresses well. Measured on `swshare.grp` (26,056,769 bytes):
 | Brotli, quality 5 | 10,956,970 | 42.1 % | 1.2 s |
 | Brotli, quality 9 | 10,835,397 | 41.6 % | 12 s |
 
-So gzip saves about **55 %** of the transfer (14.5 MB of 26 MB); Brotli a little more. Either on the fly or pre-compressed works (pre-compress for Brotli above quality 5 and serve the `.br` or `.gz` with `Content-Encoding`).
+So gzip saves about **55 %** of the transfer (14.5 MB of 26 MB); Brotli a little more. Either on the fly or pre-compressed works (pre-compress for Brotli above quality 5 and serve the `.br` or `.gz` with `Content-Encoding`). **If you turn on `revalidate`, check how your server treats the ETag of a compressed answer** (see the Apache example: by default `mod_deflate` changes it and every load downloads the file again).
 
 What this does to the page's progress display: with `Content-Encoding`, `Content-Length` (if present) is the compressed size, while the browser hands the page the decompressed bytes. The page therefore takes the total from the declared `size` in `config.js`. If no size is declared and the response is encoded, it shows megabytes so far and an indeterminate bar rather than a wrong percentage. Both are tested (`tests/web/data.js`, test 6).
 
@@ -72,46 +72,70 @@ Needed only when `url` is on a different origin from the page (different scheme,
 Access-Control-Allow-Origin: https://game.example.org      (or *)
 ```
 
-and, if you set `revalidate: true`, also `Access-Control-Allow-Headers: If-None-Match, If-Modified-Since` (and answer the `OPTIONS` preflight those headers cause) and `Access-Control-Expose-Headers: ETag, Last-Modified` so the page can read the validators. Without `revalidate` no preflight happens.
+and, if you set `revalidate: true`, also `Access-Control-Allow-Headers: If-None-Match, If-Modified-Since` (and answer the `OPTIONS` preflight those headers cause with a 204 carrying the same headers) and `Access-Control-Expose-Headers: ETag, Last-Modified` so the page can read the validators. Without `revalidate` no preflight happens.
 
 A browser reports a blocked cross-origin request exactly like a network failure, so the page's error message says both and, when the URL is cross-origin, adds the CORS hint.
 
 ## Example: Apache
 
-Placeholders only (`game.example.org`, `/srv/http/games/sw`):
+Placeholders only (`game.example.org`, `data.example.org`, `/srv/http/games/sw`). Checked with Apache 2.4.58 (Ubuntu): `apache2 -t` says "Syntax OK" for the files below (with the `Listen`, `LoadModule` and `TypesConfig` lines a distribution supplies), and `curl` against it showed gzip (26,056,769 bytes sent as 11,621,419), an `ETag`, a `304` for a conditional request, and the CORS headers on both `GET` and the `OPTIONS` preflight. Other Apache versions were not tried.
+
+Modules: `mod_mime`, `mod_filter` (needed for `AddOutputFilterByType` in 2.4), `mod_deflate`, `mod_headers`, and `mod_rewrite` for the preflight (`a2enmod filter deflate headers rewrite`, or `LoadModule` lines on Arch).
 
 ```apache
 <VirtualHost *:443>
     ServerName game.example.org
-    DocumentRoot /srv/http/games/sw          # index.html, config.js, jfsw.js, sw.js, sw.wasm, ... and swshare.grp
+    DocumentRoot /srv/http/games/sw
+    # index.html, config.js, jfsw.js, sw.js, sw.wasm, ... and swshare.grp
+
+    # Important when config.js has revalidate: true. mod_deflate rewrites the ETag of a compressed
+    # answer to "...-gzip" by default, which no longer matches the ETag the page stored, so Apache
+    # answers 200 and sends all 26 MB again on every load. NoChange (2.4.58 and later; the directive
+    # is allowed here and in the server config, not in <Directory>) keeps the ETag as it is. The
+    # caveat: the compressed and the plain answer now share one ETag. On an older Apache, leave
+    # revalidate off, or do not compress the GRP (remove application/octet-stream below), or serve a
+    # pre-compressed swshare.grp.gz with "AddEncoding gzip .gz" and a rewrite to it.
+    DeflateAlterETag NoChange
 
     <Directory /srv/http/games/sw>
         Require all granted
-
-        # The GRP and the WebAssembly compress well.
         AddType application/octet-stream .grp
         AddType application/wasm .wasm
         AddOutputFilterByType DEFLATE application/octet-stream application/wasm text/html text/css text/javascript application/javascript
 
-        # Cache: the page keeps its own copy of the GRP, so this matters for everything else and for other clients.
+        # The page keeps its own copy of the GRP, so this matters for other clients and for the wasm.
         <FilesMatch "\.(grp|wasm)$">
             Header set Cache-Control "public, max-age=86400"
         </FilesMatch>
-        # Pages and scripts: always ask (they change with each deployment).
+        # Pages and scripts change with each deployment: always ask.
         <FilesMatch "\.(html|js|css)$">
             Header set Cache-Control "no-cache"
         </FilesMatch>
     </Directory>
-
-    # Only when the GRP is served from a different host than the page, e.g. data.example.org:
-    #   <Files "swshare.grp">
-    #       Header set Access-Control-Allow-Origin "https://game.example.org"
-    #       Header set Access-Control-Expose-Headers "ETag, Last-Modified"
-    #   </Files>
 </VirtualHost>
 ```
 
-Needs `mod_deflate`, `mod_headers` and `mod_mime` (`a2enmod`, or `LoadModule` lines on Arch). For pre-compressed files, put `swshare.grp.gz` next to the GRP and use `mod_rewrite` or `MultiViews` with `AddEncoding gzip .gz`; on-the-fly gzip is simpler and the 0.7 s it costs per request is the price of one large file.
+**If the GRP is on another host** (set `url` in `config.js` to `https://data.example.org/swshare.grp`), give that host the same `AddType`, compression and `DeflateAlterETag` lines, and these CORS rules (the data host's vhost, not the game's):
+
+```apache
+<VirtualHost *:443>
+    ServerName data.example.org
+    DocumentRoot /srv/http/games/data
+
+    <Location "/swshare.grp">
+        Header always set Access-Control-Allow-Origin "https://game.example.org"
+        Header always set Access-Control-Expose-Headers "ETag, Last-Modified"
+        # Only needed with revalidate: true (the conditional headers make the browser send a preflight):
+        Header always set Access-Control-Allow-Headers "If-None-Match, If-Modified-Since"
+        Header always set Access-Control-Max-Age "86400"
+    </Location>
+    # Answer the preflight (OPTIONS) with 204 and the headers above. <Location>, not <Files>:
+    # the rewrite answers before the file is mapped, and <Files> would not apply.
+    RewriteEngine On
+    RewriteCond %{REQUEST_METHOD} OPTIONS
+    RewriteRule ^/swshare\.grp$ - [R=204,L]
+</VirtualHost>
+```
 
 ## Checking it
 

@@ -163,7 +163,19 @@
   function download(url, o) {
     var absolute = new URL(url, location.href);
     var crossOrigin = absolute.origin !== location.origin;
-    return fetch(absolute.href, { headers: o.headers || {}, cache: 'no-store' }).then(function (resp) {
+    var ctl = new AbortController();
+    var stalled = false, timer = 0;
+    // Stall detection: no byte for o.stallMs aborts the fetch. o.signal (the person picked a file instead) also aborts it.
+    function arm() {
+      clearTimeout(timer);
+      if (!o.stallMs) { return; }
+      timer = setTimeout(function () { stalled = true; ctl.abort(); }, o.stallMs);
+    }
+    function cancelled() { return !!(o.signal && o.signal.aborted); }
+    if (o.signal) { if (o.signal.aborted) { ctl.abort(); } else { o.signal.addEventListener('abort', function () { ctl.abort(); }); } }
+    arm();
+    return fetch(absolute.href, { headers: o.headers || {}, cache: 'no-store', signal: ctl.signal }).then(function (resp) {
+      arm();
       if (resp.status === 304 && o.headers) { return { notModified: true }; }
       if (!resp.ok) {
         throw DataError('http', 'The game data could not be downloaded: ' + absolute.href + ' answered ' + resp.status + (resp.statusText ? ' ' + resp.statusText : '') + '.', { status: resp.status });
@@ -190,6 +202,7 @@
         return reader.read().then(function (r) {
           if (r.done) { return; }
           var c = r.value;
+          arm();
           if (declared && got + c.length > declared) {
             reader.cancel().catch(function () {});
             throw DataError('size', 'The game data from ' + absolute.href + ' is larger than the ' + declared.toLocaleString('en-US') + ' bytes this page expects (at least ' + (got + c.length).toLocaleString('en-US') + ' bytes arrived). It is not the file the page is set up for.', { size: got + c.length });
@@ -205,6 +218,10 @@
       }
       return pump().catch(function (e) {
         if (e && e.name === 'DataError') { throw e; }
+        if (cancelled()) { throw DataError('cancelled', 'Cancelled.'); }
+        if (stalled) {
+          throw DataError('truncated', 'The download from ' + absolute.href + ' stalled: no data arrived for ' + (o.stallMs / 1000) + ' seconds (' + got.toLocaleString('en-US') + ' bytes' + (expect ? ' of ' + expect.toLocaleString('en-US') : '') + ' had arrived). The server may be overloaded or the connection lost.', { received: got });
+        }
         throw DataError('truncated', 'The download from ' + absolute.href + ' was cut off after ' + got.toLocaleString('en-US') + ' bytes' + (expect ? ' of ' + expect.toLocaleString('en-US') : '') + ' (' + ((e && e.message) || e) + ').', { received: got });
       }).then(function () {
         if (expect && got < expect) {
@@ -223,11 +240,13 @@
         return { bytes: bytes, crc: crc, etag: meta.etag, lastModified: meta.lastModified, crcMs: crcMs2 };
       }
     }, function (e) {
+      if (cancelled()) { throw DataError('cancelled', 'Cancelled.'); }
+      if (stalled) { throw DataError('network', 'The server at ' + absolute.origin + ' did not answer within ' + (o.stallMs / 1000) + ' seconds (' + absolute.href + '). It may be down or overloaded.'); }
       var hint = crossOrigin
         ? ' The page is on ' + location.origin + ' and the data is on ' + absolute.origin + ': that server must send an Access-Control-Allow-Origin header (CORS), or the data must be served from the same origin as the page.'
         : '';
       throw DataError('network', 'The game data could not be downloaded from ' + absolute.href + '. The server may be down or unreachable' + (crossOrigin ? ', or it does not allow this page to read it (a browser reports a blocked cross-origin request the same way as a network failure).' : '.') + hint, { crossOrigin: crossOrigin });
-    });
+    }).then(function (r) { clearTimeout(timer); return r; }, function (e) { clearTimeout(timer); throw e; });
   }
 
   // ---- The whole job -------------------------------------------------------------------------------------
@@ -240,6 +259,12 @@
     if (o.size && rec.size !== o.size) { return false; }
     var g = identify(rec.crc, rec.size);
     return playable(g);
+  }
+
+  // A stored record is trusted only after its bytes are checksummed again (about 50 to 100 ms): IndexedDB, a
+  // disk error or another extension could have changed them since they were stored.
+  function intact(rec) {
+    return rec.bytes && rec.bytes.byteLength === rec.size && crc32(new Uint8Array(rec.bytes)) === rec.crc;
   }
 
   function ask() {
@@ -272,6 +297,8 @@
     var key = 'url:' + new URL(o.url, location.href).href;
     var absolute = new URL(o.url, location.href).href;
     var status = o.onStatus || function () {};
+    // Urls whose records stay when the page is opened with a ?data= override (the configured file).
+    var keep = (o.keepUrls || []).map(function (u) { return 'url:' + new URL(u, location.href).href; });
 
     function store(rec) {
       if (!cache) { return Promise.resolve(false); }
@@ -279,7 +306,7 @@
         ask().then(function () {});
         return true;
       }, function (e) {
-        notes.push(storeProblem(e) + '. The game will start, but the data will be downloaded again next time.');
+        notes.push(storeProblem(e) + '. The game will start, but ' + (rec.key === LOCAL_KEY ? 'your file will have to be picked again next time.' : 'the data will be downloaded again next time.'));
         return false;
       });
     }
@@ -296,7 +323,7 @@
     }
 
     var opened = openDb().then(function (db) { cache = new Cache(db, o.hooks); }, function (e) {
-      notes.push('This browser would not let the page keep the game data (' + ((e && e.message) || e) + '), so it is downloaded each time.');
+      notes.push('This browser would not let the page keep the game data (' + ((e && e.message) || e) + '), so ' + (o.file ? 'your file has to be picked again each time.' : 'it is downloaded each time.'));
     });
 
     return opened.then(function () {
@@ -315,7 +342,7 @@
       }
       // Remove copies of urls that are no longer configured; the picked file is kept.
       var purge = cache ? cache.keys().then(function (keys) {
-        return Promise.all(keys.filter(function (k) { return k !== key && k !== LOCAL_KEY; }).map(function (k) { return cache.del(k); }));
+        return Promise.all(keys.filter(function (k) { return k !== key && k !== LOCAL_KEY && keep.indexOf(k) < 0; }).map(function (k) { return cache.del(k); }));
       }).catch(function () {}) : Promise.resolve();
       return purge.then(function () {
         if (!cache) { return null; }
@@ -324,7 +351,11 @@
       }).then(function (source) {
         if (source === 'local' && !o.force) {
           return cache.get(LOCAL_KEY).then(function (rec) {
-            if (rec && rec.bytes && rec.bytes.byteLength === rec.size && playable(identify(rec.crc, rec.size))) { return result(rec, 'cache'); }
+            if (rec && rec.bytes && rec.bytes.byteLength === rec.size && playable(identify(rec.crc, rec.size))) {
+              if (intact(rec)) { return result(rec, 'cache'); }
+              notes.push('The copy of your own file kept in this browser was damaged and has been discarded; the download is used instead (pick your file again to use it).');
+              return cache.del(LOCAL_KEY).then(function () { return cache.setMeta('source', 'url'); }).then(function () { return null; }, function () { return null; });
+            }
             return null;
           }, function () { return null; });
         }
@@ -334,6 +365,11 @@
         var cached = cache && !o.force ? cache.get(key).catch(function () { return null; }) : Promise.resolve(null);
         return cached.then(function (rec) {
           var good = usable(rec, o, key);
+          if (good && !intact(rec)) {
+            good = false;
+            notes.push('The copy kept in this browser was damaged and has been discarded; downloading it again.');
+            if (cache) { cache.del(key).catch(function () {}); }
+          }
           var headers = null;
           if (good && o.revalidate && (rec.etag || rec.lastModified)) {
             headers = {};
@@ -344,7 +380,7 @@
           }
           status('Downloading the game data...');
           var t0 = performance.now();
-          return download(o.url, { size: o.size, headers: headers, onProgress: o.onProgress }).then(function (d) {
+          return download(o.url, { size: o.size, headers: headers, onProgress: o.onProgress, stallMs: o.stallMs, signal: o.signal }).then(function (d) {
             if (d.notModified) { return result(rec, 'revalidated'); }
             var crc = d.crc;
             verify(d.bytes, crc, 'The file from ' + absolute, { crc32: o.crc32 });

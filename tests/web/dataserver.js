@@ -13,7 +13,7 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '
 // Content-Length of the compressed size), etag, lastModified, cors (add Access-Control-Allow-Origin),
 // status (answer with this status and no data), chunk (bytes per write), delayMs (pause between writes),
 // cutAt (announce the whole length, send this many bytes, then drop the connection),
-// cacheControl.
+// stallAt (send this many bytes, then go quiet with the connection open), cacheControl.
 function route(opts) {
   let pre = null;
   return function (req, res, server) {
@@ -48,6 +48,7 @@ function route(opts) {
     const limit = opts.cutAt === undefined ? body.length : opts.cutAt;
     let at = 0;
     const next = () => {
+      if (opts.stallAt !== undefined && at >= opts.stallAt) { return; }   // go quiet, connection stays open
       if (at >= limit) { if (opts.cutAt !== undefined) { setTimeout(() => res.destroy(), 20); } else { res.end(); } return; }
       res.write(body.subarray(at, Math.min(limit, at += chunk)));
       if (opts.delayMs) { setTimeout(next, opts.delayMs); } else { setImmediate(next); }

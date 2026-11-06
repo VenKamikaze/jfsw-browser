@@ -14,6 +14,7 @@
 //   ?persist=0    keep the game's directory in memory only (test only).
 //   ?idb=off      every IndexedDB open fails, as in an old private window (test only).
 //   ?idb=quota    storing the game data in the cache fails with a QuotaExceededError (test only).
+//   ?stall=<ms>   how long without a byte before a download is called stalled (default 30000; test only).
 //   ?revalidate=1|0  overrides config.js's `revalidate` (test only).
 //
 // The game data (brief 03): data.js downloads and checks the GRP, keeps it in its own IndexedDB cache and
@@ -91,6 +92,8 @@
     overlay.hidden = false;
     progressEl.hidden = true;
     startBtn.hidden = true;
+    retryBtn.hidden = true;
+    dataCtl.hidden = true;
     reloadBtn.hidden = false;
     showStatus(message, isError);
     reloadBtn.focus();
@@ -261,7 +264,8 @@
   // ---- Game data --------------------------------------------------------------------------------------
 
   var prepared = false;       // the first game data is in place and the page is otherwise ready
-  var busy = false;
+  var gen = 0;                // each acquire() has a number; the answer of an older one (cancelled by a pick) is ignored
+  var loadCtl = null;
 
   function dataOptions(extra) {
     return Object.assign({
@@ -270,6 +274,8 @@
       crc32: DATA_OVERRIDE ? '' : (CFG.crc32 || ''),
       revalidate: (TEST && params.has('revalidate')) ? params.get('revalidate') === '1' : !!CFG.revalidate,
       hooks: { quota: TEST && params.get('idb') === 'quota' },
+      stallMs: TEST && params.has('stall') ? +params.get('stall') : 30000,
+      keepUrls: DATA_OVERRIDE ? [CFG.url || 'swshare.grp'] : [],
       onProgress: onDataProgress,
       onStatus: function (t) { showStatus(t); }
     }, extra || {});
@@ -349,18 +355,24 @@
   }
 
   // Gets the game data (downloading it, or from the cache, or from a picked file) and puts it where the game looks.
+  // A new call cancels the one before (picking a file while a download runs).
   function acquire(extra) {
-    if (busy) { return Promise.resolve(); }
-    busy = true;
+    if (loadCtl) { loadCtl.abort(); }
+    var ctl = loadCtl = new AbortController();
+    var mine = ++gen;
     setState('loading');
     startBtn.hidden = true;
     retryBtn.hidden = true;
-    setControls(false);
+    setControls(true, {});          // the picker stays usable: it cancels a download that is slow or stuck
     progressEl.hidden = true;
+    dataInfoEl.hidden = true;
     showStatus('Loading game data...');
-    return JfswData.load(dataOptions(extra)).then(dataReady, dataFailed).then(function () { busy = false; }, function (e) {
-      busy = false;
-      finish('Could not start: ' + describe(e), true);
+    return JfswData.load(dataOptions(Object.assign({ signal: ctl.signal }, extra))).then(function (res) {
+      if (mine === gen) { return dataReady(res); }
+    }, function (e) {
+      if (mine === gen) { dataFailed(e); }
+    }).then(function () { if (mine === gen) { loadCtl = null; } }, function (e) {
+      if (mine === gen) { loadCtl = null; finish('Could not start: ' + describe(e), true); }
     });
   }
 
@@ -370,7 +382,7 @@
   pickInput.addEventListener('change', function () {
     var file = pickInput.files && pickInput.files[0];
     pickInput.value = '';
-    if (file && (window.jfswState === 'ready' || window.jfswState === 'needdata')) { acquire({ file: file }); }
+    if (file && ['ready', 'needdata', 'loading'].indexOf(window.jfswState) >= 0 && FS) { acquire({ file: file }); }
   });
 
   function prepare() {

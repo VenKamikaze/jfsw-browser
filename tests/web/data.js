@@ -3,7 +3,7 @@
 // the file picker, quota and no-IndexedDB, config changes, compression, revalidation.
 //
 //   node tests/web/data.js
-//   DATA_SABOTAGE=nocache|nocrc|nosize|nocheck|nopickcache|nomtime node tests/web/data.js
+//   DATA_SABOTAGE=nocache|nocrc|nosize|nocheck|nopickcache|nomtime|trusthit|nostall node tests/web/data.js
 //       serves a damaged copy of the page's own code so that the matching tests must FAIL (they are listed in the Outcome
 //       of doco/browser/03-data-download.md). Nothing in the repository is changed.
 //
@@ -29,6 +29,8 @@ const PATCHES = {
   nosize: ['data.js', [['if (expect && got < expect) {', 'if (false) {'], ['if (declared && got + c.length > declared) {', 'if (false) {']]],
   nocheck: ['data.js', [['function verify(bytes, crc, what, declared) {', 'function verify(bytes, crc, what, declared) { return GRPS[1];'], ['function identify(crc, size) {', 'function identify(crc, size) { return GRPS[1];'], ['if (expect && got < expect) {', 'if (false) {'], ['if (declared && got + c.length > declared) {', 'if (false) {']]],
   nopickcache: ['data.js', [["return store(rec).then(function (stored) { return result(rec, 'picked'", "return Promise.resolve(false).then(function (stored) { return result(rec, 'picked'"]]],
+  trusthit: ['data.js', [['function intact(rec) {', 'function intact(rec) { return true;']]],
+  nostall: ['data.js', [['function arm() {', 'function arm() { return;']]],
   nomtime: ['jfsw.js', [['FS.utime(path, ms, ms);', '']]],
 };
 function patched() {
@@ -439,8 +441,10 @@ async function main() {
       await waitLoaded(page);
       t.check(!!(await cacheRecords(page))[KEY(PORT, '/swshare.grp')], 'config change: cached under the first URL');
       fresh();
-      await page.goto(env.base + '?test=1&persist=0&data=/swshare2.grp');
+      server.routes['/config.js'] = (req, res) => { res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-store' }); res.end(`window.JFSW_CONFIG={data:{url:'swshare2.grp',size:${SIZE},crc32:'08a7fa1f'}};`); };
+      await page.goto(env.base + '?test=1&persist=0');
       await waitLoaded(page);
+      delete server.routes['/config.js'];
       const recs = await cacheRecords(page);
       t.check(server.hits('/swshare2.grp') === 1, 'config change (new URL): the next load downloads again', String(server.hits('/swshare2.grp')));
       t.check(Object.keys(recs).join() === KEY(PORT, '/swshare2.grp'), 'config change (new URL): the entry for the old URL was removed', Object.keys(recs).join());
@@ -499,6 +503,91 @@ async function main() {
       await r.context.close();
     }
 
+    // ---- 12. A stored copy is checksummed again; a stalled download ends in an error -------------------------
+    console.log('12. damaged stored copy, stalled download');
+    {
+      good();
+      // Damage 4 KB inside the stored bytes, keeping the stored crc, as a disk or browser fault could.
+      const damage = (page, key) => page.evaluate((k) => new Promise((resolve, reject) => {
+        const open = indexedDB.open('jfsw-data');
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result;
+          const tx = db.transaction('files', 'readwrite');
+          const g = tx.objectStore('files').get(k);
+          g.onsuccess = () => { const rec = g.result; const u = new Uint8Array(rec.bytes); for (let i = 0; i < 4096; i++) { u[5000000 + i] ^= 0xff; } tx.objectStore('files').put(rec); };
+          tx.oncomplete = () => { db.close(); resolve(); };
+          tx.onerror = () => reject(tx.error);
+        };
+      }), key);
+      const diskCrc = (page) => page.evaluate(() => { const b = window.jfswTest.readFile('/data/sw.grp'); return b ? JfswData.crc32(b) : null; });
+      let r = await t.open(env, '?test=1&persist=0');
+      await waitLoaded(r.page);
+      await damage(r.page, KEY(PORT, '/swshare.grp'));
+      fresh();
+      await r.page.reload();
+      await waitLoaded(r.page);
+      t.check((await st(r.page)) === 'ready' && /damaged/.test(await statusText(r.page)), 'damaged stored download: the page says the kept copy was damaged', await statusText(r.page));
+      t.check(server.hits('/swshare.grp') === 1, 'damaged stored download: it was downloaded again', String(server.hits('/swshare.grp')));
+      t.check((await diskCrc(r.page)) === 0x08A7FA1F, 'damaged stored download: the file handed to the game is the good one');
+      const rec = (await cacheRecords(r.page))[KEY(PORT, '/swshare.grp')];
+      t.check(rec && rec.crc === 0x08A7FA1F, 'damaged stored download: the cache holds a fresh record');
+      await r.context.close();
+
+      // A damaged picked file: with the data URL unreachable, nothing may reach the game.
+      swap('/swshare.grp', { status: 404 });
+      r = await t.open(env, '?test=1&persist=0');
+      await waitLoaded(r.page);
+      await r.page.setInputFiles('#pick', t.GRP);
+      await waitLoaded(r.page);
+      t.check((await st(r.page)) === 'ready', 'damaged picked copy: (set-up) the picked file is accepted');
+      await damage(r.page, 'local');
+      await r.page.reload();
+      await waitLoaded(r.page);
+      t.check((await st(r.page)) === 'needdata' && /answered 404/.test(await statusText(r.page)), 'damaged picked copy: the damaged copy is not used (the page falls back to the download, which fails here)', (await st(r.page)) + ' ' + await statusText(r.page));
+      t.check(!(await grpOnDisk(r.page)), 'damaged picked copy: nothing was handed to the game');
+      t.check(!(await cacheRecords(r.page)).local, 'damaged picked copy: the record was deleted');
+      await r.context.close();
+      good();
+
+      // Stalled download: 1 MB, then silence. The page gives up after ?stall= ms.
+      swap('/swshare.grp', { body: GOOD, stallAt: 1 << 20 });
+      r = await t.open(env, '?test=1&persist=0&stall=2000');
+      const state = await t.waitState(r.page, ['needdata', 'ready', 'error'], 20000).catch(() => 'timeout');
+      const s = await statusText(r.page);
+      t.check(state === 'needdata' && /stalled/.test(s) && /\/swshare\.grp/.test(s), 'stalled download: ends in a clear error within the limit', state + ' ' + s);
+      t.check(await visible(r.page, '#retry') && await r.page.isEnabled('#pick'), 'stalled download: "Try again" is offered and the picker is usable');
+      if (state === 'needdata') {
+        await notStarted(r.page, 'stalled');
+        good();
+        await r.page.click('#retry');
+        await waitLoaded(r.page);
+        t.check((await st(r.page)) === 'ready', 'stalled, then a working server: "Try again" loads normally', await statusText(r.page));
+      }
+      await r.context.close();
+
+      // Picking a file while a download is stuck cancels it.
+      swap('/swshare.grp', { body: GOOD, stallAt: 1 << 20 });
+      r = await t.open(env, '?test=1&persist=0&stall=60000');
+      await r.page.waitForFunction(() => window.jfswDownloadLog && window.jfswDownloadLog.length > 0, null, { timeout: 20000 }).catch(() => {});
+      t.check((await st(r.page)) === 'loading' && await r.page.isEnabled('#pick'), 'download in progress: the picker is usable');
+      await r.page.setInputFiles('#pick', t.GRP);
+      const st2 = await t.waitState(r.page, ['ready', 'needdata', 'error'], 20000).catch(() => 'timeout');
+      t.check(st2 === 'ready' && /your own copy/.test(await infoText(r.page)), 'download in progress: picking a file cancels it and uses the file', st2 + ' ' + await infoText(r.page));
+      await r.context.close();
+      good();
+
+      // ?data= must not throw away the cached configured file.
+      r = await t.open(env, '?test=1&persist=0');
+      await waitLoaded(r.page);
+      swap('/other.grp', { body: GOOD });
+      await r.page.goto(env.base + '?test=1&persist=0&data=/other.grp');
+      await waitLoaded(r.page);
+      const keys = Object.keys(await cacheRecords(r.page));
+      t.check(keys.indexOf(KEY(PORT, '/swshare.grp')) >= 0 && keys.indexOf(KEY(PORT, '/other.grp')) >= 0, 'a ?data= visit keeps the configured file\'s record', keys.join());
+      await r.context.close();
+    }
+
     // ---- 11. Page code and game still work from a clean profile ------------------------------------------------
     console.log('11. without ?test=1');
     {
@@ -507,6 +596,17 @@ async function main() {
       t.check((await st(r.page)) === 'ready', 'plain page (no ?test=1): ready', await statusText(r.page));
       t.check((await r.page.evaluate(() => typeof window.jfswTest + typeof window.jfswDownloadLog)) === 'undefinedundefined', 'plain page: no test hooks');
       await r.context.close();
+      // The knobs do nothing without ?test=1.
+      fresh();
+      const q = await t.open(env, '?idb=off&idb=quota&revalidate=1&stall=1&persist=0&args=-nosound&files=/x');
+      await waitLoaded(q.page);
+      const s0 = await statusText(q.page);
+      t.check((await st(q.page)) === 'ready' && s0 === 'Ready.', 'plain page with ?idb=off&revalidate=1&stall=1&persist=0: the knobs are ignored (ready, no notices)', s0);
+      t.check(!!(await cacheRecords(q.page))[KEY(PORT, '/swshare.grp')], 'plain page: IndexedDB was used, the hook did not break it');
+      await q.page.goto(env.base + '?idb=quota&revalidate=1');
+      await waitLoaded(q.page);
+      t.check(server.hits('/swshare.grp') === 1, 'plain page: ?revalidate=1 is ignored (the cached copy made no request)', String(server.hits('/swshare.grp')));
+      await q.context.close();
     }
   } finally {
     await browser.close();
