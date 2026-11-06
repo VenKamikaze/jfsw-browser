@@ -68,6 +68,8 @@ More about demos, sync checks and what exits when: `code-facts.md` §7.
 
 ## 6. Emscripten (browser builds, from brief 02 on)
 
+### 6.1 Toolchain
+
 ```sh
 scripts/setup-emsdk.sh                  # emsdk + Emscripten 6.0.13 into ~/.cache/jfsw-browser/emsdk
 scripts/setup-emsdk.sh --with-ports     # the same, plus the SDL2, Ogg and Vorbis ports
@@ -77,7 +79,7 @@ emcc --version                          # 6.0.13
 
 `EMSDK_DIR=/some/dir` changes the install location. The default is outside the worktree so that several worktrees share one install.
 
-`--with-ports` is for networks that block GitHub archive URLs (the cloud container answers 403). Emscripten downloads its ports from GitHub on first use; with `--with-ports` they are taken from the orphan branch `emscripten-ports` of this repository (archives of SDL2 2.32.10, libogg 1.3.5, libvorbis 1.3.7), checked against the SHA-512 in the pinned emsdk's `tools/ports/*.py`, and unpacked into Emscripten's cache the way Emscripten would, so `-sUSE_SDL=2` and `-sUSE_OGG=1 -sUSE_VORBIS=1` download nothing. It fetches that branch with git, so run it from a clone with the `origin` remote. It does not take Emscripten's cache lock, so don't run it while `emcc` is running. If the emsdk pin in the script changes, refresh the branch.
+`--with-ports` is for networks that block GitHub archive URLs (the cloud container answers 403). Emscripten downloads its ports from GitHub on first use; with `--with-ports` they are taken from the orphan branch `emscripten-ports` of this repository (archives of SDL2 2.32.10, libogg 1.3.5, libvorbis 1.3.7), checked against the SHA-512 in the pinned emsdk's `tools/ports/*.py`, and unpacked into Emscripten's cache the way Emscripten would, so `-sUSE_SDL=2` and `-sUSE_OGG=1 -sUSE_VORBIS=1` download nothing. It fetches that branch with git, so run it from a clone with the `origin` remote. It does not take Emscripten's cache lock, so don't run it while `emcc` is running. If the emsdk pin in the script changes, refresh the branch. (Outside such a network none of this is needed: the first `emcc` call with `-sUSE_SDL=2` downloads SDL2 and builds it, about 10 s.)
 
 Check it:
 
@@ -89,6 +91,44 @@ C
 emcc /tmp/t.c -sUSE_SDL=2 -o /tmp/t.js && echo ok
 ```
 
+### 6.2 Build the game for the browser
+
+```sh
+scripts/build-wasm.sh                   # incremental; the first build also builds Emscripten's system libraries
+scripts/build-wasm.sh clean             # remove the wasm objects only
+scripts/build-wasm.sh veryclean         # and the libraries and build-wasm/
+```
+
+That is `emmake make -j4 USE_POLYMOST=0 USE_OPENGL=0` after sourcing the emsdk (the software renderer only, D6). `Makefile` includes `Makefile.emscripten` when the compiler is `emcc`; `jfbuild/Makefile.shared` and `jfaudiolib/Makefile.shared` recognise `wasm32-unknown-emscripten` as `PLATFORM=EMSCRIPTEN`. There is no startup window, no GTK and no editor (`build`); the network code is `mmulti_null.c` (single player) until the vnet transport is built for the browser (brief 04).
+
+Objects are named `*.wasm.o` and libraries `lib*.wasm.a`, so a native build and a browser build live in the same tree without touching each other (`make clean` in one does not remove the other's objects, except `src/version-auto.c`, which both regenerate). The output is in `build-wasm/` (git-ignored): `index.html`, `jfsw.js`, `jfsw.css` (copied from `web/`), `sw.js` and `sw.wasm`. About 25 s for a full build on 4 cores once the system libraries are cached (they are built on first use).
+
+Debug build (function names in traces, run-time assertions) into another directory: `scripts/build-wasm.sh WASM_DEBUG=1 WASMDIR=build-wasm-debug`.
+
+Link options: `-sASYNCIFY` (the game's loops block; `jfbuild/src/sdlayer2.c` hands control back to the browser once per frame, and in event-pumping loops that do not draw), `-sALLOW_MEMORY_GROWTH`, `-sEXIT_RUNTIME` (so `exit()` from anywhere reaches the page's `onExit`), `-sINVOKE_RUN=0` (the page starts `main` from the button), `-lidbfs.js`.
+
+### 6.3 Serve and play
+
+```sh
+scripts/fetch-test-data.sh                     # testdata/swshare.grp
+cd build-wasm && ln -sf ../testdata/swshare.grp .     # the dev data loader fetches ./swshare.grp
+python3 -m http.server 8000 --bind 127.0.0.1
+# open http://127.0.0.1:8000/ in Chromium or Firefox, click "Click to start"
+```
+
+`?data=<url>` loads the GRP from elsewhere (it must send CORS headers if it is on another origin). The game keeps `sw.cfg`, saved games and the log in IndexedDB (the folder `/persist`); the GRP is in memory only. Page options and test hooks (`?test=1`) are described at the top of `web/jfsw.js`.
+
+### 6.4 Browser tests
+
+```sh
+scripts/build-wasm.sh && make -j4           # the determinism test needs the native ./sw too
+node tests/web/smoke.js                     # canvas is drawn, menu reached, no errors
+node tests/web/determinism.js               # native against wasm: sync bytes, frame times
+node tests/web/persist.js                   # settings and saves survive a reload
+```
+
+They use the preinstalled Chromium through Playwright (`require('playwright')`; never run `playwright install`), serve `build-wasm/` and `testdata/swshare.grp` on 127.0.0.1 ports 48101 and up, and clean up after themselves.
+
 ## 7. Layout of what brief 00 added
 
 | Path | What |
@@ -99,4 +139,6 @@ emcc /tmp/t.c -sUSE_SDL=2 -o /tmp/t.js && echo ok
 | `scripts/run-headless.sh` | headless, bounded game runs |
 | `tests/fetch-test-data.sh`, `tests/run-headless.sh` | tests for the fetch and run scripts |
 | `ext/vnet` | vnet `v0.4.0` (submodule; not built yet) |
+| `Makefile.emscripten`, `scripts/build-wasm.sh`, `web/` | the browser build and its page (brief 02) |
+| `tests/web/`, `tests/tools/`, `tests/data/` | browser tests, the key-playing shim that records demos, the committed demo |
 | `doco/browser/code-facts.md` | what the code does, with file:line |

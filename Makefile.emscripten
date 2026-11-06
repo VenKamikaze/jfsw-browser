@@ -26,7 +26,7 @@ WEBDIR = web
 #  idbfs.js            - config and saves persist in IndexedDB.
 WASM_LDFLAGS = \
 	-O2 \
-	-sASYNCIFY=1 \
+	-sASYNCIFY=$(ASYNCIFY) \
 	-sASYNCIFY_STACK_SIZE=$(ASYNCIFY_STACK_SIZE) \
 	-sALLOW_MEMORY_GROWTH=1 \
 	-sINITIAL_MEMORY=134217728 \
@@ -39,6 +39,7 @@ WASM_LDFLAGS = \
 	-sEXPORTED_FUNCTIONS=_main,_malloc,_free \
 	-lidbfs.js
 
+ASYNCIFY ?= 1
 ASYNCIFY_STACK_SIZE ?= 262144
 
 # Extra options for a debugging build (function names in stack traces, run-time checks):
