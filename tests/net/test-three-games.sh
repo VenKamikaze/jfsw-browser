@@ -13,7 +13,9 @@
 #                    join it by its room code
 #   --udp            plain UDP (-net -nm:3 / -net -nm HOST:PORT), no relay:
 #                    the existing path, which must keep working
-#   --tics N         game tics to play (default 1800: about 30 s)
+#   --tics N         game tics to play (default 1200: about 30 s). Keep it below 1500:
+#                    with idle players, E1L1 has a game bug that hangs all
+#                    processes in the actors' AI at tic 1522 (see code-facts §12)
 #   --players N      2 to 4 (default 3)
 #   --sw FILE        the game binary (default ./sw)
 #   --impair SPEC    vnet impairment on every process (--relay only), e.g.
@@ -33,7 +35,7 @@
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-mode=relay; tics=1800; players=3; sw="$root/sw"; impair=""; nudge=""
+mode=relay; tics=1200; players=3; sw="$root/sw"; impair=""; nudge=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --relay) mode=relay; shift ;;
@@ -51,7 +53,8 @@ t_need_data
 rport=$((port_base + 20))
 uport=$((port_base + 30))
 auto="-autonet 2,0,2,1,0,0,0,0,0,0 -testsync -testquit$tics"
-limit=$((tics / 20 + 60))      # seconds
+limit=$((tics / 10 + 60))      # seconds: a hang detector, generous for a loaded machine
+[ "$tics" -ge 1500 ] && echo "note: E1L1 hangs in the actors' AI at tic 1522 (a game bug, code-facts section 12): expect a timeout"
 
 t_note "$players-player coop game, $tics tics, $mode${impair:+, impairment $impair}${nudge:+, nudge $nudge}"
 

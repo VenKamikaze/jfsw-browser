@@ -20,11 +20,20 @@ t_tmp="$(mktemp -d "${TMPDIR:-/tmp}/jfsw-net.XXXXXX")" || exit 125
 t_fail=0
 
 t_cleanup() {
-    local p
+    local p i alive
+    # TERM first: run-headless.sh then stops its game (SIGTERM, SIGKILL after
+    # 5 s). Only after that, KILL what is left.
     for p in "${t_pids[@]:-}"; do
         [ -n "$p" ] && kill -TERM "$p" 2>/dev/null
     done
-    sleep 0.3
+    for i in $(seq 1 80); do
+        alive=0
+        for p in "${t_pids[@]:-}"; do
+            [ -n "$p" ] && kill -0 "$p" 2>/dev/null && alive=1
+        done
+        [ "$alive" = 0 ] && break
+        sleep 0.1
+    done
     for p in "${t_pids[@]:-}"; do
         [ -n "$p" ] && kill -KILL "$p" 2>/dev/null
     done
