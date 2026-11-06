@@ -1,9 +1,15 @@
 [submodule "jfmact"]
 	path = jfmact
-	url = ../jfmact.git
+	url = https://github.com/VenKamikaze/jfmact.git
+	branch = master
 [submodule "jfaudiolib"]
 	path = jfaudiolib
-	url = ../jfaudiolib.git
+	url = https://github.com/VenKamikaze/jfaudiolib.git
+	branch = claude
 [submodule "jfbuild"]
 	path = jfbuild
-	url = ../jfbuild.git
+	url = https://github.com/VenKamikaze/jfbuild.git
+	branch = claude
+[submodule "ext/vnet"]
+	path = ext/vnet
+	url = https://github.com/VenKamikaze/vnet.git
