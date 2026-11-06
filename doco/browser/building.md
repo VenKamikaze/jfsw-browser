@@ -142,3 +142,35 @@ They use the preinstalled Chromium through Playwright (`require('playwright')`; 
 | `Makefile.emscripten`, `scripts/build-wasm.sh`, `web/` | the browser build and its page (brief 02) |
 | `tests/web/`, `tests/tools/`, `tests/data/` | browser tests, the key-playing shim that records demos, the committed demo |
 | `doco/browser/code-facts.md` | what the code does, with file:line |
+| `tests/net/` | the network tests of brief 01 (section 8) |
+
+## 8. Network games and their tests (brief 01)
+
+Native players can play through a vnet relay as well as over plain UDP. The relay is a small Go program in the vnet submodule (`ext/vnet/relay`, Go 1.24 or newer); run it on any machine that players can reach by UDP:
+
+```sh
+(cd ext/vnet/relay && go build -o /tmp/vnet-relay ./cmd/vnet-relay)
+/tmp/vnet-relay -udp :7777 -http "" -v           # UDP only: no WebSocket (a native-only relay); -max-members 8 is the default room size
+```
+
+```sh
+./sw -net -relay relay.example.org:7777 -host-room 3 -- -autonet 2,0,2,1,0,0,0,0,0,0
+# prints "mmulti: room code ABC234 ..." (stdout, sw.log, the on-screen console), then waits for two more players
+./sw -net -relay relay.example.org:7777 -room ABC234 -- -autonet 2,0,2,1,0,0,0,0,0,0
+```
+
+`-host-room N` takes 2 up to 4 players on the shareware GRP (8 registered) and the relay's room size; more is clamped with a message. `-autonet` (code-facts §4) starts the game without menus once everyone is in; without it the host picks the game in the menus. A failed start (bad code, no such room, room full, relay down) prints why and exits with status 1. Plain UDP as before: `./sw -net -nm:3 -- ...` for the master, `./sw -net -nm HOST[:PORT] -- ...` for the others. Impairment for testing: `VNET_IMPAIR="loss=5,dup=2,reorder=3,lat=20,jit=10,seed=N"` in the environment (own seed per process). Details: `code-facts.md` §12 and `jfbuild/include/mmulti_vnet.h`.
+
+Tests (all local, on 127.0.0.1, ports 47000 to 47999 from `JFSW_TEST_PORT_BASE`, default 47100; they build the relay with Go into `~/.cache/jfsw-browser` the first time; each stops every process it started):
+
+```sh
+make test                      # everything below, about 12 minutes
+make test-mmulti               # test 1, 10 runs (no game data needed), about 2 minutes
+make test-net GAME_RUNS=3      # tests 2 to 4; needs testdata/swshare.grp
+tests/net/test-mmulti-vnet.sh --runs 10 [--stub-resend]       # mmulti over vnet with loss, duplication, reordering
+tests/net/test-three-games.sh [--udp] [--tics N] [--impair SPEC] [--nudge N:T]   # three game processes, co-op, quit after N tics
+tests/net/test-udp-unchanged.sh --base-sw "$(tests/net/build-baseline.sh)" [--mutate-wire]   # plain -net against the pre-brief build
+tests/net/test-errors.sh [--only REGEX] [--sw FILE]           # bad code, full room, relay down, host leaves, caps
+```
+
+`tests/net/build-baseline.sh` builds the game as it was before brief 01. **`make test` therefore runs `git worktree add` on your repository** (a detached worktree of the commit this branch was made from, in `~/.cache/jfsw-browser/baseline-<commit>`; `git worktree list` shows it, `git worktree remove` deletes it) and needs network access to the submodule forks the first time (it checks out jfbuild, jfaudiolib and jfmact there and builds them). After editing anything in `jfbuild/`, run `make test` or `make -C jfbuild USE_POLYMOST=1 USE_OPENGL=1 USE_ASM=0 libengine.a`: the top-level `make` does not rebuild an existing `jfbuild/libengine.a`.

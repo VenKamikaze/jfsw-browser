@@ -136,6 +136,24 @@ extern int predictmovefifoplc;
 extern BOOL Prediction;
 extern short NumSyncBytes;
 
+// ---- Test-only hooks (sync.c). Not for players. ----
+// Arguments: -testsync (8 sync bytes in a network game), -testquit<N> (quit
+// cleanly, exit status 0, after N game tics) and -testnudge<T> (this player
+// moves 8 units in x at tic T: a deliberate desync, for proving that the
+// sync check bites). -testquit works in network games only (a single player
+// game prints the TEST line but does not exit). All players of a game must be given the same -testsync
+// and -testquit; this is checked through the version exchange.
+extern int TestQuitTics;        // 0 = off
+extern int TestQuitReached;
+extern int TestNudgeTic;        // -1 = off
+extern int SyncChecks, SyncMismatches;      // counted in every game
+void TestSyncArg(void);
+void TestQuitArg(int tics);
+void TestNudgeArg(int tic);
+int TestVersionSalt(void);
+void TestTicHook(void);         // from domovethings, once per game tic
+void TestQuitFinish(void);      // from RunLevel when TestQuitReached
+
 void InitPrediction(PLAYERp pp);
 void DoPrediction(PLAYERp ppp);
 void CorrectPrediction(int actualfifoplc);

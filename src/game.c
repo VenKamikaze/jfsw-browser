@@ -91,6 +91,7 @@ Things required to make savegames work:
 
 #include "startwin.h"
 #include "version.h"
+#include "mmulti_vnet.h"
 
 #if DEBUG
 #define BETA 0
@@ -932,11 +933,20 @@ InitGame(VOID)
     // sets numplayers, connecthead, connectpoint2, myconnectindex
     if (netsuccess) {
         buildputs("Waiting for players...\n");
+        mmulti_vnet_setplayercap(MAX_SW_PLAYERS);   // for -net -relay ... -host-room N
         while (initmultiplayerscycle()) {
             handleevents();
             if (quitevent) {
                 return;
             }
+        }
+        if (mmulti_vnet_state() == MMULTI_VNET_FAILED) {
+            // The relay refused us, could not be reached, or the host is gone.
+            // (mmulti has said why on the console already.)
+            buildprintf("Network game failed: %s\n", mmulti_vnet_errormsg());
+            uninitmultiplayers();
+            wm_msgbox("Network game failed", "%s.", mmulti_vnet_errormsg());
+            exit(1);
         }
     } else {
         initsingleplayers();
@@ -3057,7 +3067,7 @@ VOID InitRunLevel(VOID)
         waitforeverybody();
     #endif
 
-    SendVersion(GameVersion);
+    SendVersion(GameVersion + TestVersionSalt());
 
     waitforeverybody();
 
@@ -3100,7 +3110,7 @@ VOID InitRunLevel(VOID)
 //DebugWriteLoc(__FILE__, __LINE__);
     waitforeverybody();
 
-    CheckVersion(GameVersion);
+    CheckVersion(GameVersion + TestVersionSalt());
 
     // IMPORTANT - MUST be right before game loop AFTER waitforeverybody
     InitTimingVars();
@@ -3138,6 +3148,11 @@ RunLevel(VOID)
 
           //MONO_PRINT("Before MoveLoop");
         MoveLoop();
+        if (TestQuitReached)
+            {
+            TestQuitFinish();
+            QuitFlag = TRUE;
+            }
         //MONO_PRINT("After MoveLoop");
         //MONO_PRINT("Before DrawScreen");
         drawscreen(Player + screenpeek);
@@ -3254,6 +3269,8 @@ CLI_ARG cli_arg[] =
 {1, "-h[filename.def]",     "Use filename.def instead of SW.DEF"    },
 {0, "-setup",               "Displays the configuration dialogue box"},
 {0, "-nosetup",             "Prevents display of the configuration dialogue box"},
+{0, "-net -relay H:P -host-room N", "Network game through a vnet relay: host a room for N players"},
+{0, "-net -relay H:P -room CODE",   "Network game through a vnet relay: join a room"},
 
 #if 0 //def NET_MODE_MASTER_SLAVE
 {0, "-broad<cast>",         "Broadcast network method (default)"    },
@@ -3523,6 +3540,13 @@ int app_main(int argc, char const * const argv[])
 
     if (netparam) { // -net parameter on command line.
         netsuccess = initmultiplayersparms(endnetparam - netparam, &argv[netparam]);
+        if (!netsuccess && mmulti_vnet_state() == MMULTI_VNET_FAILED) {
+            // A bad -relay, -host-room or -room (mmulti has said what): do not fall
+            // back to a single player game the way a plain -net failure does.
+            buildprintf("Network game failed: %s\n", mmulti_vnet_errormsg());
+            wm_msgbox("Network game failed", "%s.", mmulti_vnet_errormsg());
+            exit(1);
+        }
     }
 
 #ifdef HAVE_STARTWIN
@@ -3687,6 +3711,28 @@ int app_main(int argc, char const * const argv[])
             {
             for (; i<argc; i++)
                 if (!strcmp(argv[i], "--")) break;
+            }
+        else
+        if (Bstrcasecmp(arg, "relay") == 0 || Bstrcasecmp(arg, "room") == 0 || Bstrcasecmp(arg, "host-room") == 0)
+            {
+            // -net sub-options for mmulti (mmulti_vnet.h). That loop above does not skip
+            // the -net arguments (see doco/browser/code-facts.md), so without this -host-room
+            // would be taken for -h<def file>.
+            }
+        else
+        if (Bstrncasecmp(arg, "testsync", 8) == 0)
+            {
+            TestSyncArg();      // test-only: 8 sync bytes in a network game
+            }
+        else
+        if (Bstrncasecmp(arg, "testquit", 8) == 0)
+            {
+            TestQuitArg(atoi(arg+8));   // test-only: quit cleanly after N game tics
+            }
+        else
+        if (Bstrncasecmp(arg, "testnudge", 9) == 0)
+            {
+            TestNudgeArg(atoi(arg+9));// test-only: a deliberate desync of this player at tic T
             }
         else
         if (Bstrncasecmp(arg, "autonet",7) == 0)
