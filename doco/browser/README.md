@@ -27,7 +27,6 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 | # | Brief | Fix branch (from `master`) | Depends on | Status |
 |---|---|---|---|---|
 | F1 | [Co-op game freezes at tic 1522](F1-coop-freeze.md) | `fix/coop-freeze` | 01 (for the regression test) | not started |
-| F2 | [Crash when the player dies while recording a demo](F2-demo-record-crash.md) | `fix/demo-record-crash` | 02 (for the scripted-input shim) | not started |
 
 Later, not briefed: music (Q4), WebGL rendering through the GLES2 path, touch controls, the Wanton Destruction and Twin Dragon add-ons in the browser.
 
@@ -85,6 +84,7 @@ vnet is a fourth submodule at `ext/vnet`, pinned to the `v0.4.0` tag (`eb1feeb`)
 The user's policy (6 Nov 2026):
 
 - A bug in the original game (or engine) that **breaks the game** (a freeze, a crash, a lost game) and **reproduces reliably** gets its own brief (`Fn-short-name.md`) and its own fix.
+- **The user can rule a game-breaking bug out of scope** when it doesn't matter for this project (vnet multiplayer and the Emscripten build); it then goes in `bugs.md` as **not planned**, with the reason. (6 Nov 2026: the crash when the player dies while recording a demo, `bugs.md` L13.)
 - **Lesser bugs** (wrong messages, cosmetic problems, odd edge cases that don't stop play) go in [`bugs.md`](bugs.md), to look at later. Don't fix them inside an unrelated brief, unless the brief can't work around them; then fix them in the smallest way and say so in `bugs.md`.
 - **First, check that upstream hasn't already fixed it** (the user's rule). The submodules are pinned behind their forks' `master` (jfbuild by 5 commits, jfaudiolib by 4; on 6 Nov 2026 the forks matched `jonof/*` exactly, and jfsw and jfmact had nothing newer). Before fixing: compare `jonof/<repo>` `HEAD` with the pinned commit, read the newer commits that touch the code involved, look at upstream's unmerged pull requests (`git ls-remote https://github.com/jonof/<repo> 'refs/pull/*/head'`, fetched into a scratch bare repo), and **re-run the reproduction with the submodule moved to the fork's current `master`**. If a newer upstream commit fixes it, the fix is to move the pin (its own brief), not a new patch. Record what was checked in the Outcome.
 - **A fix is made so that it can go upstream to JonoF unchanged:**
