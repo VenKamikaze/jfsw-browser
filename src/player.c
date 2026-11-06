@@ -7904,6 +7904,7 @@ domovethings(VOID)
     // count the number of times this loop is called and use
     // for things like sync testing
     MoveThingsCount++;
+    TestTicHook();      // test-only (net.h)
 
     //RTS_Keys();
 

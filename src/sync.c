@@ -34,6 +34,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 
 BOOL SyncPrintMode = TRUE;
 short NumSyncBytes = 1;
+int SyncChecks, SyncMismatches;
 char sync_first[MAXSYNCBYTES][60];
 int sync_found = FALSE;
 
@@ -470,11 +471,18 @@ GetSyncInfoFromPacket(char *packbuf, int packbufleng, int *j, int otherconnectin
                 {
                 if (Player[i].syncval[syncvaltottail & (SYNCFIFOSIZ - 1)][sb] != Player[connecthead].syncval[syncvaltottail & (SYNCFIFOSIZ - 1)][sb])
                     {
+                    // the on-screen "GAME OUT OF SYNC" message is not visible to a
+                    // log or a test: say it once per sync byte (tic = sync check index)
+                    if (!syncstat[sb])
+                        buildprintf("GAME OUT OF SYNC: tic %d, sync byte %d (%s), player %d differs from the master\n",
+                            syncvaltottail, sb, SyncNames[sb], i);
+                    SyncMismatches++;
                     syncstat[sb] = 1;
                     }
                 }
             }
 
+        SyncChecks++;
         syncvaltottail++;
 
         for (i = connecthead; i >= 0; i = connectpoint2[i])
@@ -558,3 +566,73 @@ getsyncbyte()
 */
 #endif
 
+
+
+extern unsigned int MoveThingsCount;
+
+////////////////////////////////////////////////////////////////////////
+//
+// Test-only hooks (see net.h). Used by the network tests, never by players.
+//
+////////////////////////////////////////////////////////////////////////
+
+int TestQuitTics = 0;
+int TestQuitReached = 0;
+int TestNudgeTic = -1;
+
+void TestSyncArg(void)
+    {
+    NumSyncBytes = 8;
+    }
+
+void TestQuitArg(int tics)
+    {
+    TestQuitTics = tics;
+    }
+
+void TestNudgeArg(int tic)
+    {
+    TestNudgeTic = tic;
+    }
+
+// Added to the game version that is exchanged and compared at the start of a
+// level: players started with a different sync byte count or quit tic then
+// print "CheckVersion(): player N has version ...". That is only a log line
+// (the game goes on, and with different sync byte counts the packets are
+// misread): the tests fail on it. -demosync* in a network game also sets
+// NumSyncBytes = 8 and so also changes the version that is sent.
+int TestVersionSalt(void)
+    {
+    return (NumSyncBytes - 1) * 1000003 + TestQuitTics * 37;
+    }
+
+void TestTicHook(void)
+    {
+    extern unsigned int MoveThingsCount;
+
+    if (TestNudgeTic >= 0 && (int)MoveThingsCount == TestNudgeTic)
+        {
+        buildprintf("TEST: nudging player %d at tic %d\n", myconnectindex, TestNudgeTic);
+        Player[myconnectindex].posx += 8;
+        }
+
+    if (TestQuitTics > 0 && (int)MoveThingsCount >= TestQuitTics)
+        TestQuitReached = 1;
+    }
+
+void TestQuitFinish(void)
+    {
+    unsigned int until;
+
+    buildprintf("TEST: quitting after %u game tics: %d sync checks, %d mismatches, %d sync bytes, player %d of %d\n",
+        MoveThingsCount, SyncChecks, SyncMismatches, (int)NumSyncBytes, myconnectindex, CommPlayers);
+
+    // a player that is a few tics behind still needs what we send: keep
+    // acknowledging and resending for a moment before leaving
+    until = getticks() + 1500;
+    while (getticks() < until)
+        {
+        handleevents();
+        flushpackets();
+        }
+    }

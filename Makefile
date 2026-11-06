@@ -276,3 +276,30 @@ $(SRC)/version-auto.c:
 	printf "const char *game_version = \"%s\";\n" "$(shell git describe --always || echo git error)" > $@
 	echo "const char *game_date = __DATE__;" >> $@
 	echo "const char *game_time = __TIME__;" >> $@
+
+# NETWORK TESTS (brief 01; see doco/browser/building.md). The top-level rule
+# above never re-makes an existing jfbuild/libengine.a, so these bring the
+# engine library up to date first.
+.PHONY: test test-mmulti test-net engine-current
+MMULTI_RUNS ?= 10
+GAME_RUNS ?= 1
+engine-current: sw$(EXESUFFIX)
+	$(MAKE) -C $(ENGINEROOT) -f Makefile \
+		USE_POLYMOST=$(USE_POLYMOST) \
+		USE_OPENGL=$(USE_OPENGL) \
+		USE_ASM=$(USE_ASM) \
+		RELEASE=$(RELEASE) $(ENGINELIB)
+	$(MAKE) sw$(EXESUFFIX)
+
+# mmulti over vnet with loss, duplication and reordering (no game data needed)
+test-mmulti: engine-current
+	tests/net/test-mmulti-vnet.sh --runs $(MMULTI_RUNS)
+
+# three game processes (relay and plain UDP), plain UDP against the old build, errors
+test-net: engine-current
+	for i in $$(seq $(GAME_RUNS)); do tests/net/test-three-games.sh --relay || exit 1; done
+	tests/net/test-three-games.sh --udp
+	tests/net/test-udp-unchanged.sh --base-sw "$$(tests/net/build-baseline.sh)"
+	tests/net/test-errors.sh
+
+test: test-mmulti test-net
