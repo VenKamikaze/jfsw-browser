@@ -98,7 +98,7 @@ Status: **review** (branch `browser/02-emscripten-port` in jfsw-browser, jfbuild
 
 | Repo | Branch | Commit |
 |---|---|---|
-| jfsw-browser | `browser/02-emscripten-port` | see `git log` (last: `e2971ab`) |
+| jfsw-browser | `browser/02-emscripten-port` | branch tip (see `git log`) |
 | jfbuild | `browser/02-emscripten-port` | `4b339db` (from `claude` `40a98be`) |
 | jfaudiolib | `browser/02-emscripten-port` | `e087b6d` (from `claude` `68be97f`) |
 
