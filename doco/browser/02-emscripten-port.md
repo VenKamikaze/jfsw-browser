@@ -85,4 +85,78 @@ Single-player Shadow Warrior runs in a browser: an Emscripten/WASM build with th
 
 ## Outcome
 
-_Not started._
+Status: **review** (branch `browser/02-emscripten-port` in jfsw-browser, jfbuild and jfaudiolib; the coordinator marks it done after review and merge). Single-player Shadow Warrior runs in Chromium from `scripts/build-wasm.sh`; the native build is unchanged. Not tested: Firefox (not installed in the container), a real GPU, a real sound card, a person playing.
+
+**What landed**
+
+- **Build.** `jfbuild/Makefile.shared` and `jfaudiolib/Makefile.shared` recognise `emcc` (`wasm32-unknown-emscripten`) as `PLATFORM=EMSCRIPTEN`: SDL2 from the Emscripten port, no GTK/ALSA/Vorbis, host tools built with the host compiler, and objects/libraries named `*.wasm.o` / `lib*.wasm.a` so a native and a browser build share one tree. `Makefile` includes the new `Makefile.emscripten` (link flags, `build-wasm/`, rules that always ask the library sub-makes) under emcc. `scripts/build-wasm.sh` wraps it: `scripts/build-wasm.sh` builds `build-wasm/{index.html,jfsw.js,jfsw.css,sw.js,sw.wasm}` (git-ignored). `mmulti_null.c` replaces `mmulti.c` there (no sockets; single player until brief 04).
+- **Yields (D7).** `-sASYNCIFY`. `jfbuild/src/sdlayer2.c` yields in two places: `showframe()` once per presented frame (a `requestAnimationFrame` wait, 100 ms fallback in a hidden tab) and `handleevents()` after 8 ms without a yield, for loops that wait without drawing. Every loop in code-facts section 5 reaches one of them; no loop spins. `sampletimer()` caps one clock step at a quarter second (a stalled tab is a pause). Also: the SDL renderer (WebGL texture) is used for the 8-bit picture, `setvideomode()` always makes a window, `wm_msgbox()` shows its text on the page, jfaudiolib's SDL driver opens the Web Audio device so SDL converts the format (otherwise "FX driver is No Sound"). `exit()` from anywhere ends in the page's "The game has ended / stopped with an error ... Reload the page" overlay with a reload button (`-sEXIT_RUNTIME`, `Module.onExit`, `onAbort`, error handlers).
+- **Page (`web/`).** Click to start (audio opens inside the click), status line, progress, errors on the page; the canvas is scaled to the window keeping its shape; pointer lock by clicking the picture (SDL re-grabs it); when the browser takes the pointer for Escape (the key never arrives) the page gives the game an Escape. The game's folder `/persist` is IndexedDB (IDBFS) and holds `user_profiles_disabled`, so `sw.cfg`, saves and the log go there (the engine's own "portable" switch; no engine change); the page checks it once a second, on `visibilitychange` and on `pagehide`, and syncs when something changed. The GRP goes to `/data` (not persisted), which is `DATADIR` (`-DDATADIR=\"/data\"`) so GRP detection is the game's own. Dev data loader: `?data=<url>`, default `swshare.grp` next to the page, no cache. Test hooks only with `?test=1`: `?args=`, `?files=` (put files in the game's directory before `main`), `?persist=0`, `window.jfswTest` (`readFile`, `writeFile`, `listFiles`), `Module.jfswFrameLog`/`jfswYieldLog`, `window.jfswOut` (everything the game printed), `window.jfswExit`. No game hooks were added.
+- **A bug in the game that x86 hid.** `SpawnBreakFlames` is defined with two parameters but was declared and called with one in `break.c`; `wasm-ld` warned and the call would trap when a burning breakable is destroyed. Fixed by passing the (unused) second argument. The only game-source change; nothing in the simulation changed.
+
+**Commits**
+
+| Repo | Branch | Commit |
+|---|---|---|
+| jfsw-browser | `browser/02-emscripten-port` | see `git log` (last: `e2971ab`) |
+| jfbuild | `browser/02-emscripten-port` | `4b339db` (from `claude` `40a98be`) |
+| jfaudiolib | `browser/02-emscripten-port` | `e087b6d` (from `claude` `68be97f`) |
+
+jfmact needed no change. Merge order is in the README ("Working across repos"): merge the two fork branches into their `claude` first. The jfbuild changes are in `Makefile`, `Makefile.shared`, `include/compat.h` and `src/sdlayer2.c`; brief 01 also edits `jfbuild/Makefile` (`mmulti`). The only shared surface is the `ENGINEOBJS` area there: this branch adds an `ifeq ($(PLATFORM),EMSCRIPTEN)` block after the `DARWIN` one and does not edit existing lines.
+
+**Build commands** (clean clone, clean Emscripten cache: built in about a minute with `-j2` after SDL2 was in the cache)
+
+```
+scripts/setup-emsdk.sh [--with-ports]; scripts/build-wasm.sh
+scripts/fetch-test-data.sh; make -j4        # the tests also need the native ./sw
+```
+
+**Tests** (all with Chromium through Playwright; Firefox is not available in the container)
+
+- `node tests/web/smoke.js`: **22 passed, 0 failed.** Page loads the data and offers the button; the click starts the game; the canvas is not blank (255 colours); the main menu is drawn after skipping the intro; Down changes the picture (the keyboard reaches the game); about 55 frames a second; the audio device is open, the `AudioContext` is running and its clock advances; a click locks the pointer; leaving the lock without the game asking gives the game an Escape; no page error, dialog or `console.error`; the GRP was recognised; no error text. **Proof the blank check can fail:** it first runs on known-blank pictures (the canvas before the game starts, a one-colour and a two-colour picture count as blank; a 12-colour one does not), and `SMOKE_SABOTAGE=blank node tests/web/smoke.js` hides the canvas after the game has drawn: `FAIL the canvas is not blank (1 colours ...)` (21 passed, 1 failed). The picture is read as an element screenshot of the canvas, which works with the WebGL canvas SDL uses.
+
+- `node tests/web/determinism.js`: **20 passed, 1 failed** (the failure is the 100 ms stall limit under machine load, below). Passing: native replay of `jfsw1.dmo` (5,999 tics, 150 s of E1L1, recorded natively on x86_64 with `tests/tools/synth_input.c`) makes the committed `jfsw1.dms` byte for byte; **wasm plays the demo with `-demosynctest` against the native `.dms`: no "Demo out of sync", ends by itself with exit 0 after 160 s; wasm `-demosyncrecord` writes a `.dms` of 53,991 bytes identical to the native one, byte for byte** (so the demo, written as `fwrite`n structs on x86_64, loads on wasm32 and the simulation agrees on every tic); the other direction: a demo recorded in the wasm build (typed by the test, 1,791 tics) plays natively to its end and the native and wasm `.dms` files are identical. **The comparison fails when it should:** wasm `-demosynctest` against the `.dms` of another demo prints `Demo out of sync - Sync Byte Number N - Iteration M`; against the right `.dms` with one byte flipped (tic 2500, function 4) it prints `Sync Byte Number 4 - Iteration 2501` and exits 0 (as code-facts says: the test looks at the output, not the status); and the byte comparison itself finds the flipped byte and tells the two demos apart. No difference between native and wasm was found, so there is no "first differing tic" to report.
+- Frame time (same run, Chromium headless, 4 cores shared with other work, load average about 5): over 152 s of demo playback after the first 10 s (level loading): **median 17.1 ms (a 60 Hz display), p95 72.9 ms, p99 255 ms, max 1,426 ms** (5,341 frames); an earlier run gave median 16.9, p95 52, p99 176, max 1,047. The median meets the target; the "no stall over 100 ms" check **fails under this load** and I left it failing rather than loosening it. The game itself uses about 1.5 ms of each 16.7 ms frame (see ASYNCIFY below), so the stalls are the browser process being starved on a machine with load above its core count; a 50 s run at load 3.6 had 22 gaps over 60 ms and a maximum of 111 ms. The check needs a quiet machine to be a fair test of the port.
+
+- `node tests/web/persist.js`: **9 passed, 0 failed.** Starts E1L1, quick-saves with F6 (a 300,459-byte `game0.sav`), quits with F10/Y (which writes `sw.cfg`), reloads the page: the save and `sw.cfg` are still there, the game runs on them (load menu drawn), no error. The control run with `?persist=0` loses both files on reload, so the check can fail.
+
+- Native: `make -j4` green; `tests/run-headless.sh` 17 passed, 0 failed; the native demo replay is itself deterministic (test 1 of `determinism.js`). The software-only native build was not changed.
+
+**ASYNCIFY cost**
+
+- Size (`-O2`): `sw.wasm` 1,802,165 bytes without ASYNCIFY (a build with the yields compiled out, `-DJFBUILD_NO_ASYNCIFY`) against 2,515,133 with it: **+40 % raw, +29 % gzipped (599 KB to 774 KB)**; `sw.js` +8 KB (43 KB gzipped either way). Whole download, `sw.wasm` + `sw.js` gzipped: about 820 KB, plus the 26 MB GRP.
+- Speed: over 2,700 yields in a 50 s demo run, the time from the browser waking the game to the game running again (stack rewind) was 0.0 ms median and 0.1 ms at the 99th percentile; the game's own work between yields (simulation, drawing, the palette copy) was a median 1.2 ms, 95th percentile 2.2 ms, mean 1.5 ms. I could not time a build without ASYNCIFY doing the same work, because it cannot yield and a page that never returns to the browser piles up WebGL commands and gets killed; the instrumentation overhead on the hot paths is therefore not separated from the engine's own cost, but the whole frame is under a tenth of the frame budget.
+- Default settings are kept (every function that can reach a yield through an indirect call is instrumented). `-sASYNCIFY_IGNORE_INDIRECT=1` would save 366 KB raw (84 KB gzipped) but then every function reached through a pointer that can yield (the menus' custom handlers) would need listing in `ASYNCIFY_ADD`; not worth the risk for now. `ASYNCIFY_STACK_SIZE` is 262,144 bytes (the default 4,096 is too small).
+
+**Findings and corrections**
+
+- code-facts.md section 9 said the Makefiles would see `UNKNOWN` under `emcc` and that the `pkg-config` probes would find nothing: the real problems were the host's `sdl2-config` and GTK being picked up. Section 12 (new) lists what was found; the brief itself was right about the code.
+- The brief asked for a demo "at least two minutes of movement and shooting". A recording ends when the player dies (`DemoTerm` closes the file and the recording code then crashes `sw` at the next full buffer: a native bug, section 12), and a scripted player with no eyes dies in about a minute on E1L1 at the default skill. `tests/data/jfsw1.dmo` is 150 s of E1L1 at skill 1 (`-s1`), pistol, turning and firing in place with a few steps; the player is alive at the end and killed enemies on the way (screenshots checked). Both demos and their sync files are gzip'd in `tests/data/` (about 8 KB and 25 KB for jfsw1): a `.dmo` holds inputs and a header, not game data, and `.dms` is nine sync bytes per tic.
+- The emsdk in `~/.cache/jfsw-browser/emsdk` had no seeded SDL2 port in this container (Emscripten tried to download it and got 403) and I was not allowed to re-run `setup-emsdk.sh --with-ports` there, so I used a private cache (`EM_CACHE=...`, SDL2 unpacked from the `emscripten-ports` branch by hand; `scripts/build-wasm.sh` keeps `EM_CACHE` if set). A failed first run left an empty `ports/sdl2` directory in the shared cache; remove it if `--with-ports` says nothing to do.
+
+**Concerns**
+
+- *Determinism x86_64 against wasm32.* 5,999 tics of E1L1 (9 sync functions each) are byte-identical on both and in both directions. That covers the RNG, player, enemy, missile and sector-object states through fighting. It does not cover floating point (the game has none in the simulation that I found), the other levels, registered-only monsters, or multiplayer. Struct layout is safe because `LONG` is `int`. The one portability bug found was the signature mismatch above; calls through function pointers cast to other signatures would trap, not warn, and no run hit one.
+- *Frame time.* Measured on a loaded 4-core machine (see numbers). The game spends about 1.5 ms of each frame; the rest is waiting for `requestAnimationFrame`. The stalls come from the machine being shared (load average 4 to 6 here) and from level loading in the first seconds (which reads the 26 MB GRP out of memory in 8-tile steps with a yield each).
+- *Hidden tabs.* `requestAnimationFrame` stops in a background tab; the game then runs at 10 frames per second (100 ms fallback) and the clock cap makes it slow down rather than skip. In a lockstep network game (brief 04) a hidden peer will stall the others; that needs a policy there.
+- *Merging with brief 01.* The `EMSCRIPTEN` block in `jfbuild/Makefile` swaps `mmulti.c` for `mmulti_null.c`. When brief 04 builds the vnet-backed `mmulti` for the browser it should replace that line, and brief 01's `-D_POSIX_C_SOURCE` for `ext/vnet` goes into the same `ifeq`. `Makefile.emscripten` has its own link flags; vnet's browser backend needs `-lwebsocket.js`. Brief 01's test hooks in `sync.c` / `game.c` are untouched here.
+- `?data=` loading needs the GRP from the same origin or CORS headers (Q2).
+- Pointer lock and Escape were checked with synthetic events (a headless browser cannot press the real Escape); the real behaviour is in the play-test.
+- The "Click to start" click also counts as the first click on the picture, so the first click may also be a mouse click in the game's menu.
+
+**Play-test steps (Arch Linux, pacman)**
+
+```
+sudo pacman -S --needed base-devel git unzip python nodejs npm go   # go is not needed here
+git clone --recurse-submodules -b browser/02-emscripten-port https://github.com/VenKamikaze/jfsw-browser
+cd jfsw-browser
+scripts/setup-emsdk.sh                    # downloads Emscripten 6.0.13 (about 400 MB) into ~/.cache/jfsw-browser/emsdk
+scripts/build-wasm.sh                     # about 3 minutes the first time (it builds Emscripten's libraries and SDL2)
+scripts/fetch-test-data.sh                # the shareware data, testdata/swshare.grp (a 3D Realms download, verified)
+cp testdata/swshare.grp build-wasm/       # the page fetches ./swshare.grp
+cd build-wasm && python3 -m http.server 8000 --bind 127.0.0.1
+```
+
+Open `http://127.0.0.1:8000/` in Chromium or Firefox. Click "Click to start". Keys as in the desktop game: arrows move and turn, Ctrl fires, Space uses, 1 to 9 pick weapons, Escape opens the menu, F6 quick saves, F10 quits (shareware then shows an advert page: press a key). Click the picture to capture the mouse; Escape releases it and opens the menu; click again to capture. Choose New Game, "Enter the Wang", a skill, and play Seppuku Station: check keyboard, mouse look, sound effects (there is no music yet) and that it feels smooth. Then save (F6), reload the page and load it (F3). Report anything that freezes (the page should always show a message when the game ends or crashes).
+
+If the SDL2 download is blocked on your network, see `building.md` section 6.1.
