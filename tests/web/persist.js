@@ -71,26 +71,36 @@ async function main() {
       t.check(!/Error|ERROR/.test(log), 'no error in the game output');
       await context.close();
     }
-    // --- settings survive a reload without quitting: F4 sound menu, change the sound volume, Escape ---
+    // --- settings survive a reload without quitting: F4 sound menu, switch the music off, Escape ---
     {
       const read = async (p) => p.evaluate(() => { const b = window.jfswTest.readFile('sw.cfg'); return b ? new TextDecoder().decode(b) : null; });
-      const volume = (cfg) => { const m = cfg && /FXVolume = (\d+)/.exec(cfg); return m ? +m[1] : null; };
+      const music = (cfg) => { const m = cfg && /MusicOn = (\d+)/.exec(cfg); return m ? +m[1] : null; };
       const context = await env.browser.newContext({ viewport: { width: 1000, height: 800 } });
       const page = await context.newPage();
       await page.goto(env.base + q); await t.waitState(page, 'ready');
-      await page.click('#start'); await page.waitForTimeout(4000);
+      await page.click('#start'); await page.waitForTimeout(9000);   // (the level takes a few seconds to load; keys before that are ignored)
       t.check((await read(page)) === null, 'settings: no sw.cfg before anything is changed');
-      await t.tap(page, 'F4'); await page.waitForTimeout(800);
-      for (const k of ['ArrowDown', 'ArrowLeft', 'ArrowLeft', 'ArrowLeft', 'ArrowLeft']) { await t.tap(page, k, 300); await page.waitForTimeout(300); }
-      await t.tap(page, 'Escape');
-      for (let i = 0; i < 3 && (await read(page)) === null; i++) { await page.waitForTimeout(1000); if ((await read(page)) === null) { await t.tap(page, 'Escape'); } }
+      // Key presses into the menu can be lost on a busy machine: open the sound menu, switch the music off (the cursor
+      // starts on "Music"; Enter), leave the way a player does, and try again (at most 6 times) until the game's own
+      // sw.cfg says MusicOn = 0 (it is 1 by default).
+      let changed = null;
+      for (let attempt = 0; attempt < 6 && music(changed) !== 0; attempt++) {
+        await t.tap(page, 'F4'); await page.waitForTimeout(1000);
+        await t.tap(page, 'Enter', 300); await page.waitForTimeout(500);
+        // Leave the menu; sw.cfg appears when the game has left it, so press Escape until it does (at most 6 times).
+        for (let i = 0; i < 6; i++) {
+          await t.tap(page, 'Escape');
+          await page.waitForTimeout(1200);
+          changed = await read(page);
+          if (changed !== null) { break; }
+        }
+      }
       await page.waitForTimeout(SETTLE_MS);
-      const before = volume(await read(page));
-      t.check(before !== null && before < 192, `settings: leaving the menus wrote sw.cfg with the new sound volume (${before}, default 192)`);
+      t.check(music(changed) === 0, `settings: leaving the menus wrote sw.cfg with the changed setting (music on: ${music(changed)}, default 1)`);
       await page.reload();                      // no quit: the game never reaches its exit
       await t.waitState(page, 'ready');
-      const after = volume(await read(page));
-      t.check(after === before, `settings: after a reload ${SETTLE_MS} ms later, without quitting, the sound volume is still ${before} (got ${after})`);
+      const after = await read(page);
+      t.check(after === changed, `settings: after a reload ${SETTLE_MS} ms later, without quitting, sw.cfg is the changed one (music on: ${music(after)})`);
       await context.close();
     }
     // --- a save made just before a reload: three tries, each in a fresh browser profile ---
