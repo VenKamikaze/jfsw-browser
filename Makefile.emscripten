@@ -1,0 +1,78 @@
+# Browser (Emscripten / WebAssembly) build of the game.
+#
+# Included by Makefile when the compiler is emcc (PLATFORM=EMSCRIPTEN, picked
+# up from `emcc -dumpmachine` in jfbuild/Makefile.shared). Use scripts/build-wasm.sh,
+# or by hand, with the emsdk environment sourced:
+#
+#     emmake make -j4 USE_POLYMOST=0 USE_OPENGL=0
+#
+# Objects are named *.wasm.o and libraries lib*.wasm.a, so this build and a native
+# build share one tree without touching each other. The result is in $(WASMDIR)
+# (git-ignored): the page, sw.js and sw.wasm. See doco/browser/building.md.
+
+WASMDIR ?= build-wasm
+WEBDIR = web
+
+# Flags at link time.
+#  ASYNCIFY            - D7: the game's loops block, so main can be suspended and
+#                        resumed from the browser's event loop (see src/ and
+#                        jfbuild/src/sdlayer2.c, emscripten_yield).
+#  ASYNCIFY_STACK_SIZE - bytes for the saved call stack; the default 4096 is too
+#                        small for main -> Control -> RunLevel -> ... .
+#  ALLOW_MEMORY_GROWTH - the engine and the GRP cache are sized at run time.
+#  EXIT_RUNTIME        - exit() from anywhere ends the program and runs Module.onExit.
+#  INVOKE_RUN=0        - the page starts main (callMain) from the "Click to start"
+#                        button, so that audio may start.
+#  idbfs.js            - config and saves persist in IndexedDB.
+WASM_LDFLAGS = \
+	-O2 \
+	-sASYNCIFY=1 \
+	-sASYNCIFY_STACK_SIZE=$(ASYNCIFY_STACK_SIZE) \
+	-sALLOW_MEMORY_GROWTH=1 \
+	-sINITIAL_MEMORY=134217728 \
+	-sSTACK_SIZE=1048576 \
+	-sEXIT_RUNTIME=1 \
+	-sINVOKE_RUN=0 \
+	-sFORCE_FILESYSTEM=1 \
+	-sENVIRONMENT=web \
+	-sEXPORTED_RUNTIME_METHODS=callMain,FS,IDBFS,ccall \
+	-sEXPORTED_FUNCTIONS=_main,_malloc,_free \
+	-lidbfs.js
+
+ASYNCIFY_STACK_SIZE ?= 262144
+
+# Extra options for a debugging build (function names in stack traces, run-time checks):
+#   scripts/build-wasm.sh WASM_DEBUG=1 WASMDIR=build-wasm-debug
+ifeq ($(WASM_DEBUG),1)
+	WASM_LDFLAGS+= -sASSERTIONS=2 -g2
+endif
+
+WASM_PAGE = $(WASMDIR)/index.html $(WASMDIR)/jfsw.js $(WASMDIR)/jfsw.css
+
+.PHONY: wasm
+wasm: $(WASMDIR)/sw.js $(WASM_PAGE)
+
+$(WASMDIR)/sw.js: $(GAMEOBJS) $(ENGINEROOT)/$(ENGINELIB) $(AUDIOLIBROOT)/$(JFAUDIOLIB)
+	mkdir -p $(WASMDIR)
+	$(CXX) $(CPPFLAGS) $(OURCPPFLAGS) $(CXXFLAGS) $(OURCXXFLAGS) -o $@ $(GAMEOBJS) $(ENGINEROOT)/$(ENGINELIB) $(AUDIOLIBROOT)/$(JFAUDIOLIB) $(LDFLAGS) $(OURLDFLAGS) $(WASM_LDFLAGS)
+
+# The libraries are built by sub-makes. The generic rules in Makefile have no
+# prerequisites, so an existing library would never be rebuilt after an edit;
+# these always ask the sub-make (which does nothing if it is up to date).
+.PHONY: FORCE
+FORCE:
+$(ENGINEROOT)/$(ENGINELIB): FORCE
+	$(MAKE) -C $(ENGINEROOT) -f Makefile \
+		USE_POLYMOST=$(USE_POLYMOST) \
+		USE_OPENGL=$(USE_OPENGL) \
+		USE_ASM=$(USE_ASM) \
+		RELEASE=$(RELEASE) $(ENGINELIB)
+$(AUDIOLIBROOT)/$(JFAUDIOLIB): FORCE
+	$(MAKE) -C $(AUDIOLIBROOT) RELEASE=$(RELEASE) $(JFAUDIOLIB)
+
+$(WASMDIR)/%: $(WEBDIR)/%
+	mkdir -p $(WASMDIR)
+	cp $< $@
+
+veryclean::
+	-rm -rf $(WASMDIR)

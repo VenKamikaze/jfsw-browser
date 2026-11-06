@@ -29,3 +29,6 @@
 /build
 /grpfiles.cache
 /testdata/
+/build-wasm*/
+/sw.js
+/sw.wasm
