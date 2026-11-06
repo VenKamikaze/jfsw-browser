@@ -11,7 +11,8 @@
 # old and new must fail.
 #
 # FILE is the game as it was before this work (tests/net/build-baseline.sh
-# builds it and prints the path). Neither part needs anything but the shareware
+# builds it and prints the path; that script runs `git worktree add` on this
+# repository and needs network access to the submodule forks, once). Neither part needs anything but the shareware
 # GRP (testdata/swshare.grp) and a built ./sw.
 #
 # A. The mmulti layer alone (tests/net/mmulti_peer.c), over plain UDP on

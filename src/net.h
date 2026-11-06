@@ -140,7 +140,8 @@ extern short NumSyncBytes;
 // Arguments: -testsync (8 sync bytes in a network game), -testquit<N> (quit
 // cleanly, exit status 0, after N game tics) and -testnudge<T> (this player
 // moves 8 units in x at tic T: a deliberate desync, for proving that the
-// sync check bites). All players of a game must be given the same -testsync
+// sync check bites). -testquit works in network games only (a single player
+// game prints the TEST line but does not exit). All players of a game must be given the same -testsync
 // and -testquit; this is checked through the version exchange.
 extern int TestQuitTics;        // 0 = off
 extern int TestQuitReached;

@@ -597,11 +597,13 @@ void TestNudgeArg(int tic)
 
 // Added to the game version that is exchanged and compared at the start of a
 // level: players started with a different sync byte count or quit tic then
-// print "CheckVersion(): player N has version ...", instead of misreading
-// each other's packets.
+// print "CheckVersion(): player N has version ...". That is only a log line
+// (the game goes on, and with different sync byte counts the packets are
+// misread): the tests fail on it. -demosync* in a network game also sets
+// NumSyncBytes = 8 and so also changes the version that is sent.
 int TestVersionSalt(void)
     {
-    return (NumSyncBytes - 1) * 0x1000 + (TestQuitTics & 0xfff) * 0x10000;
+    return (NumSyncBytes - 1) * 1000003 + TestQuitTics * 37;
     }
 
 void TestTicHook(void)

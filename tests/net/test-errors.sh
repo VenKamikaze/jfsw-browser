@@ -9,8 +9,11 @@
 #
 # --only runs just the cases whose name matches REGEX (names are the first
 # word of each check line). Run with --sw pointing at a build from before the
-# relay existed (tests/net/build-baseline.sh) to see that these checks bite:
-# every case fails.
+# relay existed (tests/net/build-baseline.sh) to see that these checks bite
+# (tried with --only 'badcode-format|room-no-relay|no-such-room': all fail).
+# Cases with a waiting time check a lower bound as well (guestB-no-slot at
+# least 14 s, host-leaves at least 9 s), so that shortening the start-up
+# limits in mmulti_vnet.c is noticed.
 #
 # What happens today with plain -net (for comparison): a -net that cannot be
 # set up (bad arguments, an unresolvable host) prints "mmulti error: ..." and
@@ -53,12 +56,13 @@ expect_fail() {
     local name="$1" max="$2" re="$3"; shift 3
     local t0 t1
     want "$name" || return 0
+    local min="${minsec:-0}"; minsec=0
     t0=$(date +%s.%N)
     t_game "$name" "$t_tmp/$name" --sw "$sw" --timeout $((max + 30)) -- "$@"
     t_wait_pid "$game_pid" $((max + 10)); local st=$t_status
     t1=$(date +%s.%N)
     took=$(echo "$t1 - $t0" | bc)
-    t_check "$name: exit status 1 (got $st) after ${took}s (limit ${max}s)" bash -c "[ $st -eq 1 ] && [ \$(echo '$took <= $max' | bc) -eq 1 ]"
+    t_check "$name: exit status 1 (got $st) after ${took}s (between ${min}s and ${max}s)" bash -c "[ $st -eq 1 ] && [ \$(echo '$took <= $max && $took >= $min' | bc) -eq 1 ]"
     t_check "$name: message /$re/: $(grep -h -m1 -E "$re" "$t_tmp/$name.out" "$t_tmp/$name/sw.log" 2>/dev/null | head -1)" bash -c "grep -Eq -- '$re' '$t_tmp/$name.out' '$t_tmp/$name/sw.log'"
 }
 
@@ -67,12 +71,17 @@ t_start_relay "$((rport + 1))"                  # rooms of the default size (8)
 t_note "bad arguments (no relay needed)"
 expect_fail badcode-format 5 'is not a room code|6 letters and digits' -net -relay "127.0.0.1:$rport" -room abc -- $auto
 expect_fail badcode-chars 5 'is not a room code' -net -relay "127.0.0.1:$rport" -room "AB0DE1" -- $auto
+expect_fail badcode-IO 5 'is not a room code' -net -relay "127.0.0.1:$rport" -room "ABCDEI" -- $auto
+expect_fail badcode-O 5 'is not a room code' -net -relay "127.0.0.1:$rport" -room "oBCDE2" -- $auto
+expect_fail relay-with-np 5 'peer-to-peer mode is not available' -net -relay "127.0.0.1:$rport" -room ABCDE2 -np -- $auto
+expect_fail relay-with-hostname 5 'host names cannot be combined' -net -relay "127.0.0.1:$rport" -room ABCDE2 127.0.0.1 -- $auto
+expect_fail hostroom-twenty 5 'number of players from 2 to 8 \(4 with the shareware' -net -relay "127.0.0.1:$rport" -host-room 20 -- $auto
 expect_fail room-no-relay 5 'need -relay' -net -room ABCDE2 -- $auto
 expect_fail relay-alone 5 'exactly one of' -net -relay "127.0.0.1:$rport" -- $auto
 expect_fail relay-url 5 'not the URL' -net -relay "wss://example.org/vnet" -room ABCDE2 -- $auto
 expect_fail hostroom-one 5 'number of players from 2' -net -relay "127.0.0.1:$rport" -host-room 1 -- $auto
 expect_fail hostroom-word 5 'number of players from 2' -net -relay "127.0.0.1:$rport" -host-room many -- $auto
-expect_fail relay-unresolvable 12 'cannot resolve the relay address' -net -relay "no-such-host.invalid:7777" -room ABCDE2 -- $auto
+expect_fail relay-unresolvable 12 'cannot resolve relay host no-such-host.invalid' -net -relay "no-such-host.invalid:7777" -room ABCDE2 -- $auto
 
 t_note "the relay is not running"
 expect_fail relay-down 16 'could not be reached|did not answer' -net -relay "127.0.0.1:$dead" -room ABCDE2 -- $auto
@@ -92,6 +101,7 @@ guestapid=$game_pid
 t_wait_for "$t_tmp/guestA/sw.log" 'mmulti: Player 0 is here' 20 || t_bad "guest A did not meet the host"
 t_wait_for "$t_tmp/host/sw.log" 'mmulti: Player 1 is here' 20 || t_bad "the host did not meet guest A"
 # guest B enters the room (the relay takes 3) but the game has no slot for it
+minsec=14
 expect_fail guestB-no-slot 25 'the host did not answer' -net -relay "127.0.0.1:$rport" -room "$code" -- $auto
 # guest C and D: the relay's room is now full (host, A, B left?): B has left, so
 # fill the room with two quick joiners that wait, then a third is refused
@@ -99,7 +109,9 @@ t_game fillB "$t_tmp/fillB" --sw "$sw" --timeout 40 -- -net -relay "127.0.0.1:$r
 fillbpid=$game_pid
 sleep 2
 expect_fail guestC-room-full 12 'the room is full' -net -relay "127.0.0.1:$rport" -room "$code" -- $auto
-kill -TERM "$fillbpid" "$guestapid" "$hostpid" 2>/dev/null
+for p in "$fillbpid" "$guestapid" "$hostpid"; do
+    kill -TERM "$p" 2>/dev/null; t_wait_pid "$p" 15
+done
 fi
 
 if want 'host-leaves'; then
@@ -118,9 +130,9 @@ if [ -n "$gamepid" ]; then kill -KILL "$gamepid"; else t_bad "could not find the
 t0=$(date +%s.%N)
 t_wait_pid "$joinerpid" 40; st=$t_status
 took=$(echo "$(date +%s.%N) - $t0" | bc)
-t_check "host-leaves: the joiner exited 1 (got $st) ${took}s after the host died (limit 20 s)" bash -c "[ $st -eq 1 ] && [ \$(echo '$took <= 20' | bc) -eq 1 ]"
+t_check "host-leaves: the joiner exited 1 (got $st) ${took}s after the host died (between 9 s and 20 s)" bash -c "[ $st -eq 1 ] && [ \$(echo '$took <= 20 && $took >= 9' | bc) -eq 1 ]"
 t_check "host-leaves: message: $(grep -h -m1 'the host stopped answering' "$t_tmp/joiner.out" "$t_tmp/joiner/sw.log" 2>/dev/null | head -1)" bash -c "grep -q 'the host stopped answering' '$t_tmp/joiner.out' '$t_tmp/joiner/sw.log'"
-kill -TERM "$host2pid" 2>/dev/null
+kill -TERM "$host2pid" 2>/dev/null; t_wait_pid "$host2pid" 15
 fi
 
 if want 'cap'; then

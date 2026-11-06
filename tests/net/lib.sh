@@ -19,24 +19,59 @@ t_pids=()
 t_tmp="$(mktemp -d "${TMPDIR:-/tmp}/jfsw-net.XXXXXX")" || exit 125
 t_fail=0
 
-t_cleanup() {
-    local p i alive
-    # TERM first: run-headless.sh then stops its game (SIGTERM, SIGKILL after
-    # 5 s). Only after that, KILL what is left.
+t_descendants() {   # PID: PID and everything below it
+    local c
+    echo "$1"
+    for c in $(pgrep -P "$1" 2>/dev/null); do t_descendants "$c"; done
+}
+
+t_stopped=""
+t_orphans=0
+# Stop everything this test started: the processes it recorded and whatever
+# they started (the games run under run-headless.sh wrappers; a wrapper that
+# is killed outright leaves its sw behind). TERM goes to the recorded
+# processes only, once, so that the wrappers stop their games themselves;
+# what is still alive after 8 s, or alive although its wrapper is gone, is
+# killed and counted in t_orphans (t_result fails the test for it).
+t_stop_all() {
+    [ -n "$t_stopped" ] && return
+    t_stopped=1
+    local p i alive all=() d
+    for p in "${t_pids[@]:-}"; do
+        [ -n "$p" ] && all+=($(t_descendants "$p"))
+    done
     for p in "${t_pids[@]:-}"; do
         [ -n "$p" ] && kill -TERM "$p" 2>/dev/null
     done
     for i in $(seq 1 80); do
         alive=0
-        for p in "${t_pids[@]:-}"; do
+        for p in "${all[@]:-}"; do
             [ -n "$p" ] && kill -0 "$p" 2>/dev/null && alive=1
         done
         [ "$alive" = 0 ] && break
         sleep 0.1
     done
-    for p in "${t_pids[@]:-}"; do
-        [ -n "$p" ] && kill -KILL "$p" 2>/dev/null
+    # anything of ours still alive: it was not stopped by its wrapper
+    for p in "${all[@]:-}"; do
+        if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
+            echo "orphan: process $p ($(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null | cut -c1-80)) outlived its test" >&2
+            t_orphans=$((t_orphans + 1))
+            kill -KILL "$p" 2>/dev/null
+        fi
     done
+    # and anything running in one of our work directories that we never saw
+    for d in /proc/[0-9]*; do
+        p="${d#/proc/}"
+        case "$(readlink "$d/cwd" 2>/dev/null)" in
+            "$t_tmp"/*)
+                echo "orphan: process $p ($(tr '\0' ' ' < "$d/cmdline" 2>/dev/null | cut -c1-80)) runs in the test directory" >&2
+                t_orphans=$((t_orphans + 1)); kill -KILL "$p" 2>/dev/null ;;
+        esac
+    done
+}
+
+t_cleanup() {
+    t_stop_all
     if [ -z "${JFSW_TEST_KEEP:-}" ]; then rm -rf "$t_tmp"; else echo "kept: $t_tmp" >&2; fi
 }
 trap t_cleanup EXIT
@@ -130,6 +165,8 @@ t_need_data() {
 }
 
 t_result() {
+    t_stop_all
+    t_check "no process this test started is left running" test "$t_orphans" -eq 0
     if [ "$t_fail" -eq 0 ]; then echo "PASS"; exit 0; fi
     echo "FAILED: $t_fail check(s)"; exit 1
 }
