@@ -295,6 +295,7 @@
 
   if (TEST) {
     Module.jfswFrameLog = [];
+    Module.jfswYieldLog = [];
     testInfoEl.hidden = false;
     testInfoEl.textContent = 'test mode: args=' + JSON.stringify(gameArgs()) + ' persist=' + PERSIST;
     window.jfswTest = {

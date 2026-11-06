@@ -96,15 +96,15 @@ async function main() {
     // --- 4. frame times (the same run) ----------------------------------------------------------------
     {
       const f = r2.frames.map((x) => x - r2.t0);
-      // after load: skip the first 3 seconds after the first presented frame
-      const from = f[0] + 3000;
+      // after load: the level is loaded (textures cached from the GRP) during the first seconds; measure from 10 s after the first frame
+      const from = f[0] + 10000;
       const used = f.filter((x) => x >= from);
       const span = (used[used.length - 1] - used[0]) / 1000;
       const iv = [];
       for (let i = 1; i < used.length; i++) { iv.push(used[i] - used[i - 1]); }
       const s = iv.slice().sort((a, b) => a - b);
       const stats = { frames: used.length, seconds: +span.toFixed(1), median: s[Math.floor(s.length / 2)], p95: t.pct(s, 0.95), p99: t.pct(s, 0.99), max: s[s.length - 1] };
-      console.log('  frame intervals (ms): ' + JSON.stringify(stats));
+      console.log('  frame intervals (ms): ' + JSON.stringify(stats) + ' load average ' + os.loadavg().map((x) => x.toFixed(1)).join(' ') + ' on ' + os.cpus().length + ' cores');
       fs.writeFileSync(path.join(tmp, 'frametimes.json'), JSON.stringify(stats));
       if (process.env.DET_FRAMES_OUT) { fs.writeFileSync(process.env.DET_FRAMES_OUT, JSON.stringify(stats)); }
       t.check(span >= 30, `frame times: at least 30 s of demo measured (${span.toFixed(0)} s, ${used.length} frames)`);

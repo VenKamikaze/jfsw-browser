@@ -89,6 +89,28 @@ async function main() {
     const frames2 = await page.evaluate(() => Module.jfswFrameLog.length);
     t.check(frames2 - frames > 20, `frames keep coming (${frames2 - frames} in a second)`);
 
+    // Sound: the audio device was opened after the click, and its clock runs.
+    const audio = async () => page.evaluate(() => { const c = Module.SDL2 && Module.SDL2.audioContext; return c ? { state: c.state, time: c.currentTime, open: !!Module.SDL2.audio } : null; });
+    const a1 = await audio();
+    await page.waitForTimeout(1000);
+    const a2 = await audio();
+    t.check(a1 && a1.open && a1.state === 'running', `the game opened its audio device and the AudioContext is running (${a1 && a1.state})`);
+    t.check(a1 && a2 && a2.time > a1.time, 'the audio clock advances');
+    // Mouse: a click on the picture captures the pointer (the game uses relative mouse mode).
+    await page.mouse.click(500, 300);
+    await page.waitForTimeout(500);
+    t.check(await page.evaluate(() => document.pointerLockElement === document.getElementById('canvas')), 'a click on the picture locks the pointer');
+    // Escape reaches the game even though the browser takes it to leave pointer lock: the page passes it on.
+    await page.evaluate(() => document.exitPointerLock());
+    await page.waitForTimeout(500);
+    t.check(!(await page.evaluate(() => document.pointerLockElement)), 'the pointer is released (the game asked for it)');
+    // The browser leaving pointer lock by itself (the user pressed Escape; the key never arrives): the page gives the game an Escape.
+    await page.mouse.click(500, 300);
+    await page.waitForTimeout(500);
+    await page.evaluate(() => { window.__esc = 0; window.addEventListener('keydown', (e) => { if (e.code === 'Escape') { window.__esc++; } }); });
+    await page.evaluate(() => Document.prototype.exitPointerLock.call(document));
+    await page.waitForTimeout(600);
+    t.check((await page.evaluate(() => window.__esc)) === 1, 'when the browser takes the pointer (Escape), the game still gets an Escape');
     t.check((await page.evaluate(() => window.jfswState)) === 'running', 'the game is still running');
     t.check(errors.length === 0, 'no uncaught page error, dialog or alert', errors.join(' | '));
     t.check(consoleErrors.length === 0, 'no console.error', consoleErrors.slice(0, 3).join(' | '));
