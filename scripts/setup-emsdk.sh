@@ -26,7 +26,9 @@
 # finds the port up to date and downloads nothing. Without a blocked network it is
 # optional (Emscripten downloads the ports itself on first use). It writes into
 # Emscripten's cache without taking its lock, so do not run it while an emcc or an
-# emcmake build is running.
+# emcmake build is running. Known limitation: re-seeding a port does not clear an
+# already built cache/sysroot or cache/build copy of it; delete those by hand
+# (or `emcc --clear-cache`) if you change a port's version.
 set -euo pipefail
 
 EMSDK_COMMIT="d7b4130688bfa348392b921ab04015aa15c4f154"  # emscripten-core/emsdk, 2026-10-20

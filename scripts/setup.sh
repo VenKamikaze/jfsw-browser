@@ -8,8 +8,10 @@
 #
 # Supports apt (Debian, Ubuntu) and pacman (Arch). Non-interactive and idempotent:
 # packages that are already installed are skipped. Uses sudo when not root.
-# Installs: C/C++ compiler and make, pkg-config, SDL2, libvorbis + libogg, OpenGL
+# Installs: C/C++ compiler and make, pkg-config, git, curl, SDL2, libvorbis + libogg, OpenGL
 # headers, ALSA headers, unzip, Python 3, git, and (unless --no-gtk) GTK3.
+# Arch (pacman) is untested here. Arch now ships SDL2 as sdl2-compat, which
+# should satisfy the name "sdl2" used below; if pacman objects, use sdl2-compat.
 # Go is only checked: the vnet relay needs the version in ext/vnet/relay/go.mod.
 set -euo pipefail
 
@@ -30,14 +32,14 @@ if [ "$(id -u)" != 0 ]; then
 fi
 
 if command -v apt-get >/dev/null 2>&1; then
-    pkgs="build-essential pkg-config git unzip python3 libsdl2-dev libvorbis-dev libogg-dev libgl1-mesa-dev libglu1-mesa-dev libasound2-dev"
+    pkgs="build-essential pkg-config git curl ca-certificates unzip python3 libsdl2-dev libvorbis-dev libogg-dev libgl1-mesa-dev libglu1-mesa-dev libasound2-dev"
     [ "$GTK" = 1 ] && pkgs="$pkgs libgtk-3-dev"
     export DEBIAN_FRONTEND=noninteractive
     $SUDO apt-get update -qq
     # shellcheck disable=SC2086
     $SUDO apt-get install -y -qq --no-install-recommends $pkgs
 elif command -v pacman >/dev/null 2>&1; then
-    pkgs="base-devel pkgconf git unzip python sdl2 libvorbis libogg mesa glu alsa-lib"
+    pkgs="base-devel pkgconf git curl ca-certificates unzip python sdl2 libvorbis libogg mesa glu alsa-lib"
     [ "$GTK" = 1 ] && pkgs="$pkgs gtk3"
     # shellcheck disable=SC2086
     $SUDO pacman -S --needed --noconfirm $pkgs

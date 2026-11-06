@@ -10,8 +10,8 @@
 #   --timeout SEC   stop the game after SEC seconds (default 30). A running
 #                   game never ends by itself unless a demo is playing, so a
 #                   run that ends this way is not a failure of the game: it
-#                   exits with 124 (SIGTERM makes the game quit cleanly,
-#                   which is why it shows "exited with status 0" internally)
+#                   exits with 124 (SIGTERM makes the game quit cleanly).
+#                   A game that dies of its own SIGKILL keeps its 137.
 #   --workdir DIR   run in DIR (created if needed, kept afterwards) instead of
 #                   a temporary directory, e.g. to record a demo in one run
 #                   and play it back in the next
@@ -23,10 +23,10 @@
 #   * a user_profiles_disabled file in the work directory. This is the game's
 #     own switch for a "portable" install: the current directory is added to
 #     the search path and sw.cfg, sw.log, grpfiles.cache and demos are written
-#     there. (Without it the game looks only in the binary's directory and in
-#     ~/.jfsw, and chdirs into ~/.jfsw.)
-#   * a symlink to the GRP under its own name, so the game's GRP scan (which
-#     only looks at the search path and recognises files by CRC32) finds it;
+#     there. (Without it the game chdirs into ~/.jfsw before it scans
+#     for GRPs, and writes there.)
+#   * a symlink to the GRP in the work directory, which the game's GRP scan
+#     (current directory and search path, files recognised by CRC32) finds;
 #   * -nosetup, which skips the startup window.
 #
 # Exit status: the game's own, except 124 when the timeout stopped it
@@ -61,13 +61,20 @@ done
 [ -f "$grp" ] || { echo "run-headless: $grp not found: run scripts/fetch-test-data.sh" >&2; exit 125; }
 case "$secs" in ''|*[!0-9]*) echo "run-headless: --timeout must be whole seconds" >&2; exit 2 ;; esac
 
+created=""
 if [ -z "$workdir" ]; then
-    workdir="$(mktemp -d)"
-    trap 'rm -rf "$workdir"' EXIT
+    # Only a directory this script made itself is ever removed.
+    created="$(mktemp -d)" || { echo "run-headless: cannot make a temporary directory" >&2; exit 125; }
+    if [ -z "$created" ] || [ ! -d "$created" ]; then
+        echo "run-headless: mktemp gave no directory" >&2
+        exit 125
+    fi
+    trap 'rm -rf -- "$created"' EXIT
+    workdir="$created"
 else
-    mkdir -p "$workdir"
+    mkdir -p "$workdir" || exit 125
 fi
-workdir="$(cd "$workdir" && pwd)"
+workdir="$(cd "$workdir" && pwd)" || exit 125
 sw="$(cd "$(dirname "$sw")" && pwd)/$(basename "$sw")"
 grp="$(cd "$(dirname "$grp")" && pwd)/$(basename "$grp")"
 
@@ -78,9 +85,23 @@ cd "$workdir" || exit 125
 unset DISPLAY WAYLAND_DISPLAY
 export HOME="$workdir" SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
 
-timeout -s TERM -k 5 "$secs" "$sw" -nosetup "$@"
+# Our own watchdog rather than timeout(1), so that a game that dies of SIGKILL
+# (for instance the OOM killer, status 137) is not mistaken for a timeout.
+flag="$workdir/.run-headless-timeout"
+rm -f "$flag"
+"$sw" -nosetup "$@" &
+gpid=$!
+( sleep "$secs"; : > "$flag"; kill -TERM "$gpid" 2>/dev/null; sleep 5; kill -KILL "$gpid" 2>/dev/null ) &
+wpid=$!
+wait "$gpid"
 rc=$?
-if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
+# freeze the watchdog, kill its sleep, then the watchdog (it must not reach its kill)
+kill -STOP "$wpid" 2>/dev/null
+pkill -P "$wpid" 2>/dev/null
+kill -KILL "$wpid" 2>/dev/null
+wait "$wpid" 2>/dev/null
+if [ -e "$flag" ]; then
+    rm -f "$flag"
     echo "run-headless: stopped after ${secs}s" >&2
     exit 124
 fi

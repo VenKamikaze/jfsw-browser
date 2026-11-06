@@ -5,7 +5,7 @@ Copy-pasteable commands. Written for Ubuntu 24.04 (the cloud container) and Arch
 ## 1. Get the source
 
 ```sh
-git clone --recurse-submodules -b browser/00-setup https://github.com/VenKamikaze/jfsw-browser
+git clone --recurse-submodules -b claude https://github.com/VenKamikaze/jfsw-browser
 cd jfsw-browser
 git submodule status        # ext/vnet must say eb1feeb (v0.4.0)
 ```
@@ -41,6 +41,7 @@ scripts/fetch-test-data.sh                  # downloads, verifies, writes testda
 scripts/fetch-test-data.sh --from-zip /path/to/3dsw12.zip   # use a local copy of the zip
 scripts/fetch-test-data.sh --dest DIR       # somewhere other than testdata/
 tests/fetch-test-data.sh [3dsw12.zip]       # the script's tests (downloads the zip if none is given)
+tests/run-headless.sh                       # tests for run-headless.sh (fake game, no data needed)
 ```
 
 It fetches `https://image.dosgamesarchive.com/games/3dsw12.zip` (falling back to `archive.org`), checks the zip's MD5 (`d77564e8764feeb1509dd0d534fb8952`), unpacks `SWSW12.SHR` and `sw.grp` from it, and checks the GRP's CRC32 (`0x08A7FA1F`) and size (26,056,769 bytes) against `src/grpscan.c`. Nothing is left at the destination unless every check passed; a second run does nothing. `testdata/` is git-ignored: game data is never committed.
@@ -61,7 +62,7 @@ scripts/run-headless.sh --timeout 6 --workdir /tmp/sw-demo -level1 -drdemo1   # 
 scripts/run-headless.sh --workdir /tmp/sw-demo -level1 -dpdemo1               # exit 0, by itself, in about 6 s
 ```
 
-On a normal desktop run, the first time (no `sw.cfg`) the game shows its GTK startup window even with `-nosetup`; `run-headless.sh` avoids that by unsetting `DISPLAY`. For a windowed run: `./sw` with the GRP in `~/.jfsw/` or next to the binary (`DATADIR` and the binary's directory are searched; the current directory is not scanned for GRPs unless a `user_profiles_disabled` file is in it).
+On a normal desktop run, the first time (no `sw.cfg`) the game shows its GTK startup window even with `-nosetup`; `run-headless.sh` avoids that by unsetting `DISPLAY`. For a windowed run: `./sw` with the GRP in `~/.jfsw/` or next to the binary (the GRP scan covers the current directory, the binary's directory, `~/.jfsw` and `DATADIR`; but without `user_profiles_disabled` the game does `chdir ~/.jfsw` first, so "current directory" then means `~/.jfsw`, not where you started).
 
 More about demos, sync checks and what exits when: `code-facts.md` §7.
 
@@ -96,6 +97,6 @@ emcc /tmp/t.c -sUSE_SDL=2 -o /tmp/t.js && echo ok
 | `scripts/setup-emsdk.sh` | pinned Emscripten and the ports |
 | `scripts/fetch-test-data.sh` | verified `testdata/swshare.grp` |
 | `scripts/run-headless.sh` | headless, bounded game runs |
-| `tests/fetch-test-data.sh` | tests for the fetch script |
+| `tests/fetch-test-data.sh`, `tests/run-headless.sh` | tests for the fetch and run scripts |
 | `ext/vnet` | vnet `v0.4.0` (submodule; not built yet) |
 | `doco/browser/code-facts.md` | what the code does, with file:line |

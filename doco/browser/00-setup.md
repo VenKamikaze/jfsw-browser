@@ -101,7 +101,7 @@ Status: **review** (branch `browser/00-setup`; the coordinator marks it done aft
 
 **What landed**
 
-- `.gitmodules`: absolute URLs for the three forks, `branch = claude` for jfbuild and jfaudiolib, `branch = master` for jfmact. Pins unchanged (`40a98be`, `68be97f`, `731c0cc`). `ext/vnet` added at `v0.4.0` (`eb1feeb`). A throwaway compile of all 13 `ext/vnet/src/*.c` with `gcc -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra` and with the project's `-std=c99 -W -Wall -fno-strict-aliasing` gave no warnings.
+- `.gitmodules`: absolute URLs for the three forks, `branch = claude` for jfbuild and jfaudiolib, `branch = master` for jfmact. Pins unchanged (`40a98be`, `68be97f`, `731c0cc`). `ext/vnet` added at `v0.4.0` (`eb1feeb`). A throwaway compile of all 13 `ext/vnet/src/*.c` is clean with `-D_POSIX_C_SOURCE=200809L` (under `-std=c99 -W -Wall -fno-strict-aliasing` and under `-std=c11 -Wall -Wextra`); without the macro `resolve.c` and `vnet.c` fail (corrected in the fix round).
 - `scripts/setup.sh` (apt and pacman, `--no-gtk`), `scripts/setup-emsdk.sh` (emsdk revision `d7b4130`, Emscripten 6.0.13, default `EMSDK_DIR` `~/.cache/jfsw-browser/emsdk`, `--with-ports`), `scripts/fetch-test-data.sh`, `scripts/run-headless.sh`, `tests/fetch-test-data.sh`.
 - Orphan branch `emscripten-ports` (pushed, one commit): SDL2 `release-2.32.10.zip` (taken from Bit Riot's branch), `libogg-1.3.5.zip` and `libvorbis-1.3.7.zip` (downloaded from the `releases/download` URLs, which were reachable here), `SHA512SUMS` and a README. All three SHA-512 values equal the `HASH` in the pinned emsdk's `tools/ports/{sdl2,ogg,vorbis}.py`. Library archives only.
 - `doco/browser/code-facts.md` (every PROMPT §2 claim marked, plus the extra topics) and `doco/browser/building.md`.
@@ -148,8 +148,18 @@ Re-running the script prints `Emscripten ports already seeded`. The whole instal
 
 **For later briefs**
 
-- Brief 01: `mmulti.c` has `netinit`/`netsend`/`netread` as its only socket users; vnet needs C11 per file (the project builds with `-std=c99`).
+- Brief 01: `mmulti.c` has `netinit`/`netsend`/`netread` as its only socket users; vnet needs `-D_POSIX_C_SOURCE=200809L` (the macro its `CMakeLists.txt:60-66` sets); without it `resolve.c` and `vnet.c` fail even at `-std=c11`. The project's `-std=c99` is fine with the macro.
 - Brief 02: `Makefile.shared` already forces `USE_ASM=0`; under `emcc` `PLATFORM` is `UNKNOWN`, so check the Linux-only Makefile blocks; every wait is a busy loop with no sleep (`code-facts.md` §5); `wasm32` vs `x86_64` demo/sync compatibility is unverified.
 - Brief 05: limit hosting to 4 players on the shareware GRP.
 - Brief 03: `user_profiles_disabled` in the cwd is the engine's own switch for reading and writing everything in the working directory; use it for the browser data folder.
 
+
+### Fix round (review findings)
+
+- **`scripts/run-headless.sh`**: `mktemp -d` failure no longer wipes the caller's directory (it exits 125; only a directory the script created itself is ever removed, never `--workdir`). The timeout is now a watchdog flag instead of `timeout(1)`'s 124/137, so a game killed by SIGKILL (OOM) keeps its 137 and only a real timeout is 124. New `tests/run-headless.sh` (fake game binary and fake GRP via `--sw`/`--grp`, no data or build needed): 13 passed, 0 failed. Against the old script it gives 10 passed, 3 failed: `SIGKILL death is 137, not 124 (got 124)`, `mktemp failure exits 125 (got 0)` and `caller's directory was wiped` (reproduced with `TMPDIR=/nonexistent-dir`).
+- **`scripts/fetch-test-data.sh`**: checks `unzip python3 md5sum mktemp` (and `curl` when downloading) up front, before touching the destination, so a missing python3 can no longer delete a valid GRP; falls back to the second URL when the first download fails its MD5; removes stale `.fetch.XXXXXX` directories at start. `tests/fetch-test-data.sh` now guards `mktemp` and tests the stale-directory cleanup and the missing-python3 case: 28 passed, 0 failed (was 23). The MD5-fallback path is not tested (it needs a server serving a wrong body).
+- **`scripts/setup.sh`** installs `curl` and `ca-certificates` (apt and pacman). Arch is untested; the header notes that Arch's SDL2 is now `sdl2-compat`, which should satisfy the name `sdl2`.
+- **`scripts/setup-emsdk.sh`** header notes the re-seeding limitation (an already built cache copy of a port is not cleared).
+- **`code-facts.md`**, all re-checked against the code: timer sources (`handleevents()` calls `sampletimer()` at `sdlayer2.c:1431`; `faketimerhandler` `net.c:812`, `getpackets` `:1136`); `-f2/4/8` and `-nopredict` are not `#if DEBUG`; the `-net` skip loop in the second argument scan uses `i` not `cnt` (`game.c:3686-3690`) so mmulti options are also parsed as game options (hazard for 01 and 05, not fixed); the GRP scan does include the current directory (`cache1d.c:911-923`, `grpscan.c:140`), but in default mode the cwd is already `~/.jfsw` because the `chdir` comes first; the vnet compile claim (above); sync is computed on every move, not every 64th; line refs (`menus.c:508/514`, `game.c:3582`, `mmulti.c:657-660`, 6 live `sendpacket` sites, `mmulti.c:53` `GetTickCount`).
+- **`building.md`**: clones `-b claude`; GRP search text corrected; mentions the new test.
+- I agreed with every finding. One refinement: the reviewer's cwd-scan result holds, but my original first run failed because of the `chdir` into `~/.jfsw`, which the docs now say.

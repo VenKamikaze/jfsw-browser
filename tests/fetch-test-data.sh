@@ -11,8 +11,9 @@ set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script="$root/scripts/fetch-test-data.sh"
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+work="$(mktemp -d)" || { echo "mktemp failed" >&2; exit 2; }
+[ -n "$work" ] && [ -d "$work" ] || exit 2
+trap 'rm -rf -- "$work"' EXIT
 
 pass=0
 fail=0
@@ -129,6 +130,24 @@ printf 'x' | dd of="$d/swshare.grp" bs=1 seek=100 conv=notrunc 2>/dev/null
 run --dest "$d" --from-zip "$zip"
 expect_rc0 "stale bad GRP, good zip"
 cmp -s "$d/swshare.grp" "$work/good/swshare.grp" && ok "stale bad GRP replaced by the verified one" || bad "stale bad GRP was not replaced"
+
+# ---- 8. leftovers of a killed run are cleaned up ----
+d="$work/stale2"
+mkdir -p "$d/.fetch.abc123"; echo junk > "$d/.fetch.abc123/3dsw12.zip"
+run --dest "$d" --from-zip "$zip"
+expect_rc0 "run after a killed run"
+[ ! -e "$d/.fetch.abc123" ] && ok "stale .fetch.* directory removed" || bad "stale .fetch.* directory left"
+
+# ---- 9. a missing tool is reported up front and a valid GRP is not deleted ----
+bin="$work/bin"; mkdir -p "$bin"
+for t in bash env dirname basename cat sed tr cut wc rm mkdir mktemp cp mv md5sum unzip ls head; do
+    p="$(command -v "$t")" && ln -sf "$p" "$bin/$t"
+done
+d="$work/notool"; mkdir -p "$d"; cp "$work/good/swshare.grp" "$d/swshare.grp"
+out="$(PATH="$bin" "$BASH" "$script" --dest "$d" --from-zip "$zip" 2>&1)"; rc=$?
+expect_fail "python3 missing"
+expect_msg "python3 missing" "python3 is required"
+[ -f "$d/swshare.grp" ] && ok "python3 missing: the valid GRP is still there" || bad "python3 missing: the GRP was deleted"
 
 echo
 echo "$pass passed, $fail failed"

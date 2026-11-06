@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Tests for scripts/run-headless.sh, using a fake game binary (--sw) and a fake
+# GRP, so no game data and no build are needed.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+script="$root/scripts/run-headless.sh"
+work="$(mktemp -d)" || { echo "mktemp failed" >&2; exit 2; }
+[ -d "$work" ] || exit 2
+trap 'rm -rf -- "$work"' EXIT
+
+pass=0; fail=0
+ok()  { pass=$((pass + 1)); echo "ok   - $1"; }
+bad() { fail=$((fail + 1)); echo "FAIL - $1"; }
+check() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', want '$3')"; fi; }
+
+grp="$work/fake.grp"; echo x > "$grp"
+mkfake() { printf '#!/bin/sh\n%s\n' "$2" > "$work/$1"; chmod +x "$work/$1"; }
+mkfake exit0 'echo "args: $*"; echo "home: $HOME"; echo "vd: $SDL_VIDEODRIVER"; [ -e user_profiles_disabled ] && echo portable; ls; exit 0'
+mkfake exit3 'exit 3'
+mkfake kill9 'kill -KILL $$'
+mkfake sleeper 'trap "exit 0" TERM; while :; do sleep 1; done'
+
+run() { out="$("$script" --grp "$grp" "$@" 2>&1)"; rc=$?; }
+
+# 1. normal run: status passed through, environment set, temp dir removed
+run --sw "$work/exit0" -level1
+check "exit 0 passes through" "$rc" 0
+case "$out" in *"args: -nosetup -level1"*) ok "-nosetup and game args passed";; *) bad "args: $out";; esac
+case "$out" in *"vd: dummy"*portable*|*portable*"vd: dummy"*) ok "dummy video, portable marker";; *) bad "env: $out";; esac
+tmp="$(echo "$out" | sed -n 's/^home: //p')"
+[ -n "$tmp" ] && [ ! -e "$tmp" ] && ok "temporary work directory removed" || bad "temp dir $tmp still there"
+
+run --sw "$work/exit3"; check "exit 3 passes through" "$rc" 3
+
+# 2. a game killed by SIGKILL is 137, not a timeout
+run --sw "$work/kill9" --timeout 30; check "SIGKILL death is 137, not 124" "$rc" 137
+
+# 3. timeout: 124
+run --sw "$work/sleeper" --timeout 1; check "timeout is 124" "$rc" 124
+
+# 4. --workdir is kept, and never removed
+mkdir -p "$work/keep"; echo precious > "$work/keep/file"
+run --sw "$work/exit0" --workdir "$work/keep"
+check "--workdir run" "$rc" 0
+[ "$(cat "$work/keep/file" 2>/dev/null)" = precious ] && ok "--workdir contents kept" || bad "--workdir contents lost"
+
+# 5. mktemp failure must not delete the caller's directory
+mkdir -p "$work/caller"; echo here > "$work/caller/file"
+( cd "$work/caller" && TMPDIR=/nonexistent-dir "$script" --grp "$grp" --sw "$work/exit0" >"$work/o5" 2>&1; echo $? > "$work/rc5" )
+check "mktemp failure exits 125" "$(cat "$work/rc5")" 125
+[ "$(cat "$work/caller/file" 2>/dev/null)" = here ] && ok "caller's directory survives a mktemp failure" || bad "caller's directory was wiped"
+
+# 6. bad inputs
+run --sw "$work/nonexistent"; check "missing binary is 125" "$rc" 125
+run --sw "$work/exit0" --timeout abc; check "bad timeout is 2" "$rc" 2
+
+echo; echo "$pass passed, $fail failed"
+[ "$fail" = 0 ]

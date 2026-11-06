@@ -60,7 +60,15 @@ grp_ok() {
     [ -f "$1" ] && [ "$(size_of "$1")" = "$GRP_SIZE" ] && [ "$(crc32_of "$1")" = "$GRP_CRC" ]
 }
 
+need=(unzip python3 md5sum mktemp)
+[ -n "$from_zip" ] || need+=(curl)
+for t in "${need[@]}"; do
+    command -v "$t" >/dev/null 2>&1 || die "$t is required but not installed (scripts/setup.sh installs it)"
+done
+
 mkdir -p "$dest"
+# leftovers of a run that was killed (the only run using this directory, we assume)
+rm -rf "$dest"/.fetch.??????
 out="$dest/$GRP_NAME"
 
 if [ -e "$out" ]; then
@@ -79,21 +87,25 @@ zip="$tmp/3dsw12.zip"
 if [ -n "$from_zip" ]; then
     [ -f "$from_zip" ] || die "$from_zip does not exist"
     cp "$from_zip" "$zip"
+    have="$(md5sum "$zip" | cut -d' ' -f1)"
+    [ "$have" = "$ZIP_MD5" ] || die "MD5 of the zip is $have, expected $ZIP_MD5"
 else
     got=0
     for url in "${URLS[@]}"; do
         echo "downloading $url"
         if curl -fsSL --retry 2 --connect-timeout 20 -o "$zip" "$url"; then
-            got=1
-            break
+            have="$(md5sum "$zip" | cut -d' ' -f1)"
+            if [ "$have" = "$ZIP_MD5" ]; then
+                got=1
+                break
+            fi
+            echo "MD5 of the download from $url is $have, expected $ZIP_MD5" >&2
+        else
+            echo "failed: $url" >&2
         fi
-        echo "failed: $url" >&2
     done
-    [ "$got" = 1 ] || die "could not download 3dsw12.zip from any URL"
+    [ "$got" = 1 ] || die "could not download a verified 3dsw12.zip from any URL"
 fi
-
-have="$(md5sum "$zip" | cut -d' ' -f1)"
-[ "$have" = "$ZIP_MD5" ] || die "MD5 of the zip is $have, expected $ZIP_MD5"
 
 unzip -C -p "$zip" SWSW12.SHR > "$tmp/SWSW12.SHR" || die "SWSW12.SHR is not in the zip (or it is damaged)"
 unzip -C -p "$tmp/SWSW12.SHR" sw.grp > "$tmp/$GRP_NAME" || die "sw.grp is not in SWSW12.SHR (or it is damaged)"
