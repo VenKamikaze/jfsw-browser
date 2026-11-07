@@ -16,6 +16,7 @@
 #                   a temporary directory, e.g. to record a demo in one run
 #                   and play it back in the next
 #   --sw FILE       the game binary (default ./sw)
+#   --music         leave music on (by default it is turned off, see below)
 #
 # What it sets up, all of it needed by the game as it stands:
 #   * SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy, DISPLAY unset;
@@ -27,7 +28,14 @@
 #     for GRPs, and writes there.)
 #   * a symlink to the GRP in the work directory, which the game's GRP scan
 #     (current directory and search path, files recognised by CRC32) finds;
-#   * -nosetup, which skips the startup window.
+#   * -nosetup, which skips the startup window;
+#   * no music: MusicDevice = 1 ("no music") in the work directory's sw.cfg
+#     (created if missing, changed if present). SDL_AUDIODRIVER=dummy does not
+#     reach the music drivers: on a desktop with an ALSA sequencer the game
+#     would otherwise play MIDI through it, and jfaudiolib's ALSA MIDI driver
+#     at the pinned commit corrupts memory when two threads use it (fixed on
+#     the jfaudiolib fork's fix/alsa-midi-lock; brief F2). Use --music to
+#     keep the work directory's own music setting.
 #
 # Exit status: the game's own, except 124 when the timeout stopped it
 # (and 125 for a problem in this script, 2 for bad options).
@@ -44,6 +52,7 @@ grp="$root/testdata/swshare.grp"
 sw="$root/sw"
 secs=30
 workdir=""
+music=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -51,6 +60,7 @@ while [ $# -gt 0 ]; do
         --timeout) [ $# -ge 2 ] || { echo "--timeout needs seconds" >&2; exit 2; }; secs="$2"; shift 2 ;;
         --workdir) [ $# -ge 2 ] || { echo "--workdir needs a directory" >&2; exit 2; }; workdir="$2"; shift 2 ;;
         --sw) [ $# -ge 2 ] || { echo "--sw needs a file" >&2; exit 2; }; sw="$2"; shift 2 ;;
+        --music) music=1; shift ;;
         -h|--help) sed -n '2,/^set -uo/p' "${BASH_SOURCE[0]}" | sed '$d;s/^# \{0,1\}//'; exit 0 ;;
         --) shift; break ;;
         *) break ;;
@@ -79,6 +89,16 @@ sw="$(cd "$(dirname "$sw")" && pwd)/$(basename "$sw")"
 grp="$(cd "$(dirname "$grp")" && pwd)/$(basename "$grp")"
 
 : > "$workdir/user_profiles_disabled"
+if [ "$music" = 0 ]; then
+    cfg="$workdir/sw.cfg"
+    if [ ! -e "$cfg" ]; then
+        printf '[Sound Setup]\nMusicDevice = 1\n' > "$cfg" || exit 125
+    elif grep -q '^MusicDevice[[:space:]]*=' "$cfg"; then
+        sed -i 's/^MusicDevice[[:space:]]*=.*/MusicDevice = 1/' "$cfg" || exit 125
+    else
+        printf '\n[Sound Setup]\nMusicDevice = 1\n' >> "$cfg" || exit 125
+    fi
+fi
 ln -sf "$grp" "$workdir/$(basename "$grp")"
 
 cd "$workdir" || exit 125

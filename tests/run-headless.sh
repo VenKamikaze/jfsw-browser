@@ -80,6 +80,19 @@ for sig in INT TERM; do
     fi
 done
 
+# 8. music is off unless --music: MusicDevice = 1 in the work directory's
+# sw.cfg (created if missing, changed if present, kept with --music)
+mkfake showcfg 'grep "^MusicDevice" sw.cfg 2>/dev/null || echo "no MusicDevice"; exit 0'
+run --sw "$work/showcfg"
+case "$out" in *"MusicDevice = 1"*) ok "music off by default (new sw.cfg)";; *) bad "music not off in a new sw.cfg: $out";; esac
+mkdir -p "$work/cfg"; printf '[Sound Setup]\nFXDevice = 0\nMusicDevice = 0\nNumVoices = 32\n' > "$work/cfg/sw.cfg"
+run --sw "$work/showcfg" --workdir "$work/cfg"
+case "$out" in *"MusicDevice = 1"*) ok "music off by default (existing sw.cfg changed)";; *) bad "existing sw.cfg not changed: $out";; esac
+grep -q '^NumVoices = 32$' "$work/cfg/sw.cfg" && ok "the rest of an existing sw.cfg is kept" || bad "the rest of sw.cfg was lost"
+printf '[Sound Setup]\nMusicDevice = 0\n' > "$work/cfg/sw.cfg"
+run --sw "$work/showcfg" --workdir "$work/cfg" --music
+case "$out" in *"MusicDevice = 0"*) ok "--music keeps the work directory's setting";; *) bad "--music changed the setting: $out";; esac
+
 # 6. bad inputs
 run --sw "$work/nonexistent"; check "missing binary is 125" "$rc" 125
 run --sw "$work/exit0" --timeout abc; check "bad timeout is 2" "$rc" 2
