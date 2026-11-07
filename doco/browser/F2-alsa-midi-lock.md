@@ -49,7 +49,7 @@ ALSA sequencer handles are not thread-safe, so the two threads corrupted the han
 
 ## Outcome
 
-_See "Coordinator verification" below._
+**Coordinator verification (7 Nov 2026), on `browser/F2-alsa-midi-lock` with jfaudiolib at `ff1b31d`:** `make veryclean && make -j4` green (14 warnings, as before; `driver_alsa.c` built with `HAVE_ALSA`); `tests/run-headless.sh` 21/0; `make test GAME_RUNS=1` 5 PASS, 0 FAILED (every network game now runs with the created `sw.cfg`); `tests/web/determinism.js` 20/1 (native and wasm `.dms` identical; the only failure is the known "no stall over 100 ms" check, max 142 ms). Not reviewed by a separate reviewer (the user chose a quick fix to save tokens). Merged into `claude` with `--no-ff`. Status: **done (play-test pending)**: the mutex fix itself needs the user's run on a machine with an ALSA sequencer.
 
 **Play-test on Arch Linux** (the user):
 
