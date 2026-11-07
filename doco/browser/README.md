@@ -27,6 +27,7 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 | # | Brief | Fix branch (from `master`) | Depends on | Status |
 |---|---|---|---|---|
 | F1 | [Co-op game freezes at tic 1522](F1-coop-freeze.md) | `fix/coop-freeze` | 01 (for the regression test) | on hold (the user, 6 Nov 2026) |
+| F2 | [Native crash in the ALSA MIDI music driver](F2-alsa-midi-lock.md) | `fix/alsa-midi-lock` (jfaudiolib fork, from `68be97f`) | 00 | done (play-test pending: needs an ALSA sequencer) |
 
 Later, not briefed: music (Q4), WebGL rendering through the GLES2 path, touch controls, the Wanton Destruction and Twin Dragon add-ons in the browser.
 
