@@ -163,7 +163,11 @@ Where the time went:
 
 **Tests** (final tree, rebuilt with `make veryclean && make -j4` and `scripts/build-wasm.sh` after the last pointer move; one test at a time):
 
-REGRESSION
+- `node tests/web/netplay.js` (every scenario but `lag-matrix`, one after another, 16.6 minutes, load average 2.9 to 7.4): **547 passed, 0 failed**. Every game's dumps were identical record for record (with the stronger hash). `lag`: 73 checks (browsers: slave 73.8 ms median, master 50.3; native host with a browser: 75.8 / 110.4; natives with 30 ms: master 73.3, slave 63.4; packet waits 0.0 to 0.1 ms; forwarding 0.0 / 0.0); `tic1`: 109 checks, 5 of 6 games uneven; the hidden scenarios without the pass's flush: 40.0 tics a second on both machines, 42 to 67 passes a second, at most 6 yields with data held back.
+- `make test GAME_RUNS=1`: **5 PASS, 0 FAILED**, exit 0 (7.6 minutes; includes the plain-UDP comparison against the pre-brief-01 build, so plain `-net` with the flush still talks to the old game).
+- `tests/web/smoke.js` **29 passed, 0 failed**; `persist.js` **15 passed, 0 failed**; `data.js` **172 passed, 0 failed**.
+- `tests/web/determinism.js` **20 passed, 1 failed**: the known "no stall over 100 ms" frame check (7,259 frames over 140 s: median 16.8 ms, p95 36.7, p99 69.3, max 300; load average 3.3). The native and wasm sync bytes and `.dms` files are identical in both directions.
+- Native build: 14 warnings, as before (none in the code 04b touched).
 
 **Mutations** (each applied, rebuilt into its own directory, run with `NETPLAY_SW`/`WASM_DIR`, reverted):
 
