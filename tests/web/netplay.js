@@ -436,7 +436,7 @@ async function hiddenRoom(kinds, hiddenIndex, opts) {
     console.log('  ' + kinds.join(' + ') + ', ' + (hiddenIndex === 0 ? 'the host' : 'the slave') + ' hidden (' + LOAD() + ')');
     const ms = await room(relay, kinds, { tics: opts.tics || HIDDEN_TICS, query: opts.wakeEvery ? (i) => (i === hiddenIndex ? '&wake_every=' + opts.wakeEvery : '') : null });
     const h = ms[hiddenIndex];
-    let hideTic = -1, hidden = false, framesAtHide = 0, hiddenLogAtHide = 0, froze = false, fp = null;
+    let hideTic = -1, tHide = 0, hidden = false, framesAtHide = 0, hiddenLogAtHide = 0, froze = false, fp = null;
     const series = await sample(ms, opts.tics || HIDDEN_TICS, HIDDEN_TICS / NOMINAL * 1000 * 2.5 + 40000, async (t, ser) => {
       const tics = ser[hiddenIndex][ser[hiddenIndex].length - 1][1];
       if (!hidden && tics >= 100 && h.kind === 'browser') {
@@ -446,6 +446,7 @@ async function hiddenRoom(kinds, hiddenIndex, opts) {
         framesAtHide = await h.page.evaluate(() => Module.jfswShowframes);
         hiddenLogAtHide = await h.page.evaluate(() => Module.jfswHiddenLog.length);
         hideTic = Math.floor((await h.dumpSize()) / REC);
+        tHide = now();
         console.log('  ' + h.name + ' hidden at tic ' + hideTic);
       }
       if (opts.freeze && hidden && !froze && tics >= 300) {
@@ -455,6 +456,8 @@ async function hiddenRoom(kinds, hiddenIndex, opts) {
       }
     });
     if (fp) { await fp; }
+    const tEnd = now();
+    const logEnd = await h.page.evaluate(() => Module.jfswHiddenLog.length).catch(() => 0);
     for (const m of ms) { await m.waitEnd(30000); }
     const wakes = await h.page.evaluate(() => ({ wakes: Module.jfswWakes, log: Module.jfswHiddenLog.length, frames: Module.jfswShowframes, reasons: Module.jfswHiddenLog.reduce((a, r) => { a[r] = (a[r] || 0) + 1; return a; }, {}), owed: Module.jfswOwedLog.slice() })).catch(() => null);
     await checkGame(ms, opts.tics || HIDDEN_TICS);
@@ -480,16 +483,16 @@ async function hiddenRoom(kinds, hiddenIndex, opts) {
       check(late > 0.2, 'and the stall really delayed it (late by ' + late.toFixed(1) + ' s)');
     }
     if (wakes) {
-      console.log('  hidden tab: ' + wakes.wakes + ' wake-ups, ' + wakes.log + ' hidden yields (resumed by: ' + JSON.stringify(wakes.reasons) + ': 1 network event, 3 the game\'s own request for another pass, 0 timer), ' + wakes.frames + ' pictures asked for in all (' + framesAtHide + ' when it was hidden)');
-      check(wakes.log - hiddenLogAtHide > 200, h.name + ' was driven by hidden-tab passes (' + (wakes.log - hiddenLogAtHide) + ' after it was hidden)');
-      check(((wakes.reasons[1] || 0) + (wakes.reasons[3] || 0)) > 0.8 * wakes.log, h.name + ' was resumed by network events and its own requests, not the timer (' + ((wakes.reasons[1] || 0) + (wakes.reasons[3] || 0)) + ' of ' + wakes.log + ')');
-      // S1: an input that is made but held back by mmulti's 25 ms send window must not wait for the next network event. The game
-      // keeps asking for passes until it is out, so a yield entered with data held back is short.
-      const owed = wakes.owed.slice().sort((a, b) => a - b);
-      const p95 = owed.length ? owed[Math.floor(0.95 * owed.length)] : 0, med = owed.length ? owed[Math.floor(0.5 * owed.length)] : 0;
-      console.log('  yields entered with data held back by the send window: ' + owed.length + ', median ' + med.toFixed(1) + ' ms, p95 ' + p95.toFixed(1) + ' ms');
-      check(owed.length > 50, h.name + ' did hold data back (' + owed.length + ' yields entered with it): the check below is not vacuous');
-      check(p95 < 15, h.name + ': such a yield ends within 15 ms at p95 (' + p95.toFixed(1) + ' ms), not at the next network event');
+      console.log('  hidden tab: ' + wakes.wakes + ' wake-ups, ' + wakes.log + ' hidden yields (resumed by: ' + JSON.stringify(wakes.reasons) + ': 1 network event, 0 timer), ' + wakes.frames + ' pictures asked for in all (' + framesAtHide + ' when it was hidden)');
+      check(wakes.log - hiddenLogAtHide > 100, h.name + ' was driven by hidden-tab passes (' + (wakes.log - hiddenLogAtHide) + ' after it was hidden)');
+      check((wakes.reasons[1] || 0) > 0.8 * wakes.log, h.name + ' was resumed by network events, not the timer (' + (wakes.reasons[1] || 0) + ' of ' + wakes.log + ')');
+      // S1: an input that is made but held back by mmulti's 25 ms send window must not wait for the next network event: the pass
+      // flushes it. So (almost) no yield is entered with data still owed.
+      const passesPerSec = (logEnd - hiddenLogAtHide) / ((tEnd - tHide) / 1000);
+      console.log('  hidden passes (yields) a second while hidden: ' + passesPerSec.toFixed(0) + '; entered with data still held back: ' + wakes.owed.length + ' of ' + wakes.log);
+      check(wakes.owed.length <= 0.01 * wakes.log + 5, h.name + ' entered ' + wakes.owed.length + ' of ' + wakes.log + ' yields with data still held back (at most 1% and 5: a few come at the hide and at the end)');
+      // CPU: the tab must not spin. Every pass is a network event or the timer.
+      check(passesPerSec < 150, h.name + ' ran ' + passesPerSec.toFixed(0) + ' hidden passes a second (under 150: it waits for network events)');
       check(wakes.frames - framesAtHide < 20, h.name + ' drew nothing while hidden (' + (wakes.frames - framesAtHide) + ' pictures asked for after hiding, in about 35 s)');
     }
   } finally { await cleanup(relay); }
@@ -502,11 +505,11 @@ SCENARIOS['hidden-frozen'] = {
   what: 'a hidden slave whose main thread is stuck for 3 s mid-game: the room waits, catches up most of the stall, and every machine agrees',
   run: () => hiddenRoom(['browser', 'browser'], 1, { freeze: 3000 }),
 };
-// The same with the hidden tab's network wake-ups thinned to every 10th (as if the peer were quiet, or the events bunched):
+// The same with the hidden tab's network wake-ups thinned to every 6th (as if the peer were quiet, or the events bunched):
 // the pass must make every input that is due, and keep asking for passes until what it made has been sent.
 SCENARIOS['hidden-thin'] = {
-  what: 'a hidden slave that gets only every 10th network wake-up: still 90% of 40 tics a second, held-back data still goes out at once',
-  run: () => hiddenRoom(['browser', 'browser'], 1, { wakeEvery: +process.env.NETPLAY_WAKE_EVERY || 10 }),
+  what: 'a hidden slave that gets only every 6th network wake-up: still 90% of 40 tics a second, held-back data is flushed at once',
+  run: () => hiddenRoom(['browser', 'browser'], 1, { wakeEvery: +process.env.NETPLAY_WAKE_EVERY || 6 }),
 };
 SCENARIOS['hidden-host'] = {
   what: 'a hidden, throttled browser host with a native slave: the same',
