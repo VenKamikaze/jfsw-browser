@@ -3126,6 +3126,8 @@ VOID
 RunLevel(VOID)
     {
     InitRunLevel();
+    TestStateStart();       // test-only: with -teststate, the state before the first input (sync.c)
+    TestSlowStart();        // test-only: -testslowstart<ms> (sync.c)
 
     FX_SetVolume(gs.SoundVolume);
     SetSongVolume(gs.MusicVolume);
@@ -3789,6 +3791,21 @@ int app_main(int argc, char const * const argv[])
         if (Bstrncasecmp(arg, "testdump", 8) == 0)
             {
             TestDumpArg(arg+8);     // test-only: this machine's per-tic record of the simulation, to a file
+            }
+        else
+        if (Bstrncasecmp(arg, "testslowstart", 13) == 0)
+            {
+            TestSlowStartArg(atoi(arg+13));     // test-only: wait before the first frame of the level
+            }
+        else
+        if (Bstrncasecmp(arg, "teststate", 9) == 0)
+            {
+            TestStateArg(atoi(arg+9));  // test-only: with -testdump, full state dumps (start, tics 1-3, tic T)
+            }
+        else
+        if (Bstrncasecmp(arg, "testlag", 7) == 0)
+            {
+            TestLagArg(arg+7);      // test-only: input-to-tic timing of this machine, to a file
             }
         else
         if (Bstrncasecmp(arg, "testnudge", 9) == 0)

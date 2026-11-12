@@ -140,8 +140,11 @@ extern short NumSyncBytes;
 // Arguments: -testsync (8 sync bytes in a network game), -testquit<N> (quit
 // cleanly, exit status 0, after N game tics), -testnudge<T> (this player
 // moves 8 units in x at tic T: a deliberate desync, for proving that the
-// sync check bites) and -testdump<name> (this machine writes a record of
-// every game tic to the file <name>: see sync.c; no effect on the game). -testquit works in network games only (a single player
+// sync check bites), -testlag<name> (input-to-tic timing, sync.c),
+// -testdump<name> (this machine writes a record of
+// every game tic to the file <name>: see sync.c; no effect on the game) and -teststate[<T>]
+// (with -testdump, the whole state field by field at the start and at tics 1 to 3 and T),
+// -testslowstart<ms> (wait before the first frame of the level). -testquit works in network games only (a single player
 // game prints the TEST line but does not exit). All players of a game must be given the same -testsync
 // and -testquit; this is checked through the version exchange.
 extern int TestQuitTics;        // 0 = off
@@ -152,7 +155,20 @@ void TestSyncArg(void);
 void TestQuitArg(int tics);
 void TestNudgeArg(int tic);
 VOID HiddenNetPass(VOID);        // browser build: one pass of the game loop of a hidden tab (net.c)
+extern int TestLagOn;           // -testlag<name>: input-to-tic timing, see sync.c
+void TestLagArg(const char *name);
+void TestLagMade(int idx);      // own input idx made
+void TestLagTag(int idx);       // the next packet handed to mmulti carries fifo index idx
+void TestLagScan(void);         // after getpackets() stored a packet
+void TestLagForward(int idx);   // master: combined packet for idx is handed to sendpacket
+void TestLagCorrect(int clockticks);    // a totalclock correction of the lag correction
+void TestLagPassStart(void);    // getpackets() begins
+void TestLagFlushing(int on);   // SendInputNow() is flushing (1) or done (0)
 void TestDumpArg(const char *name);   // -testdump<name>: every machine records each tic to <name> (sync.c)
+void TestStateArg(int tic);     // -teststate[<T>]: with -testdump, full state dumps at the start, tics 1-3 and T (sync.c)
+void TestStateStart(void);      // -teststate: the full state when RunLevel starts (sync.c)
+void TestSlowStartArg(int ms);  // -testslowstart<ms>: wait that long before the first frame (sync.c)
+void TestSlowStart(void);       // from RunLevel, after TestStateStart
 int TestVersionSalt(void);
 void TestTicHook(void);         // from domovethings, once per game tic
 void TestQuitFinish(void);      // from RunLevel when TestQuitReached

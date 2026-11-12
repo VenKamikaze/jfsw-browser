@@ -808,8 +808,9 @@ AddSyncInfoToPacket(int *j)
         }
     }
 
-#ifdef __EMSCRIPTEN__
 #include "mmulti_vnet.h"
+
+#ifdef __EMSCRIPTEN__
 extern void MoveLoop(void);
 
 // One pass of the game loop of a hidden browser tab in a network game (brief 04). The tab has no
@@ -822,11 +823,15 @@ extern void MoveLoop(void);
 //     times a frame, never ahead of it. Otherwise the pass rate would cap the tic rate.
 //   * sendpacket() queues the input at once, but mmulti puts at most one datagram per peer on the
 //     wire every 25 ms (PAKRATE, dosendpackets), and getpackets() (called by faketimerhandler()
-//     before the input is made) can use that window for an acknowledgement. A visible tab comes
-//     round again at the next frame; a hidden tab has no frames and would send the input at the
-//     next network event. So the pass ends by flushing what mmulti holds back
-//     (mmulti_vnet_flush: sends now, ignoring the window). The datagram rate stays bounded by the
-//     pass rate, which follows the rate of network events.
+//     before the input is made) can use that window for an acknowledgement. A hidden tab has no
+//     frames and would send the input at the next network event. Brief 04 ended the pass with a
+//     flush for that; since brief 04b faketimerhandler() flushes every input (and the master's
+//     combined packet) as it is queued, in every tab (SendInputNow below), so the pass needs no
+//     flush of its own (the hidden-tab tests measured the same without it). A pass therefore
+//     flushes once per input it makes (and on the master once per receive pass that completes a
+//     tic): bounded by the at most 9 faketimerhandler() calls above, each making at most one input
+//     and calling getpackets() once, plus MoveLoop()'s getpackets(); so at most about 19 flushes,
+//     each one datagram per peer, and only on a catch-up pass after the tab was held back.
 VOID
 HiddenNetPass(VOID)
     {
@@ -836,9 +841,107 @@ HiddenNetPass(VOID)
     for (n = 0; n < 8 && totalclock >= ototalclock + synctics; n++)
         faketimerhandler();
     MoveLoop();
-    mmulti_vnet_flush();
     }
 #endif
+
+// Brief 04b: this machine's input (or the master's combined packet) goes on the wire when it is
+// made, not at the next dosendpackets() after mmulti's 25 ms send window (PAKRATE) has passed.
+// getpackets(), which faketimerhandler() calls before it makes the input, can already have spent
+// the window on a datagram with only acknowledgements, and then the input waited 16 to 33 ms (a
+// browser frame or two) or up to 25 ms natively. This changes when a datagram goes, not what is
+// in it. mmulti_vnet_flush() (mmulti.c) is not specific to vnet: it sends whatever sendpacket()
+// has queued, to plain UDP peers as well.
+static void
+SendInputNow(void)
+    {
+    if (TestLagOn) TestLagFlushing(1);
+    mmulti_vnet_flush();
+    if (TestLagOn) TestLagFlushing(0);
+    }
+
+// The master hands every tic for which all inputs (its own and every slave's) are in to the
+// slaves, as one packet per tic, in order. Brief 04b: it is called from faketimerhandler(), as
+// before, and from getpackets() as soon as it has stored a slave's input, so a tic whose last
+// missing input was a slave's goes out then, not at the master's next own input (up to 25 ms
+// later). It builds the packet in packbuf, so it must not run while getpackets() is still
+// reading a datagram into that buffer: getpackets() calls it after its receive loop. The inputs
+// in each packet and the order of the tics are the same whichever place sends them; the bytes
+// that depend on when the master sends follow its timing, as they always did: the lag-correction
+// bytes of every TIMERUPDATESIZ-th tic (each slave's myminlag measured so far) and how many of the
+// master's sync records go in each packet (AddSyncInfoToPacket, up to 4, as many as are ready).
+static void
+MasterForward(void)
+    {
+    int i, j;
+    PLAYERp pp;
+    int sent = 0;
+
+    while (1)
+        {
+        TRAVERSE_CONNECT(i)
+            {
+            if ((Player[i].movefifoend <= movefifosendplc))
+                {
+                if (sent)
+                    SendInputNow();
+                return;
+                }
+            }
+
+        packbuf[0] = PACKET_TYPE_MASTER_TO_SLAVE;
+        j = 1;
+
+        // Fix timers and buffer/jitter value
+        if ((movefifosendplc & (TIMERUPDATESIZ - 1)) == 0)
+            {
+            for (i = connectpoint2[connecthead]; i >= 0; i = connectpoint2[i])
+                {
+                if (Player[i].IsDisconnected)
+                    continue;
+                packbuf[j++] = min(max(Player[i].myminlag, -128), 127);
+                }
+
+            for (i = connecthead; i >= 0; i = connectpoint2[i])
+                Player[i].myminlag = 0x7fffffff;
+            }
+
+        TRAVERSE_CONNECT(i)
+            {
+            pp = Player + i;
+
+            #if !BIT_CODEC
+            memcpy(&packbuf[j], &pp->inputfifo[movefifosendplc & (MOVEFIFOSIZ - 1)], sizeof(SW_PACKET));
+            j += sizeof(SW_PACKET);
+            #else
+            j += EncodeBits(&pp->inputfifo[(movefifosendplc) & (MOVEFIFOSIZ - 1)],
+                       &pp->inputfifo[(movefifosendplc - 1) & (MOVEFIFOSIZ - 1)],
+                       &packbuf[j]);
+            #endif
+            //pp->movefifoend++;
+            }
+
+        #if SYNC_TEST
+        AddSyncInfoToPacket(&j);
+        #endif
+
+        if (TestLagOn) { TestLagForward(movefifosendplc); TestLagTag(movefifosendplc); }
+        for (i = connectpoint2[connecthead]; i >= 0; i = connectpoint2[i])
+            {
+            if (Player[i].IsDisconnected)
+                continue;
+            netsendpacket(i, packbuf, j);
+            /*
+            pp = Player + i;
+            if (TEST(pp->inputfifo[movefifosendplc & (MOVEFIFOSIZ - 1)].bits,QUITBIT)
+               playerquitflag[i] = 1;
+            */
+            }
+
+        if (TestLagOn) TestLagTag(-1);
+        sent = 1;
+        movefifosendplc += MovesPerPacket;
+        }
+    }
 
 void
 faketimerhandler(void)
@@ -892,6 +995,7 @@ faketimerhandler(void)
                &pp->inputfifo[(pp->movefifoend-1) & (MOVEFIFOSIZ - 1)],
                sizeof(SW_PACKET));
 
+        if (TestLagOn) TestLagMade(pp->movefifoend);
         pp->movefifoend++;
         return;
         }
@@ -905,6 +1009,7 @@ faketimerhandler(void)
     memset(&AveragePacket, 0, sizeof(AveragePacket));
 
     pp->inputfifo[Player[myconnectindex].movefifoend & (MOVEFIFOSIZ - 1)] = loc;
+    if (TestLagOn) TestLagMade(pp->movefifoend);
     pp->movefifoend++;
 
 #if 0
@@ -1005,6 +1110,7 @@ faketimerhandler(void)
                             i = 1;
                         }
                     totalclock -= synctics * i;
+                    if (TestLagOn) TestLagCorrect(-synctics * i);
                     otherminlag += i;
                     }
                 }
@@ -1028,7 +1134,10 @@ faketimerhandler(void)
         AddSyncInfoToPacket(&j);
         #endif
 
+        if (TestLagOn) TestLagTag(Player[myconnectindex].movefifoend - 1);
 		netbroadcastpacket(packbuf, j);
+        if (TestLagOn) TestLagTag(-1);
+        SendInputNow();
 
         return;
         } // NetBroadcastMode
@@ -1055,6 +1164,7 @@ faketimerhandler(void)
                         i = 1;
                     }
                 totalclock -= synctics * i;
+                if (TestLagOn) TestLagCorrect(-synctics * i);
                 otherminlag += i;
                 }
 
@@ -1080,7 +1190,10 @@ faketimerhandler(void)
         AddSyncInfoToPacket(&j);
         #endif
 
+        if (TestLagOn) TestLagTag(pp->movefifoend - 1);
         netsendpacket(connecthead, packbuf, j);
+        if (TestLagOn) TestLagTag(-1);
+        SendInputNow();
         return;
         }
 
@@ -1099,64 +1212,7 @@ faketimerhandler(void)
     //    }
 
     // I am MASTER...
-    while (1)
-        {
-        TRAVERSE_CONNECT(i)
-            {
-            if ((Player[i].movefifoend <= movefifosendplc))
-                return;
-            }
-
-        packbuf[0] = PACKET_TYPE_MASTER_TO_SLAVE;
-        j = 1;
-
-        // Fix timers and buffer/jitter value
-        if ((movefifosendplc & (TIMERUPDATESIZ - 1)) == 0)
-            {
-            for (i = connectpoint2[connecthead]; i >= 0; i = connectpoint2[i])
-                {
-                if (Player[i].IsDisconnected)
-                    continue;
-                packbuf[j++] = min(max(Player[i].myminlag, -128), 127);
-                }
-
-            for (i = connecthead; i >= 0; i = connectpoint2[i])
-                Player[i].myminlag = 0x7fffffff;
-            }
-
-        TRAVERSE_CONNECT(i)
-            {
-            pp = Player + i;
-
-            #if !BIT_CODEC
-            memcpy(&packbuf[j], &pp->inputfifo[movefifosendplc & (MOVEFIFOSIZ - 1)], sizeof(SW_PACKET));
-            j += sizeof(SW_PACKET);
-            #else
-            j += EncodeBits(&pp->inputfifo[(movefifosendplc) & (MOVEFIFOSIZ - 1)],
-                       &pp->inputfifo[(movefifosendplc - 1) & (MOVEFIFOSIZ - 1)],
-                       &packbuf[j]);
-            #endif
-            //pp->movefifoend++;
-            }
-
-        #if SYNC_TEST
-        AddSyncInfoToPacket(&j);
-        #endif
-
-        for (i = connectpoint2[connecthead]; i >= 0; i = connectpoint2[i])
-            {
-            if (Player[i].IsDisconnected)
-                continue;
-            netsendpacket(i, packbuf, j);
-            /*
-            pp = Player + i;
-            if (TEST(pp->inputfifo[movefifosendplc & (MOVEFIFOSIZ - 1)].bits,QUITBIT)
-               playerquitflag[i] = 1;
-            */
-            }
-
-        movefifosendplc += MovesPerPacket;
-        }
+    MasterForward();
     }
 
 VOID
@@ -1177,6 +1233,7 @@ getpackets(VOID)
     if (!CommEnabled)
         return;
 
+    if (TestLagOn) TestLagPassStart();
     while ((packbufleng = netgetpacket(&otherconnectindex, packbuf)) > 0)
         {
         switch (packbuf[0])
@@ -1545,5 +1602,12 @@ getpackets(VOID)
             DSPRINTF(ds,"Packet type unknown %d",packbuf[0]);
             MONO_PRINT(ds);
             }
+        if (TestLagOn)
+            TestLagScan();
         }
+
+    // Brief 04b: a slave's input may have been the last one missing for a tic: pass the tic on now,
+    // after the receive loop (packbuf is free again), not when the master next makes an input.
+    if (!NetBroadcastMode && myconnectindex == connecthead && ready2send)
+        MasterForward();
     }
