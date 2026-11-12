@@ -92,4 +92,119 @@ The user asked for this brief on 12 Nov 2026, after the coordinator read `predic
 
 ## Outcome
 
-(Empty: filled in by the implementer.)
+Implemented in two sessions (the first stopped on the tic 1 question below). Branch `browser/04b-lag-cuts` in jfsw-browser and in the jfbuild fork. Status: review.
+
+**What landed**
+
+- *Measurement (test-only).* `-testlag<name>` (`src/sync.c`): one 36-byte record per game tic from this machine's own clock (`CLOCK_MONOTONIC`): input made, every input here, tic ran, how long the packet carrying it waited in mmulti between `sendpacket()` and a datagram leaving, how long the master held the complete tic before queueing the combined packet, `otherminlag`, `bufferjitter`, the clock corrections so far; and at `-testquit` the datagram count per peer. Two observation-only hooks in `jfbuild/src/mmulti.c` (`mmulti_test_queuehook`, `mmulti_test_sendhook`, NULL unless set). A record is written 16 tics after its tic ran: on the old code the datagram, and on the master the combined packet, often left only after the tic had run, so a record written at once said "unknown" for exactly the waits it measures (found while setting the bounds; the first session's numbers for the old code undercounted the master's waits). Nothing goes on the wire and nothing changes without the argument. `-testlag` is not a prefix of, nor prefixed by, `-testsync`, `-testdump`, `-testquit`, `-testnudge` or the new `-teststate`; the game options are scanned by prefix, and these are game options, not `-net` sub-options, so the L1 skip list needs nothing.
+- *Step 2: every input goes on the wire when it is made.* `SendInputNow()` (`src/net.c`) calls `mmulti_vnet_flush()` right after `faketimerhandler()` hands mmulti this machine's input (slave, broadcast mode) or the master's combined packet. Chosen over a `sendpacket()` that bypasses PAKRATE for new data because it needs no engine change (the function exists since 04 and sends what is queued, ignoring the window) and keeps the limit for everything else: datagrams with only acknowledgements and resends still go at most once per 25 ms. It applies to every network game, relay and plain UDP alike (`mmulti_vnet_flush()` lives in `mmulti.c` and works on any peer; only its name is vnet's, kept to keep the change small; its comments in `mmulti.c` and `mmulti_vnet.h` now say so).
+- *Step 3: the master forwards a tic as soon as it is complete.* The "I am MASTER" loop is `MasterForward()`, called from `faketimerhandler()` as before and from the end of `getpackets()`, **after** the receive loop (`packbuf` is both the receive and the send buffer). Same packets, same order.
+- *The hidden pass's own flush is gone*: step 2 made it redundant (all four hidden scenarios measured the same without it: mutation table). The hidden scenarios pass unchanged.
+- *The tic 1 difference*: test-only, see below (`-teststate`, the hash, the `tic1` scenario).
+- *Tests:* `lag` (in the full run), `tic1` (in the full run), `lag-matrix` (the report, only by name); `NETPLAY_SW` (another native build), `NETPLAY_STATE` (state dumps and named fields on a dump difference). Docs: `code-facts.md` §16, `building.md` §6.5, `bugs.md` L17 and L19, this Outcome.
+
+**The tic 1 difference** (investigated first). Case **(a)**: the hash covered state that legitimately differs per machine: the drawing code's scratch space.
+
+- *Made observable.* `-teststate[<T>]` (new, test-only, with `-testdump<name>`) writes `<name>.state`: the whole state as text, one line per object (globals, every connected player, every live sprite with its User, every stat list, the head of the free list, every sector with its sprite list and SectUser, every wall, the sector objects, the `Anim` list, the interpolations, the hash), when `RunLevel` starts, at the start of tics 1 to 3 and at tic T. `netplay.js` names the differing objects and fields when two machines' dumps first differ at a tic that has a state dump (`NETPLAY_STATE=1`, or `=600,1200`). It is off by default because the first dump (1.3 MB on E1L1) delays a browser's first frame, and that by itself changes how a game starts.
+- *Reproduced: 180 games, 90 differed.* That delay turned out to make the case frequent. Short games (20 tics), `-teststate`, the old hash, one at a time, load 1 to 4, every pairing on the three builds:
+
+| build | browser + browser | browser host + native | native host + browser | native + native |
+|---|---|---|---|---|
+| before (claude and the measurement hooks) | 5 of 15 differed | 15 of 15 | 0 of 15 | 0 of 15 |
+| step 2 only | 9 of 15 | 14 of 15 | 13 of 15 | 0 of 15 |
+| steps 2 and 3 | 6 of 15 | 15 of 15 | 13 of 15 | 0 of 15 |
+
+  In all 180 games the dumps differed **exactly when** one machine ran tic 1 after a single drawn frame and the other after more (`numframes` in the state dumps), never otherwise. So it is not caused by 04b, which only makes the uneven start more likely when a browser is the slave (its first frame is less often before the master's inputs). The native-only games never had a machine with a single frame (a native game drew 13 to 39 frames before tic 1 here).
+- *Which state.* In every differing game the field comparison at tics 1 to 3 found exactly two fields: `ang` of sprites 51 and 924 (1 on the machine that had drawn one frame, 0 on the other); every other field of every object agreed. The records agreed again from that machine's second frame on (1 to 8 records differed).
+- *What wrote it, and why the amount differs.* Sprites 51 and 924 are E1L1's two ceiling/floor picture override markers (`STAT_CEILING_FLOOR_PIC_OVERRIDE`, picnum 2307, hitag 136, set up in `sprite.c`). On every frame `FAF_DrawRooms()` (`draw.c`) saves the sector's ceiling (or floor) stat into the marker's `ang` (`SPRITE_TAG4`) and its picnum into `xvel` (`SPRITE_TAG5`), substitutes the override picture, draws, and restores the stat from `ang` **with the parallax bit cleared**. So after the first frame `ang` holds the map's stat (1, parallax) and after any later frame the stat without it (0). How many frames a machine draws before tic 1 is timing: a browser whose first frame comes late catches its clock up inside that frame (many inputs at once), and the next `MoveLoop` runs tic 1. Nothing else reads those two fields of those sprites: they have no User, their cstat (0x8000, 0xa000) has no blocking or hitscan bit, and the only other code that walks that stat list is `PreCacheOverride` (picnum). Not prediction and not start-up code: the state at `start` (after `InitRunLevel`, before the first input) agreed in every game, and nothing else differed at tic 1.
+- *The fix (test-only, `TestStateHash()`, with a comment).* The markers' `ang` is left out of the hash; and every sector's ceiling and floor stat is now hashed, because the same first frame clears the parallax bit of the two override sectors (sector 149's ceiling, 238's floor) for good, the same on every machine that has drawn, and the game does read that bit (a shot into a parallax sky: `weapon.c`, `player.c`). So the hash still covers everything the angle stood for, and more.
+- *Not hiding a real difference.* With the fixed hash, 40 more short games (10 per pairing, state dumps on, 24 of them uneven) all agreed; the `tic1` scenario (6 games: browser host with a native slave, two browsers) checks the records **and** every field at the start and tics 1 to 3, and requires at least one uneven game (5 of 6 were); with the old hash (mutation) it fails on exactly the uneven games, and the field comparison then reports only the hash as differing. All 48 `lag-matrix` games and every scenario of the full run agreed record for record with the stronger hash.
+- *Found on the way* (bugs.md L19, **reported, not fixed**): a browser tab hidden before its first frame of the level never draws (brief 04's hidden pass), keeps the two parallax bits, and so differs from the other machines in sector state from tic 1 on, in a bit the game reads. Measured: native host, browser slave hidden from its start: all 200 records differ, and the field dumps name exactly `sector 149 ceilingstat` and `sector 238 floorstat`. In the original game every machine draws before tic 1, so this does not happen there; whether it becomes a visible desync needs a shot into those skies (not tried). The policy question (a brief-04 hidden-pass issue meeting an original drawing side effect) is for the user; nothing in 04b depends on it, and no scenario hides a tab before its first frame.
+
+**Results: input to tic** (median ms of each game from tic 200 to 1,200, two `lag-matrix` runs of each build one after another, one at a time; headless Chromium, software-rendered, 4 shared cores, load average as given; "before" is `claude` with the measurement hooks, `MasterForward()` called only from `faketimerhandler()` and an empty `SendInputNow()`):
+
+| game (first hosts) | machine | before | step 2 only | steps 2 and 3 | load before / 2 / 2+3 |
+|---|---|---|---|---|---|
+| browsers | master | 66.1, 50.8 | 31.9, 27.9 | 51.2, 30.2 | 3.5, 4.8 / 5.5, 4.7 / 4.8, 4.7 |
+| browsers | slave | 117.5, 100.9 | 75.5, 55.9 | 78.7, 78.6 | 3.5, 4.8 / 5.5, 4.7 / 4.8, 4.7 |
+| browsers-30ms | master | 151.4, 131.4 | 99.9, 129.9 | 105.8, 102.1 | 5.2, 5.5 / 5.9, 6.3 / 5.1, 5.2 |
+| browsers-30ms | slave | 188.7, 197.8 | 155.1, 150.3 | 153.1, 147.4 | 5.2, 5.5 / 5.9, 6.3 / 5.1, 5.2 |
+| browser-host | master | 94.8, 137.4 | 104.1, 55.1 | 46.4, 135.8 | 5.2, 5.2 / 5.6, 5.8 / 5.2, 5.0 |
+| browser-host | slave | 175.6, 174.8 | 126.0, 99.1 | 93.0, 101.3 | 5.2, 5.2 / 5.6, 5.8 / 5.2, 5.0 |
+| browser-host-30ms | master | 262.1, 181.5 | 165.1, 162.3 | 184.2, 186.1 | 5.0, 6.0 / 5.5, 4.8 / 5.0, 5.0 |
+| browser-host-30ms | slave | 300.5, 224.8 | 200.8, 175.1 | 225.5, 177.1 | 5.0, 6.0 / 5.5, 4.8 / 5.0, 5.0 |
+| native-host | master | 100.5, 76.4 | 75.8, 50.2 | 58.6, 125.0 | 5.5, 5.1 / 5.7, 4.7 / 5.8, 5.2 |
+| native-host | slave | 179.5, 164.6 | 104.4, 85.3 | 88.2, 146.4 | 5.5, 5.1 / 5.7, 4.7 / 5.8, 5.2 |
+| native-host-30ms | master | 149.1, 302.2 | 101.1, 128.1 | 125.7, 101.4 | 5.7, 5.3 / 5.5, 5.4 / 5.5, 5.6 |
+| native-host-30ms | slave | 188.9, 325.7 | 148.8, 165.7 | 177.4, 156.1 | 5.7, 5.3 / 5.5, 5.4 / 5.5, 5.6 |
+| natives | master | 25.5, 25.6 | 25.5, 25.6 | 25.5, 25.6 | 4.1, 3.7 / 4.0, 3.9 / 4.0, 4.0 |
+| natives | slave | 50.4, 51.2 | 25.7, 25.6 | 25.6, 25.6 | 4.1, 3.7 / 4.0, 3.9 / 4.0, 4.0 |
+| natives-30ms | master | 88.2, 86.9 | 73.6, 73.5 | 73.6, 73.3 | 3.1, 3.0 / 3.0, 3.0 / 3.1, 3.2 |
+| natives-30ms | slave | 104.7, 104.8 | 65.2, 65.3 | 63.7, 63.4 | 3.1, 3.0 / 3.0, 3.0 / 3.1, 3.2 |
+
+Where the time went:
+
+| game | slave packet wait in mmulti, median: before / after | master packet wait: before / after | master holds a complete tic, mean (p95): before | step 2 only | steps 2 and 3 | datagrams a second, master / slave: before | after |
+|---|---|---|---|---|---|---|---|
+| browsers | 28.2, 27.5 / 0.1, 0.1 | 27.3, 25.2 / 0.1, 0.1 | 5.7 (19.4), 4.3 (18.2) | 6.3 (20.6), 2.2 (17.2) | 0.0 (0.0), 0.0 (0.0) | 29.3, 29.6 / 29.7, 29.4 | 54.2, 55.7 / 59.3, 59.4 |
+| browsers-30ms | 27.3, 27.0 / 0.0, 0.0 | 27.8, 26.4 / 0.0, 0.0 | 4.5 (19.6), 4.6 (19.7) | 5.0 (19.9), 6.8 (19.7) | 0.0 (0.0), 0.0 (0.1) | 29.8, 29.3 / 29.4, 29.6 | 53.1, 53.0 / 59.4, 59.2 |
+| browser-host | 15.4, 13.5 / 0.0, 0.0 | 31.7, 31.0 / 0.1, 0.2 | 3.5 (18.8), 3.5 (19.4) | 3.1 (18.4), 5.0 (20.9) | 0.0 (0.1), 0.0 (0.1) | 25.7, 25.9 / 38.9, 39.0 | 53.1, 47.8 / 70.4, 68.0 |
+| browser-host-30ms | 14.1, 14.7 / 0.0, 0.0 | 31.1, 31.3 / 0.0, 0.0 | 3.2 (19.1), 3.9 (19.7) | 4.7 (21.5), 4.5 (20.1) | 0.0 (0.1), 0.0 (0.1) | 24.2, 26.3 / 38.8, 38.9 | 45.1, 49.2 / 71.0, 67.3 |
+| native-host | 32.2, 31.7 / 0.1, 0.1 | 14.4, 15.2 / 0.1, 0.1 | 12.3 (23.3), 9.9 (22.6) | 12.5 (22.8), 14.2 (23.5) | 0.0 (0.0), 0.0 (0.0) | 39.0, 39.0 / 25.3, 26.0 | 57.5, 57.0 / 58.4, 57.9 |
+| native-host-30ms | 30.2, 34.2 / 0.0, 0.0 | 14.8, 15.4 / 0.0, 0.0 | 11.1 (22.6), 11.9 (22.2) | 12.5 (23.2), 10.6 (22.7) | 0.0 (0.0), 0.0 (0.0) | 39.0, 39.0 / 27.2, 23.7 | 55.9, 55.4 / 59.1, 59.5 |
+| natives | 14.5, 13.8 / 0.0, 0.0 | 14.5, 14.4 / 0.0, 0.0 | 7.8 (22.5), 7.8 (22.4) | 0.0 (0.0), 0.0 (0.0) | 0.0 (0.0), 0.0 (0.0) | 39.1, 39.0 / 39.0, 38.9 | 69.0, 68.4 / 71.6, 70.9 |
+| natives-30ms | 14.8, 13.0 / 0.0, 0.0 | 14.4, 14.9 / 0.0, 0.0 | 11.4 (22.9), 11.2 (22.4) | 2.0 (3.8), 2.1 (3.9) | 0.0 (0.0), 0.0 (0.0) | 39.1, 38.9 / 39.0, 39.0 | 65.3, 64.2 / 68.6, 69.0 |
+
+- *Slaves* gain the most: two browsers 101 to 118 ms before, 79 after (about 30 ms, more than a tic); two native games 51, 25.6 (one tic); native with 30 ms each way 105, 63.5 (41 ms). Games with a browser and a native machine are the noisiest (the browser shares the cores with everything): their slaves are lower after on the whole (browser host: 175 and 176 before, 93 and 101 after; native host: 165 and 180, 88 and 146), but single runs overlap. *Masters* fall or stay the same within the noise: browsers 51 and 66 before, 30 and 51 after; natives 25.5 unchanged; natives with 30 ms 87 and 88, 73.5; the mixed games move both ways by more than a tic between runs of the same build.
+- *The wire.* The send wait is gone: 25 to 32 ms at the median for a browser's packets and 13 to 15 for a native machine's before, 0.0 to 0.2 after. Datagrams per peer: 24 to 39 a second before, 45 to 72 after, 1.8 to 2.0 times (about one per input plus the acknowledgements the window still paces); the test bound is 80.
+- *Step 3's share.* It removes the master's forwarding wait completely (mean 0.0 and p95 at most 0.1 ms after, in every game). Before it, with step 2 only, that wait was a mean of 2 to 7 ms (p95 17 to 21) with a browser master, 11 to 14 ms (p95 23) with a native master and a browser slave, 2 ms with two native games and 30 ms latency, and 0 between two unimpaired native games (their 120 Hz timers keep the master's own input last, once step 2 makes the slave's arrive sooner). In end-to-end delay that is measurable only where the noise is small: natives with 30 ms, slave 65.2 and 65.3 with step 2 only, 63.7 and 63.4 with both (about 1.7 ms); natives unimpaired 25.6 either way. In the browser games the share (expected about the mean wait, 2 to 14 ms) is smaller than the game-to-game spread under this load (browsers' slave: 75.5 and 55.9 with step 2 only, 78.7 and 78.6 with both), so **for browsers it is not measurable here**. It is kept because it removes a wait of 10 to 14 ms on average for every native master with a browser guest, and up to a tic (p95 about 20 ms) for every master, which the brief's "about half a tic" expected; the `lag` test checks the mechanism.
+- *Lag correction.* It settles: on the slaves `otherminlag` at -1 to 4 and `bufferjitter` at 1 tic (native slaves) or 3 to 9 (browser slaves; higher with 30 ms); after tic 200 the clock was corrected not at all in 13 of 16 `lag-matrix` slave games, by 3 or 6 clock ticks in the rest, and in the `lag` runs at most once and never back and forth. A browser slave's tics now wait longer in the lockstep buffer (about 34 ms against 14 to 30) while its input comes back complete in about 42 ms instead of 85: the lag correction holds them longer, which gives back part of the saving. That buffer is now the largest remaining cost in browser games; it is the lag-correction algorithm, out of scope (reported, not changed).
+- *Agreement.* Every measured game agreed record for record (except the 90 short games above, with the old hash): 48 `lag-matrix` games, 24 `lag` games (all builds), 40 short games with the fixed hash, and the full run below.
+
+**Tests** (final tree, rebuilt with `make veryclean && make -j4` and `scripts/build-wasm.sh` after the last pointer move; one test at a time):
+
+REGRESSION
+
+**Mutations** (each applied, rebuilt into its own directory, run with `NETPLAY_SW`/`WASM_DIR`, reverted):
+
+| Mutation | Run | What failed |
+|---|---|---|
+| undo step 2 (`SendInputNow()` empty) | `lag` | 7 failed: every machine's packets waited 13.6 to 31.5 ms in mmulti at the median (bound 5), and the native slave with 30 ms took 100.5 ms at the median (bound 85) |
+| undo step 3 (no `MasterForward()` from `getpackets()`) | `lag` | 2 failed: the browser master held a complete tic 0.0 / 19.5 ms (median / p95; mean 6.3) and the native master 9.9 / 22.1 (mean 10.3), bound 2 / 8. The slave's delay did not rise measurably in the browser games (see step 3's share); with 30 ms between natives by about 1.7 ms |
+| both undone (the "before" build) | `lag` | 10 failed (both of the above) |
+| step 3 with the receive buffer as the send buffer (`MasterForward()` inside the receive loop, right after a slave's input is stored, before its sync bytes are read from `packbuf`) | `ws`, `native-host` | the master logged `OUT OF SYNC` in both (it read its own outgoing packet's sync bytes as the slave's): 2 failed; the dumps still agreed (the input had already been copied out) |
+| the hidden pass's flush removed (step 2 made it redundant) | `hidden-slave`, `hidden-host`, `hidden-thin`, `hidden-frozen` | nothing: 86 passed (40.0 tics a second, 6 of 1,535 yields with data held back, 43 passes a second hidden slave); so it was removed |
+| the old hash (markers' angle in, sector stat out) | `tic1` | 8 failed: the three uneven browser-host games differ at tic 1 (1 to 2 records) and the field comparison names only the hash |
+
+**Concerns**
+
+- *Step 3 for browsers* is a mechanism gain (the forwarding wait is gone) whose end-to-end effect is below the noise of this container; on a quiet machine it should be visible as a few ms for a guest of a browser host and about 10 ms for a guest of a native host.
+- *The bounds.* The `lag` test bounds the mechanisms (packet wait under 5 ms, forwarding under 2 / 8 ms, at most 80 datagrams a second), which were 0.0 to 0.2 ms, 0.0 / 0.1 ms and 45 to 72 here at load 3 to 6, and the end-to-end delay only for two native games with 30 ms (85 ms; 63.4 to 63.9 after, 100 to 105 before). Browser delay is reported, not bounded: it moved by 20 ms between two runs of the same build.
+- *The buffer.* After 04b the lockstep buffer (`bufferjitter`) is the largest part of a browser guest's delay and grew a little; it is the lag-correction algorithm (out of scope).
+- *L19* (above): a tab hidden before its first frame differs in two sector stat bits the game reads. Not caused by 04b; for the user to decide.
+- *Datagram rate* about doubles (1.8 to 2.0 times); a relay serving many rooms sees that.
+- *Not done:* the optional native-only `tests/net/` version of the lag test (the `lag` scenario's native game covers it); Firefox, a real GPU, a real network.
+
+**Play-test steps (Arch Linux)**
+
+```
+sudo pacman -S --needed base-devel git unzip python nodejs npm go sdl2 libvorbis libogg mesa glu alsa-lib gtk3
+git clone --recurse-submodules -b browser/04b-lag-cuts https://github.com/VenKamikaze/jfsw-browser
+cd jfsw-browser
+scripts/setup-emsdk.sh && scripts/build-wasm.sh      # about 3 minutes the first time
+scripts/fetch-test-data.sh && make -j4
+cp testdata/swshare.grp build-wasm/
+(cd ext/vnet/relay && go build -o /tmp/vnet-relay ./cmd/vnet-relay)
+/tmp/vnet-relay -udp 127.0.0.1:7777 -http 127.0.0.1:7778 -origins 127.0.0.1:8000 -v      # terminal 1
+(cd build-wasm && python3 -m http.server 8000 --bind 127.0.0.1)                          # terminal 2
+```
+
+Host natively and join from the browser (or the other way round, as in brief 04's play-test):
+`./sw -net -relay 127.0.0.1:7777 -host-room 2 -- -autonet 2,1,2,1,0,0,0,0,0,0`, then the page `http://127.0.0.1:8000/?test=1&args=-net%20-relay%20ws://127.0.0.1:7778/vnet%20-room%20CODE%20--%20-autonet%202,1,2,1,0,0,0,0,0,0` (the code is in the native game's console and stdout).
+
+Things only a person can check:
+- **Does shooting feel sooner?** Fire, open a door, switch weapons as the guest (the browser, and then a second native game as guest); compare with the same on `claude` (build both: `git worktree add ../jfsw-claude claude`). The guest should feel about a tic (25 ms) or more quicker; the host about the same or a little quicker. Movement and turning were already predicted and should feel unchanged.
+- **Over a real network** (the relay on another machine, or Wi-Fi): the same comparison; and check that the game does not stutter more than before (the datagram rate doubled).
+- **A tab hidden before the game starts** (L19): host natively, open the browser guest and switch to another tab before the host's game starts, come back after a minute and shoot into the sky over the start area; does either machine say `OUT OF SYNC` (the host's console)? Please report what you see.
+- **The tests on your own machine**: `node tests/web/netplay.js lag tic1`, and `node tests/web/netplay.js lag-matrix` for the full table (about 7 minutes; the numbers will be lower and steadier than here).
+
