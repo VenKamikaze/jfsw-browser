@@ -932,8 +932,9 @@ static void TestDumpTic(void)
 //   7 bufferjitter    (signed)
 //   8 clockcorr       (signed) the sum of every totalclock correction so far, in clock ticks
 // and at -testquit the log says how many datagrams went to each peer. Input to tic is ran - made;
-// ran - ready is the time a complete tic waits for the lockstep buffer. Nothing goes on the wire and
-// nothing in the game changes; without the argument none of this runs.
+// ran - ready is the time a complete tic waits for the lockstep buffer. A tic's record is written 16
+// tics after it ran (the last 16 at -testquit), when its packets have left. Nothing goes on the wire
+// and nothing in the game changes; without the argument none of this runs.
 int TestLagOn;
 static char TestLagName[260];
 static FILE *TestLagFile;
@@ -1055,11 +1056,41 @@ void TestLagCorrect(int clockticks)
     TestLagClockCorr += clockticks;
     }
 
+// The record of a tic is written TESTLAG_DEFER tics after the tic ran: the datagram that carries
+// it, and on the master the combined packet, may leave only after the tic has run on this machine
+// (the master runs a tic as soon as every input is in; before brief 04b it forwarded it at its next
+// own input, and mmulti sent it at the next 25 ms window), and the record would then have to say
+// "unknown" for exactly the waits it is there to measure.
+#define TESTLAG_DEFER 16
+static unsigned int TestLagPend[MOVEFIFOSIZ][5];    // tic, ready, ran, otherminlag, bufferjitter; [8] below
+static int TestLagPendCorr[MOVEFIFOSIZ];
+static int TestLagPendOn[MOVEFIFOSIZ];
+
+static void TestLagWrite(int k)
+    {
+    unsigned int rec[9];
+
+    if (!TestLagPendOn[k])
+        return;
+    TestLagPendOn[k] = 0;
+    rec[0] = TestLagPend[k][0];
+    rec[1] = TestLagMadeT[k];
+    rec[2] = TestLagPend[k][1];
+    rec[3] = TestLagPend[k][2];
+    rec[4] = TestLagSendWait[k];
+    rec[5] = (myconnectindex == connecthead) ? TestLagFwdWait[k] : 0xFFFFFFFFu;
+    rec[6] = TestLagPend[k][3];
+    rec[7] = TestLagPend[k][4];
+    rec[8] = (unsigned int)TestLagPendCorr[k];
+    fwrite(rec, 1, sizeof(rec), TestLagFile);
+    fflush(TestLagFile);
+    }
+
 static void TestLagTic(void)
     {
     extern unsigned int MoveThingsCount;
     extern int otherminlag, bufferjitter;
-    unsigned int rec[9], ready = 0;
+    unsigned int ready = 0;
     int p, k = (movefifoplc - 1) & (MOVEFIFOSIZ - 1);
 
     if (!TestLagOn)
@@ -1078,25 +1109,25 @@ static void TestLagTic(void)
     for (p = connecthead; p >= 0; p = connectpoint2[p])
         if (TestLagArrive[p][k] > ready)
             ready = TestLagArrive[p][k];
-    rec[0] = MoveThingsCount;
-    rec[1] = TestLagMadeT[k];
-    rec[2] = ready;
-    rec[3] = TestLagNow();
-    rec[4] = TestLagSendWait[k];
-    rec[5] = (myconnectindex == connecthead) ? TestLagFwdWait[k] : 0xFFFFFFFFu;
-    rec[6] = (unsigned int)otherminlag;
-    rec[7] = (unsigned int)bufferjitter;
-    rec[8] = (unsigned int)TestLagClockCorr;
-    fwrite(rec, 1, sizeof(rec), TestLagFile);
-    fflush(TestLagFile);
+    TestLagPend[k][0] = MoveThingsCount;
+    TestLagPend[k][1] = ready;
+    TestLagPend[k][2] = TestLagNow();
+    TestLagPend[k][3] = (unsigned int)otherminlag;
+    TestLagPend[k][4] = (unsigned int)bufferjitter;
+    TestLagPendCorr[k] = TestLagClockCorr;
+    TestLagPendOn[k] = 1;
+    TestLagWrite((movefifoplc - 1 - TESTLAG_DEFER) & (MOVEFIFOSIZ - 1));
     }
 
 void TestLagReport(void)
     {
-    int p;
+    int p, i;
 
     if (!TestLagOn)
         return;
+    if (TestLagFile)        // the last tics, with what is known of them now
+        for (i = TESTLAG_DEFER - 1; i >= 0; i--)
+            TestLagWrite((movefifoplc - 1 - i) & (MOVEFIFOSIZ - 1));
     for (p = connecthead; p >= 0; p = connectpoint2[p])
         if (p != myconnectindex && TestLagDgrams[p & 15])
             buildprintf("TEST: lag: %u datagrams (%u bytes) to player %d in %u ms\n", TestLagDgrams[p & 15], TestLagDBytes[p & 15],
