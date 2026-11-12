@@ -8,7 +8,7 @@ vnet was built for the same job in [`VenKamikaze/BitRiot`](https://github.com/Ve
 
 ## 0. Where things stand (hand-off; keep this up to date after every merge)
 
-**12 Nov 2026: briefs 00 to 03 merged into `claude` (02 and 03: play-test pending); the smoke-test flakes are fixed; brief 04 is written and next. F1 is on hold.**
+**12 Nov 2026: briefs 00 to 04 merged into `claude` (02, 03 and 04: play-test pending). Brief 04b (netcode lag cuts, added by the user) is next, then 05. F1 is on hold.**
 
 - **Answers** are recorded in [`README.md`](README.md): submodules stay, on the user's forks (Q1 b); shareware data from a verified mirror (Q2); "Start now" is in (Q3); music later (Q4); upstream-friendly where cheap (Q5, default).
 - **Repos:** the work spans four GitHub repos, all attached to the session with push access: `VenKamikaze/jfsw-browser` (this one), and the forks `VenKamikaze/jfbuild`, `VenKamikaze/jfaudiolib` and `VenKamikaze/jfmact`. The forks existed already (this prompt originally said they didn't), and they contain the commits jfsw pins.
@@ -25,7 +25,9 @@ vnet was built for the same job in [`VenKamikaze/BitRiot`](https://github.com/Ve
 - **F2 landed (7 Nov 2026):** the user found a native crash in jfaudiolib's ALSA MIDI driver (empty `Lock`/`Unlock`, so the playback thread and the main thread corrupted the sequencer handle). Fixed on the jfaudiolib fork's `fix/alsa-midi-lock` (from the pin, applies to upstream `master`), merged into the fork's `claude`; `scripts/run-headless.sh` now turns music off unless `--music`. Verified by the user on Arch (10 of 10 runs clean with ALSA music); it can't be reproduced in the container (no ALSA sequencer). For music natively, a soundfont is needed (`pacman -S soundfont-fluid`).
 - **Smoke-test flakes fixed (12 Nov 2026)**, merged from `browser/02-unlocked-mouse` (details in 02's Outcome, last section). (1) The Escape check's failures were the view turning, not the menu: while the pointer was not locked, SDL turned `mousemove`/`mouseenter`/`mouseleave` into absolute positions and reported the jumps as mouse motion. A real bug: an uncaptured mouse moving over the page turned the player. `web/jfsw.js` now passes those events to SDL only while SDL knows the pointer is locked; a new check covers it. (2) The menu checks were not at the menu: twelve Spaces skipped the intro and then started E1L1. The intro is now skipped with Shift, and the test finds the menu cursor's row. The menus read the arrows' state every ~100 ms, not presses (`bugs.md` L14, original behaviour), so a press moves one or two rows. `smoke.js` 29/0 in 12 of 12 runs; each sabotage (`blank`, `nokey`, `noesc`, `unlockedmouse`) fails its check; `persist` 15/0, `data` 172/0, `grptable` 8/0, `determinism` 20/1 (the known stall check).
 - **Push access:** the session's GitHub scope listed only jfmact, vnet and BitRiot, and attaching jfsw-browser and jfaudiolib with `add_repo` was refused; pushing to jfsw-browser over git works anyway. jfbuild is attached.
-- **Next: brief 04** ([`04-browser-netplay.md`](04-browser-netplay.md), written 12 Nov 2026 from §5 and the Outcomes of 01 and 02). Run it with the standard process (§6): branch `browser/04-browser-netplay` in jfsw-browser and the jfbuild fork. Its "full level" test is bounded at 1200 tics because F1 is on hold.
+- **Brief 04 landed (12 Nov 2026):** the browser build links `mmulti.c` + `mmulti_vnet.c` + vnet (`-relay ws(s)://…`, `RELAY_AUTO`: WebTransport, then WebSocket; plain `-net` is refused in the browser). A hidden tab in a network game is driven by vnet's wake callback through a `MessageChannel` (`HiddenNetPass` in `src/net.c`: make the inputs due, move, then `mmulti_vnet_flush()` so nothing waits for PAKRATE), draws nothing and keeps the room at 40 tics a second at about 30 passes a second. Test-only `-testdump<name>` (17 bytes per tic per machine) proves every machine, browser or native, steps identical tics. A lost relay session ends the game with a message (bugs.md L18). `tests/web/netplay.js`: 20 scenarios, 365 checks, about 15 minutes. The jfbuild fork's `claude` is at `c4e3aea`. Play-test pending (a really hidden tab, Chromium's intensive throttling): steps in 04's Outcome.
+- **Process change (the user, 12 Nov 2026):** if a brief still needs work after its fix round, spawn a new implementer on the strongest model rather than going round again with the same one.
+- **Next: brief 04b, netcode lag cuts** (added by the user after 04; see §5). Write it, then run it with the standard process, branch `browser/04b-lag-cuts` in jfsw-browser and the jfbuild fork. Then brief 05.
 
 ## 1. Set up
 
@@ -130,10 +132,11 @@ Write each brief as `doco/browser/NN-short-name.md`. Each needs Goal, Scope, Out
 | 02 | Emscripten port | 00, Q2 | 01 |
 | 03 | Data download from a URL | 02 | 04 |
 | 04 | Browser netplay | 01, 02 | 03 |
+| 04b | Netcode lag cuts | 04 | |
 | 05 | Host and join from the game | 03, 04 | |
 | 06 | Deployment guide | 05 | |
 
-Later, not briefed: music (if Q4 says later), WebGL rendering, touch controls, the Wanton Destruction and Twin Dragon add-ons in the browser.
+Later, not briefed: music (if Q4 says later), WebGL rendering, touch controls, the Wanton Destruction and Twin Dragon add-ons in the browser, mouse turns drawn between tics (view angle only), smoothing prediction corrections.
 
 **00, set-up.**
 - Settle Q1 and fix the submodules.
@@ -178,6 +181,12 @@ Later, not briefed: music (if Q4 says later), WebGL rendering, touch controls, t
 - **Hidden tabs:** a lockstep game stalls everyone when one tab is hidden. Use vnet's wake callback and a `MessageChannel` to keep stepping, and send packets after every stepped frame, as Bit Riot's brief 12 did.
 - Cross-play: native and browser players in one room.
 - **Tests:** Playwright with a local Go relay, covering two browsers, a browser plus a native process, WebTransport and WebSocket, impairment, a hidden tab, and no desync across a full level. Prove the cross-play determinism holds, as in 02.
+
+**04b, netcode lag cuts** (the user, 12 Nov 2026, after a read of `predict.c` and `net.c`). Prediction already makes your own movement local; what is left is when packets go.
+- First a test-only measurement: the time from an input being made (`faketimerhandler`) to its tic running (`domovethings`), per machine, master and slave, with and without impairment.
+- Send each input as soon as it is made, in every game: `faketimerhandler` calls `getpackets()` first, which often spends mmulti's 25 ms window (PAKRATE) on an ack, so the input waits for a later `dosendpackets` (brief 04's `mmulti_vnet_flush()` fixed this for hidden tabs only).
+- The master forwards a tic as soon as the last input for it arrives (from `getpackets()`), not at its own next timer tick.
+- Neither changes what is sent, so lockstep is unaffected; prove it with 04's `-testdump` agreement on every machine, browser and native, and show each change cuts the measured delay (mutation: undo it, the delay comes back).
 
 **05, host and join from the game.**
 - Console commands `host [players]` and `join <code>`, plus "Host Online Game" and "Join Online Game" in the menu.

@@ -16,7 +16,8 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 | 01 | [vnet transport for mmulti (native)](01-vnet-transport.md) | jfsw-browser, jfbuild | 00 | done |
 | 02 | [Emscripten port](02-emscripten-port.md) | jfsw-browser, jfbuild, jfaudiolib | 00, Q2 | done (play-test pending) |
 | 03 | [Data download from a URL](03-data-download.md) | jfsw-browser | 02 | done (play-test pending) |
-| 04 | [Browser netplay](04-browser-netplay.md) | jfsw-browser, jfbuild | 01, 02 | review (play-test pending) |
+| 04 | [Browser netplay](04-browser-netplay.md) | jfsw-browser, jfbuild | 01, 02 | done (play-test pending) |
+| 04b | Netcode lag cuts | jfsw-browser, jfbuild | 04 | not written |
 | 05 | Host and join from the game | jfsw-browser (+ jfbuild) | 03, 04 | not written |
 | 06 | Deployment guide | jfsw-browser | 05 | not written |
 
@@ -29,7 +30,7 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 | F1 | [Co-op game freezes at tic 1522](F1-coop-freeze.md) | `fix/coop-freeze` | 01 (for the regression test) | on hold (the user, 6 Nov 2026) |
 | F2 | [Native crash in the ALSA MIDI music driver](F2-alsa-midi-lock.md) | `fix/alsa-midi-lock` (jfaudiolib fork, from `68be97f`) | 00 | done (verified by the user on Arch, 7 Nov 2026) |
 
-Later, not briefed: music (Q4), WebGL rendering through the GLES2 path, touch controls, the Wanton Destruction and Twin Dragon add-ons in the browser.
+Later, not briefed: music (Q4), WebGL rendering through the GLES2 path, touch controls, the Wanton Destruction and Twin Dragon add-ons in the browser, mouse turns drawn between tics (view angle only), smoothing prediction corrections.
 
 ## Settled decisions
 
