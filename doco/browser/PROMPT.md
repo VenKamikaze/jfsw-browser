@@ -8,7 +8,7 @@ vnet was built for the same job in [`VenKamikaze/BitRiot`](https://github.com/Ve
 
 ## 0. Where things stand (hand-off; keep this up to date after every merge)
 
-**12 Nov 2026: briefs 00 to 04b merged into `claude` (02, 03, 04 and 04b: play-test pending). Open: L19 (a tab hidden before the level's first frame desyncs; brief 04's hidden pass), waiting for the user to decide between a fix inside a new brief 04c or later; then brief 05. F1 is on hold.**
+**12 Nov 2026: briefs 00 to 04b merged into `claude` (02, 03, 04 and 04b: play-test pending). Brief 04c (L19: a tab hidden before the level's first frame desyncs) is next, at the user's request, then 05. F1 is on hold.**
 
 - **Answers** are recorded in [`README.md`](README.md): submodules stay, on the user's forks (Q1 b); shareware data from a verified mirror (Q2); "Start now" is in (Q3); music later (Q4); upstream-friendly where cheap (Q5, default).
 - **Repos:** the work spans four GitHub repos, all attached to the session with push access: `VenKamikaze/jfsw-browser` (this one), and the forks `VenKamikaze/jfbuild`, `VenKamikaze/jfaudiolib` and `VenKamikaze/jfmact`. The forks existed already (this prompt originally said they didn't), and they contain the commits jfsw pins.
@@ -28,8 +28,8 @@ vnet was built for the same job in [`VenKamikaze/BitRiot`](https://github.com/Ve
 - **Brief 04 landed (12 Nov 2026):** the browser build links `mmulti.c` + `mmulti_vnet.c` + vnet (`-relay ws(s)://…`, `RELAY_AUTO`: WebTransport, then WebSocket; plain `-net` is refused in the browser). A hidden tab in a network game is driven by vnet's wake callback through a `MessageChannel` (`HiddenNetPass` in `src/net.c`: make the inputs due, move, then `mmulti_vnet_flush()` so nothing waits for PAKRATE), draws nothing and keeps the room at 40 tics a second at about 30 passes a second. Test-only `-testdump<name>` (17 bytes per tic per machine) proves every machine, browser or native, steps identical tics. A lost relay session ends the game with a message (bugs.md L18). `tests/web/netplay.js`: 20 scenarios, 365 checks, about 15 minutes. The jfbuild fork's `claude` is at `c4e3aea`. Play-test pending (a really hidden tab, Chromium's intensive throttling): steps in 04's Outcome.
 - **Process change (the user, 12 Nov 2026):** if a brief still needs work after its fix round, spawn a new implementer on the strongest model rather than going round again with the same one.
 - **Brief 04b landed (12 Nov 2026):** `SendInputNow()` (net.c) flushes mmulti right after each input or combined packet is queued, so an input no longer waits for PAKRATE's 25 ms window; `MasterForward()` also runs from `getpackets()` after its receive loop, so the master forwards a tic as soon as its last input arrives. Input-to-tic medians: browser slave about 100-118 to 79 ms, native slave with 30 ms each way 105 to 64 ms, two natives 51 to 26 ms; datagrams per peer 1.8 to 2 times as many (45 to 72 a second; about a third of a slave's are redundant ack-only ones, code-facts §16, for brief 06's relay sizing). Test-only `-testlag`, `-teststate`, `-testslowstart`; scenarios `lag`, `tic1` (and `lag-matrix` by name). The tic-1 hash difference was scratch values that `FAF_DrawRooms` keeps in two marker sprites' `ang` (the hash leaves them out and now covers every sector's ceiling and floor stat). The jfbuild fork's `claude` is at `a610e1e`. `netplay.js` 591 checks. Play-test pending: steps in 04b's Outcome.
-- **L19 (bugs.md), open, for the user:** the first frame of a level clears the parallax bit of the ceiling/floor override sectors (`FAF_DrawRooms`), and the simulation reads that bit every tic (missiles, `DoPlayerTestPlaxDeath`, `SectorZadjust`, splashes, hitscans). A browser tab hidden before its first frame never draws (brief 04's hidden pass) and desyncs. The coordinator recommended a small brief 04c (apply that frame's lasting effect, or draw one frame, before a hidden tab runs tic 1) before 05; the user has not yet chosen.
-- **Next:** L19 as the user decides, then brief 05 (host and join from the game; write the brief first).
+- **L19 (bugs.md), open, for the user:** the first frame of a level clears the parallax bit of the ceiling/floor override sectors (`FAF_DrawRooms`), and the simulation reads that bit every tic (missiles, `DoPlayerTestPlaxDeath`, `SectorZadjust`, splashes, hitscans). A browser tab hidden before its first frame never draws (brief 04's hidden pass) and desyncs. The user chose (12 Nov 2026): fix it in its own brief, 04c, before 05.
+- **Next: brief 04c** ([`04c-hidden-first-frame.md`](04c-hidden-first-frame.md), written 12 Nov 2026): audit the drawing path for lasting writes the simulation reads, fix L19 (and anything else found) for every level start, test with a guest hidden before its first frame. Branch `browser/04c-hidden-first-frame`. Then brief 05 (host and join from the game; write the brief first).
 ## 1. Set up
 
 1. **Ask the user Q1 to Q5 (§4) first.** Q1 and Q2 block brief 00.
@@ -134,7 +134,7 @@ Write each brief as `doco/browser/NN-short-name.md`. Each needs Goal, Scope, Out
 | 03 | Data download from a URL | 02 | 04 |
 | 04 | Browser netplay | 01, 02 | 03 |
 | 04b | Netcode lag cuts | 04 | |
-| 04c | Hidden tab before the first frame (L19), if the user wants it briefed | 04b | |
+| 04c | A tab hidden before the level's first frame (L19) | 04b | |
 | 05 | Host and join from the game | 03, 04 | |
 | 06 | Deployment guide | 05 | |
 
