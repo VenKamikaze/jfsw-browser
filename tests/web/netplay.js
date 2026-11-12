@@ -321,6 +321,7 @@ async function sample(ms, until, limit, onTick) {
 function rate(series, from, to) {
   let a = null, b = null;
   for (const [t, c] of series) { if (a === null && c >= from) { a = [t, c]; } if (c >= to) { b = [t, c]; break; } }
+  if (a && !b) { b = series[series.length - 1]; }     // never got that far: the rate over what it did
   if (!a || !b || b[0] <= a[0]) { return 0; }
   return (b[1] - a[1]) / ((b[0] - a[0]) / 1000);
 }
@@ -462,9 +463,9 @@ async function hiddenRoom(kinds, hiddenIndex, opts) {
     }
     check(rates[hiddenIndex] >= 0.9 * want, h.name + ' (hidden) ran at ' + rates[hiddenIndex].toFixed(1) + ' tics a second too', 'got ' + rates[hiddenIndex].toFixed(1));
     if (opts.freeze) {
-      // The visible machines go on producing inputs (up to 100 ahead) while the hidden tab is stuck. A hidden tab that is
-      // not paced by its own clock hands in what it owes as soon as it runs again and the room catches up; one that is would
-      // supply 40 a second like everybody and leave the room late by the whole stall.
+      // The visible machines go on producing inputs (up to 100 ahead) while the hidden tab is stuck; when it runs again the
+      // game's own lag correction (a slave moves its clock on by the lag it measures, net.c) lets it hand them in faster than
+      // 40 a second, so the room is late by less than the whole stall.
       const v = series[ms.findIndex((m, i) => i !== hiddenIndex)];
       const t0 = (v.find((x) => x[1] >= 300) || [0])[0], t1 = (v.find((x) => x[1] >= 1400) || [0])[0];
       const late = (t1 - t0) / 1000 - (1400 - 300) / NOMINAL;
@@ -485,7 +486,7 @@ SCENARIOS['hidden-slave'] = {
   run: () => hiddenRoom(['browser', 'browser'], 1),
 };
 SCENARIOS['hidden-frozen'] = {
-  what: 'a hidden slave stuck for 3 s mid-game: it hands in the inputs it owes at once and the room catches up (it is not paced by its own clock)',
+  what: 'a hidden slave whose main thread is stuck for 3 s mid-game: the room waits, catches up most of the stall, and every machine agrees',
   run: () => hiddenRoom(['browser', 'browser'], 1, { freeze: 3000 }),
 };
 SCENARIOS['hidden-host'] = {

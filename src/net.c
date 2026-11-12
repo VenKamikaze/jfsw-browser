@@ -808,61 +808,20 @@ AddSyncInfoToPacket(int *j)
         }
     }
 
-static void MasterSendReady(void);
-
 #ifdef __EMSCRIPTEN__
-#include "baselayer.h"
 extern void MoveLoop(void);
 
-// A hidden browser tab in a network game (brief 04). The browser gives it no animation
-// frames and about one timer tick a second, so it is driven by network events (see
-// jfbuild/src/sdlayer2.c) and must not be paced by its own clock: the machines that are
-// visible set the pace. Instead of making one input per synctics of its clock it makes
-// inputs while it is behind the others' (up to HIDDEN_INPUT_LEAD tics ahead of the
-// furthest of them), and sends each one at once. Moves are still made only when every
-// player's input has arrived, so nothing in the simulation depends on this: it only
-// decides when this machine supplies its own input.
-#define HIDDEN_INPUT_LEAD 2
-
-static BOOL
-HiddenWantsInput(void)
-    {
-    int i, most = -1;
-
-    if (!jfbuild_browser_hidden_netgame())
-        return FALSE;
-
-    TRAVERSE_CONNECT(i)
-        {
-        if (i == myconnectindex || Player[i].IsDisconnected)
-            continue;
-        if (Player[i].movefifoend > most)
-            most = Player[i].movefifoend;
-        }
-
-    return most >= 0 && Player[myconnectindex].movefifoend < most + HIDDEN_INPUT_LEAD;
-    }
-
-// One pass of the game loop of a hidden tab: supply inputs (which sends them), receive,
-// move, and again, as long as something moved.
+// One pass of the game loop of a hidden browser tab in a network game (brief 04). The tab has no
+// animation frames and about one timer tick a second, so it is driven by network events (see
+// jfbuild/src/sdlayer2.c) and draws nothing. Drawing is where the engine calls faketimerhandler()
+// (the "timer interrupt" that makes this player's input for each tic and sends it), so the pass
+// calls it itself, then receives and moves as MoveLoop() does. Each input is sent as it is made
+// (netsendpacket -> sendpacket sends at once), not at the next pass.
 VOID
 HiddenNetPass(VOID)
     {
-    int guard, end0, plc0;
-
-    for (guard = 0; guard < 100; guard++)
-        {
-        end0 = Player[myconnectindex].movefifoend;
-        plc0 = movefifoplc;
-
-        faketimerhandler();
-        MoveLoop();
-
-        if (QuitFlag || ExitLevel)
-            break;
-        if (Player[myconnectindex].movefifoend == end0 && movefifoplc == plc0)
-            break;
-        }
+    faketimerhandler();
+    MoveLoop();
     }
 #endif
 
@@ -885,21 +844,8 @@ faketimerhandler(void)
     #endif
 
 	sampletimer();
-#ifdef __EMSCRIPTEN__
-    // hidden tab: not paced by the clock; make this input due now if the others are ahead
-    if (ready2send && CommEnabled && HiddenWantsInput())
-        ototalclock = totalclock - synctics;
-#endif
     if ((totalclock < ototalclock + synctics))
-        {
-#ifdef __EMSCRIPTEN__
-        // hidden master: relay what is ready without waiting for the next input of its own
-        if (ready2send && CommEnabled && myconnectindex == connecthead && !NetBroadcastMode &&
-            jfbuild_browser_hidden_netgame())
-            MasterSendReady();
-#endif
         return;
-        }
 
     if (!ready2send)
         return;
@@ -1138,18 +1084,6 @@ faketimerhandler(void)
     //    }
 
     // I am MASTER...
-    MasterSendReady();
-    }
-
-// The master's part of faketimerhandler(): send every move that all players have now
-// supplied (the combined packet of every player's input) to the slaves. Moved out of
-// faketimerhandler() unchanged so that a hidden browser tab can also run it on its own.
-static void
-MasterSendReady(void)
-    {
-    int i, j;
-    PLAYERp pp;
-
     while (1)
         {
         TRAVERSE_CONNECT(i)
