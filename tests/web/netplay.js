@@ -60,7 +60,7 @@ function relayBinary() {
 // A relay on 127.0.0.1: UDP (native players), WebSocket on /vnet and WebTransport (a development certificate).
 async function startRelay(extra) {
   const args = ['-udp', '127.0.0.1:' + PORT_UDP, '-http', '127.0.0.1:' + PORT_HTTP, '-wt', '127.0.0.1:' + PORT_WT, '-dev-cert',
-    '-origins', '127.0.0.1:' + PORT_WEB, '-v'].concat(extra || []);
+    '-origins', '127.0.0.1:' + PORT_WEB, '-v'].concat(extra || [], (process.env.NETPLAY_RELAY_ARGS || '').split(/\s+/).filter(Boolean));     // (NETPLAY_RELAY_ARGS: extra relay flags, for negative controls)
   const child = spawn(relayBinary(), args, { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   let text = '';
   const relay = { child, log: () => text, cert: '', udp: '127.0.0.1:' + PORT_UDP, ws: 'ws://127.0.0.1:' + PORT_HTTP + '/vnet', wt: 'https://127.0.0.1:' + PORT_WT + '/vnet' };
@@ -434,13 +434,13 @@ async function hiddenRoom(kinds, hiddenIndex, opts) {
     const ms = await room(relay, kinds, { tics: opts.tics || HIDDEN_TICS });
     const h = ms[hiddenIndex];
     let hidden = false, framesAtHide = 0, hiddenLogAtHide = 0, froze = false, fp = null;
-    const series = await sample(ms, opts.tics || HIDDEN_TICS, 200000, async (t, ser) => {
+    const series = await sample(ms, opts.tics || HIDDEN_TICS, HIDDEN_TICS / NOMINAL * 1000 * 2.5 + 40000, async (t, ser) => {
       const tics = ser[hiddenIndex][ser[hiddenIndex].length - 1][1];
       if (!hidden && tics >= 100 && h.kind === 'browser') {
         hidden = true;
         await hide(h.page, true);
         await sleep(300);
-        framesAtHide = await h.page.evaluate(() => Module.jfswFrameLog.length);
+        framesAtHide = await h.page.evaluate(() => Module.jfswShowframes);
         hiddenLogAtHide = await h.page.evaluate(() => Module.jfswHiddenLog.length);
         console.log('  ' + h.name + ' hidden at tic ' + tics);
       }
@@ -451,8 +451,8 @@ async function hiddenRoom(kinds, hiddenIndex, opts) {
       }
     });
     if (fp) { await fp; }
-    for (const m of ms) { await m.waitEnd(60000); }
-    const wakes = await h.page.evaluate(() => ({ wakes: Module.jfswWakes, log: Module.jfswHiddenLog.length, frames: Module.jfswFrameLog.length, reasons: Module.jfswHiddenLog.reduce((a, r) => { a[r] = (a[r] || 0) + 1; return a; }, {}) })).catch(() => null);
+    for (const m of ms) { await m.waitEnd(30000); }
+    const wakes = await h.page.evaluate(() => ({ wakes: Module.jfswWakes, log: Module.jfswHiddenLog.length, frames: Module.jfswShowframes, reasons: Module.jfswHiddenLog.reduce((a, r) => { a[r] = (a[r] || 0) + 1; return a; }, {}) })).catch(() => null);
     await checkGame(ms, opts.tics || HIDDEN_TICS);
     const fromT = opts.freeze ? 700 : FROM;     // (after the stall and the catching up, if there was one)
     const rates = ms.map((m, i) => rate(series[i], fromT, TO));
@@ -474,10 +474,10 @@ async function hiddenRoom(kinds, hiddenIndex, opts) {
       check(late > 0.2, 'and the stall really delayed it (late by ' + late.toFixed(1) + ' s)');
     }
     if (wakes) {
-      console.log('  hidden tab: ' + wakes.wakes + ' wake-ups, ' + wakes.log + ' hidden yields (resumed by: ' + JSON.stringify(wakes.reasons) + '), ' + wakes.frames + ' frame yields (' + framesAtHide + ' when it was hidden)');
+      console.log('  hidden tab: ' + wakes.wakes + ' wake-ups, ' + wakes.log + ' hidden yields (resumed by: ' + JSON.stringify(wakes.reasons) + '), ' + wakes.frames + ' pictures asked for in all (' + framesAtHide + ' when it was hidden)');
       check(wakes.log - hiddenLogAtHide > 200, h.name + ' was driven by hidden-tab passes (' + (wakes.log - hiddenLogAtHide) + ' after it was hidden)');
       check((wakes.reasons[1] || 0) > 0.8 * wakes.log, h.name + ' was resumed by network events, not the timer (' + (wakes.reasons[1] || 0) + ' of ' + wakes.log + ')');
-      check(wakes.frames - framesAtHide < 40, h.name + ' drew no more pictures while hidden (' + (wakes.frames - framesAtHide) + ' frame yields after hiding)');
+      check(wakes.frames - framesAtHide < 20, h.name + ' drew nothing while hidden (' + (wakes.frames - framesAtHide) + ' pictures asked for after hiding, in about 35 s)');
     }
   } finally { await cleanup(relay); }
 }
@@ -523,25 +523,26 @@ SCENARIOS['hidden-local'] = {
 };
 
 // A tab whose main thread is blocked for 5 s in the middle of a game: the room waits, goes on, all agree.
+const FREEZE_MS = +process.env.NETPLAY_FREEZE_MS || 5000;      // (a longer freeze is the negative control: the relay drops a silent member after 15 s)
 async function frozenRoom(kinds, frozenIndex) {
   const relay = await startRelay();
   try {
-    console.log('  ' + kinds.join(' + ') + ', ' + (frozenIndex === 0 ? 'the host' : 'the slave') + ' frozen for 5 s (' + LOAD() + ')');
+    console.log('  ' + kinds.join(' + ') + ', ' + (frozenIndex === 0 ? 'the host' : 'the slave') + ' frozen for ' + FREEZE_MS / 1000 + ' s (' + LOAD() + ')');
     const ms = await room(relay, kinds, { tics: TICS });
     const f = ms[frozenIndex];
     let froze = false, before = [], fp = null, t0 = 0, t1 = 0, tf = 0;
-    const series = await sample(ms, TICS, 200000, async (t, ser) => {
+    const series = await sample(ms, TICS, TICS / NOMINAL * 1000 * 2.5 + FREEZE_MS + 40000, async (t, ser) => {
       const tics = ser[frozenIndex][ser[frozenIndex].length - 1][1];
       if (!froze && tics >= 300) {
         froze = true;
         before = ms.map((m, i) => ser[i][ser[i].length - 1][1]);
         console.log('  freezing ' + f.name + ' at tic ' + tics);
         t0 = now(); tf = t;
-        fp = freeze(f.page, 5000).then(() => { t1 = now(); });     // not awaited: the other machines are watched meanwhile
+        fp = freeze(f.page, FREEZE_MS).then(() => { t1 = now(); });     // not awaited: the other machines are watched meanwhile
       }
     });
     if (fp) { await fp; }
-    for (const m of ms) { await m.waitEnd(60000); }
+    for (const m of ms) { await m.waitEnd(30000); }
     await checkGame(ms, TICS);
     check(froze, 'the tab was frozen in the middle of the game (at tic ' + before[frozenIndex] + ')');
     console.log('  ' + f.name + ' was frozen for ' + ((t1 - t0) / 1000).toFixed(1) + ' s');
@@ -553,8 +554,8 @@ async function frozenRoom(kinds, frozenIndex) {
     for (let k = 1; k < o.length; k++) { if (o[k][1] - o[k - 1][1] <= 3) { run++; stalled = Math.max(stalled, run); } else { run = 0; } }
     const at = (ser, ms_) => { let c = 0; for (const [tt, n] of ser) { if (tt <= ms_) { c = n; } } return c; };
     const adv = at(series[other], tf + (t1 - t0)) - at(series[other], tf);
-    console.log('  ' + ms[other].name + ' moved ' + adv + ' tics in the ' + ((t1 - t0) / 1000).toFixed(1) + ' s the other tab was frozen (it plays on from the inputs already received; nominal ' + (NOMINAL * 5) + ')');
-    check(adv < 0.5 * NOMINAL * 5, ms[other].name + ' (not frozen) could not move on without the frozen player: ' + adv + ' tics in 5 s, not ' + NOMINAL * 5);
+    console.log('  ' + ms[other].name + ' moved ' + adv + ' tics in the ' + ((t1 - t0) / 1000).toFixed(1) + ' s the other tab was frozen (nominal ' + (NOMINAL * FREEZE_MS / 1000) + ')');
+    check(adv < 0.5 * NOMINAL * FREEZE_MS / 1000, ms[other].name + ' (not frozen) could not move on without the frozen player: ' + adv + ' tics in ' + FREEZE_MS / 1000 + ' s, not ' + NOMINAL * FREEZE_MS / 1000);
     check(stalled >= 2, ms[other].name + ' stood still for ' + stalled + ' s in a row');
     check(series[other][series[other].length - 1][1] >= TICS, ms[other].name + ' then played on to tic ' + series[other][series[other].length - 1][1]);
   } finally { await cleanup(relay); }
