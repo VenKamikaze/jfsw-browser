@@ -3127,6 +3127,7 @@ RunLevel(VOID)
     {
     InitRunLevel();
     TestStateStart();       // test-only: with -teststate, the state before the first input (sync.c)
+    TestSlowStart();        // test-only: -testslowstart<ms> (sync.c)
 
     FX_SetVolume(gs.SoundVolume);
     SetSongVolume(gs.MusicVolume);
@@ -3790,6 +3791,11 @@ int app_main(int argc, char const * const argv[])
         if (Bstrncasecmp(arg, "testdump", 8) == 0)
             {
             TestDumpArg(arg+8);     // test-only: this machine's per-tic record of the simulation, to a file
+            }
+        else
+        if (Bstrncasecmp(arg, "testslowstart", 13) == 0)
+            {
+            TestSlowStartArg(atoi(arg+13));     // test-only: wait before the first frame of the level
             }
         else
         if (Bstrncasecmp(arg, "teststate", 9) == 0)

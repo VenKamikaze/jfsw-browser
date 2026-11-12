@@ -401,7 +401,7 @@ async function room(relay, kinds, o) {
     const net = (kind) => (kind === 'browser'
       ? ['-relay', relay.ws].concat(i === 0 ? ['-host-room', String(kinds.length)] : ['-room', code])
       : ['-relay', relay.udp].concat(i === 0 ? ['-host-room', String(kinds.length)] : ['-room', code]));
-    const args = gameArgs({ net: net(kinds[i]), tics, dump: 'd.bin', lag: o.lag ? 'l.bin' : '', nudge: o.nudge && o.nudge[i], autonet: o.autonet, state: o.state });
+    const args = gameArgs({ net: net(kinds[i]), tics, dump: 'd.bin', lag: o.lag ? 'l.bin' : '', nudge: o.nudge && o.nudge[i], autonet: o.autonet, state: o.state, extra: o.extra ? o.extra(i) : [] });
     const impair = o.impair ? o.impair(i) : null;
     let m;
     if (kinds[i] === 'browser') {
@@ -533,9 +533,12 @@ const f1 = (x) => (Number.isFinite(x) ? x.toFixed(1) : 'n/a');
 // "TEST: lag: 1234 datagrams (56789 bytes) to player 1 in 30000 ms" lines -> datagrams a second to each peer
 function datagramRates(out) {
   const r = [];
-  const re = /TEST: lag: (\d+) datagrams \((\d+) bytes\) to player (\d+) in (\d+) ms/g;
+  const re = /TEST: lag: (\d+) datagrams \((\d+) bytes\) to player (\d+) in (\d+) ms(?:: (\d+) with new data, (\d+) paced \(acks and resends only\), (\d+) of those)?/g;
   let m;
-  while ((m = re.exec(out))) { r.push({ to: +m[3], n: +m[1], bytes: +m[2], perSec: +m[1] / Math.max(1, +m[4]) * 1000, bytesPerSec: +m[2] / Math.max(1, +m[4]) * 1000 }); }
+  while ((m = re.exec(out))) {
+    r.push({ to: +m[3], n: +m[1], bytes: +m[2], perSec: +m[1] / Math.max(1, +m[4]) * 1000, bytesPerSec: +m[2] / Math.max(1, +m[4]) * 1000,
+      newData: m[5] === undefined ? NaN : +m[5], paced: m[6] === undefined ? NaN : +m[6], redundant: m[7] === undefined ? NaN : +m[7] });
+  }
   return r;
 }
 
@@ -564,7 +567,8 @@ async function lagGame(label, kinds, o) {
         + '; sendpacket to datagram ' + f1(st.sendwait.med) + ' / ' + f1(st.sendwait.p95) + (i === 0 ? '; last input to combined packet ' + f1(st.fwdwait.med) + ' / ' + f1(st.fwdwait.p95) + ' (mean ' + f1(st.fwdwait.mean) + ')' : '')
         + '; otherminlag ' + st.minlag.med + ' (' + st.minlag.min + '..' + st.minlag.max + '), bufferjitter ' + st.jitter.med + ' (' + st.jitter.min + '..' + st.jitter.max + ')'
         + '; clock corrections after tic 200: ' + st.corrLate + ' clock ticks (' + st.corrections + ' in all)');
-      console.log('    ' + ms[i].name + ' datagrams: ' + rates[i].map((r) => r.perSec.toFixed(1) + '/s to player ' + r.to + ' (' + r.bytesPerSec.toFixed(0) + ' B/s)').join(', '));
+      console.log('    ' + ms[i].name + ' datagrams: ' + rates[i].map((r) => r.perSec.toFixed(1) + '/s to player ' + r.to + ' (' + r.bytesPerSec.toFixed(0) + ' B/s'
+        + (Number.isFinite(r.paced) ? '; of ' + r.n + ': ' + r.newData + ' with new data, ' + r.paced + ' acks/resends only, ' + r.redundant + ' of those just before one with new data' : '') + ')').join(', '));
     }
     console.log('    ' + load);
     return { ms, stats, rates, load };
@@ -593,21 +597,25 @@ SCENARIOS['lag-matrix'] = {
 // Tic 1 (brief 04b). The drawing code keeps scratch values in two fields of the ceiling/floor picture override markers
 // (FAF_DrawRooms, draw.c: the sector's stat and picnum while it draws), which differ between a machine that has drawn one frame
 // and one that has drawn more. Once in about 80 games a machine ran tic 1 after a single frame and the dumps differed in the
-// state hash for the first few tics; the hash now leaves those two fields out (sync.c TestStateHash). -teststate makes it
-// happen in most games: its first dump delays a browser master's first frame, after which it catches up and runs tic 1. Every
-// game must agree record for record and field for field (state dumps at the start and tics 1 to 3), and the case must have
-// occurred in at least one game.
+// state hash for the first few tics; the hash now leaves those two fields out (sync.c TestStateHash). Here every game has that
+// uneven start for certain: the master gets -testslowstart (it waits before its first frame with its clock running; the slave's
+// first input is already there, so that frame makes the master's due inputs, forwards tic 0, and the master runs tic 1 straight
+// after it, while the slave draws frames waiting for it). A slow slave would not do: its tic 1 needs a round trip to the master
+// after its first frame. Every game must agree record for record and field for field (-teststate dumps at the start and tics 1
+// to 3), and in every game the master must have run tic 1 after exactly one frame and the slave after more.
+const SLOW_START_MS = 3000;     // longer than a browser slave takes to write its first state dump (1 to 2 s here)
 SCENARIOS.tic1 = {
-  what: 'machines that drew one frame and many before tic 1 agree, field by field (state dumps at the start and tics 1 to 3)',
+  what: 'a master that drew one frame before tic 1 (-testslowstart) and a slave that drew many agree, record for record and field by field',
   run: async () => {
     const tics = 60;
     let uneven = 0, games = 0;
-    for (const kinds of [['browser', 'native'], ['browser', 'browser']]) {
-      for (let g = 0; g < 3; g++) {
+    const slow = 0;
+    for (const kinds of [['browser', 'native'], ['browser', 'browser'], ['native', 'browser'], ['native', 'native']]) {
+      for (let g = 0; g < 2; g++) {
         const relay = await startRelay();
         try {
-          console.log('  ' + kinds.join(' + ') + ', game ' + (g + 1) + ' (' + LOAD() + ')');
-          const ms = await room(relay, kinds, { tics, state: true });
+          console.log('  ' + kinds.join(' + ') + ', game ' + (g + 1) + ': the master starts ' + SLOW_START_MS + ' ms late (' + LOAD() + ')');
+          const ms = await room(relay, kinds, { tics, state: true, extra: (i) => (i === slow ? ['-testslowstart' + SLOW_START_MS] : []) });
           for (const m of ms) { await m.waitEnd(90000 - (now() - ms[0].started)); }
           await checkGame(ms, tics);
           const st = [];
@@ -615,9 +623,10 @@ SCENARIOS.tic1 = {
           check(st.every(Boolean), 'every machine wrote its state dump');
           if (!st.every(Boolean)) { continue; }
           const frames = st.map((a) => { const f = (w) => +a.get(w + ' global').get('numframes'); return f('t1') - f('start'); });
-          console.log('    frames drawn before tic 1: ' + frames.join(', '));
           games++;
-          if (Math.min(...frames) === 1 && Math.max(...frames) > 1) { uneven++; }
+          const ok = frames[slow] === 1 && frames[1 - slow] > 1;
+          if (ok) { uneven++; }
+          check(ok, 'p' + slow + ' (slow start) ran tic 1 after one frame and p' + (1 - slow) + ' after more (frames drawn before tic 1: ' + frames.join(', ') + ')');
           for (let k = 1; k < ms.length; k++) {
             for (const when of ['start', 't1', 't2', 't3']) {
               const d = stateDifferences(st[0], st[k], when, ms[0].kind !== ms[k].kind);
@@ -627,7 +636,7 @@ SCENARIOS.tic1 = {
         } finally { await cleanup(relay); }
       }
     }
-    check(uneven > 0, 'in at least one game one machine ran tic 1 after a single frame and the other after more (' + uneven + ' of ' + games + ')');
+    check(games === 8 && uneven === games, 'every game had the uneven start (' + uneven + ' of ' + games + ')');
   },
 };
 

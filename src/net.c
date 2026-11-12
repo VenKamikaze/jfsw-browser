@@ -827,7 +827,11 @@ extern void MoveLoop(void);
 //     frames and would send the input at the next network event. Brief 04 ended the pass with a
 //     flush for that; since brief 04b faketimerhandler() flushes every input (and the master's
 //     combined packet) as it is queued, in every tab (SendInputNow below), so the pass needs no
-//     flush of its own (the hidden-tab tests measured the same without it).
+//     flush of its own (the hidden-tab tests measured the same without it). A pass therefore
+//     flushes once per input it makes (and on the master once per receive pass that completes a
+//     tic): bounded by the at most 9 faketimerhandler() calls above, each making at most one input
+//     and calling getpackets() once, plus MoveLoop()'s getpackets(); so at most about 19 flushes,
+//     each one datagram per peer, and only on a catch-up pass after the tab was held back.
 VOID
 HiddenNetPass(VOID)
     {
@@ -850,7 +854,9 @@ HiddenNetPass(VOID)
 static void
 SendInputNow(void)
     {
+    if (TestLagOn) TestLagFlushing(1);
     mmulti_vnet_flush();
+    if (TestLagOn) TestLagFlushing(0);
     }
 
 // The master hands every tic for which all inputs (its own and every slave's) are in to the
@@ -858,8 +864,11 @@ SendInputNow(void)
 // before, and from getpackets() as soon as it has stored a slave's input, so a tic whose last
 // missing input was a slave's goes out then, not at the master's next own input (up to 25 ms
 // later). It builds the packet in packbuf, so it must not run while getpackets() is still
-// reading a datagram into that buffer: getpackets() calls it after its receive loop. The
-// packets and their order are the same whichever place sends them.
+// reading a datagram into that buffer: getpackets() calls it after its receive loop. The inputs
+// in each packet and the order of the tics are the same whichever place sends them; the bytes
+// that depend on when the master sends follow its timing, as they always did: the lag-correction
+// bytes of every TIMERUPDATESIZ-th tic (each slave's myminlag measured so far) and how many of the
+// master's sync records go in each packet (AddSyncInfoToPacket, up to 4, as many as are ready).
 static void
 MasterForward(void)
     {
@@ -1224,6 +1233,7 @@ getpackets(VOID)
     if (!CommEnabled)
         return;
 
+    if (TestLagOn) TestLagPassStart();
     while ((packbufleng = netgetpacket(&otherconnectindex, packbuf)) > 0)
         {
         switch (packbuf[0])

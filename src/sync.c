@@ -31,7 +31,12 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "names2.h"
 #include "net.h"
 #include "mmulti_vnet.h"
+#ifndef _WIN32
 #include <time.h>
+#endif
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 #include "menus.h"
 
 BOOL SyncPrintMode = TRUE;
@@ -729,13 +734,13 @@ static const char *TestPtr(const void *p, char *buf)
     else if (c >= (const char *)Player && c < (const char *)&Player[MAX_SW_PLAYERS_REG + 1])
         sprintf(buf, "player%d+%d", (int)((c - (const char *)Player) / sizeof(PLAYER)), (int)((c - (const char *)Player) % sizeof(PLAYER)));
     else
-        sprintf(buf, "%ld@", (long)(c - (const char *)&randomseed));
+        sprintf(buf, "%lld@", (long long)(c - (const char *)&randomseed));
     return buf;
     }
 
-static long TestCode(const void *fn)
+static long long TestCode(const void *fn)
     {
-    return fn ? (long)((const char *)fn - (const char *)TestPtr) : 0;
+    return fn ? (long long)((const char *)fn - (const char *)TestPtr) : 0;
     }
 
 static void TestStateFull(const char *when)
@@ -771,7 +776,7 @@ static void TestStateFull(const char *when)
     TRAVERSE_CONNECT(i)
         {
         pp = Player + i;
-        fprintf(f, "%s player %d posx=%d posy=%d posz=%d oposx=%d oposy=%d oposz=%d oang=%d ohoriz=%d lv_sectnum=%d lv_x=%d lv_y=%d lv_z=%d jump_count=%d jump_speed=%d down_speed=%d up_speed=%d z_speed=%d oz_speed=%d climb_ndx=%d hiz=%d loz=%d ceiling_dist=%d floor_dist=%d hi_sectp=%s lo_sectp=%s hi_sp=%s lo_sp=%s xvect=%d yvect=%d oxvect=%d oyvect=%d friction=%d slide_xvect=%d slide_yvect=%d slide_ang=%d slide_dec=%d drive_angvel=%d drive_oangvel=%d pang=%d cursectnum=%d lastcursectnum=%d turn180_target=%d horizbase=%d horiz=%d horizoff=%d hvel=%d tilt=%d tilt_dest=%d recoil_amt=%d recoil_speed=%d recoil_ndx=%d recoil_horizoff=%d oldposx=%d oldposy=%d oldposz=%d RevolveX=%d RevolveY=%d RevolveDeltaAng=%d RevolveAng=%d PlayerSprite=%d PlayerUnderSprite=%d pnum=%d LadderSector=%d LadderAngle=%d lx=%d ly=%d JumpDuration=%d WadeDepth=%d bob_amt=%d bob_ndx=%d bcnt=%d bob_z=%d movefifoend=%d Flags=%x Flags2=%x KeyPressFlags=%x DoPlayerAction=%ld@ sop_control=%s sop_riding=%s sop_remote=%s sop=%s WpnFlags=%x WpnNum=%d WpnAmmo0=%d WpnAmmo1=%d WpnAmmo2=%d Armor=%d MaxHealth=%d InventoryNum=%d DiveTics=%d Kills=%d FadeTics=%d FadeAmt=%d NightVision=%d Heads=%d HitBy=%d Reverb=%d IsDisconnected=%d input=%d,%d,%d,%d,%x\n",
+        fprintf(f, "%s player %d posx=%d posy=%d posz=%d oposx=%d oposy=%d oposz=%d oang=%d ohoriz=%d lv_sectnum=%d lv_x=%d lv_y=%d lv_z=%d jump_count=%d jump_speed=%d down_speed=%d up_speed=%d z_speed=%d oz_speed=%d climb_ndx=%d hiz=%d loz=%d ceiling_dist=%d floor_dist=%d hi_sectp=%s lo_sectp=%s hi_sp=%s lo_sp=%s xvect=%d yvect=%d oxvect=%d oyvect=%d friction=%d slide_xvect=%d slide_yvect=%d slide_ang=%d slide_dec=%d drive_angvel=%d drive_oangvel=%d pang=%d cursectnum=%d lastcursectnum=%d turn180_target=%d horizbase=%d horiz=%d horizoff=%d hvel=%d tilt=%d tilt_dest=%d recoil_amt=%d recoil_speed=%d recoil_ndx=%d recoil_horizoff=%d oldposx=%d oldposy=%d oldposz=%d RevolveX=%d RevolveY=%d RevolveDeltaAng=%d RevolveAng=%d PlayerSprite=%d PlayerUnderSprite=%d pnum=%d LadderSector=%d LadderAngle=%d lx=%d ly=%d JumpDuration=%d WadeDepth=%d bob_amt=%d bob_ndx=%d bcnt=%d bob_z=%d movefifoend=%d Flags=%x Flags2=%x KeyPressFlags=%x DoPlayerAction=%lld@ sop_control=%s sop_riding=%s sop_remote=%s sop=%s WpnFlags=%x WpnNum=%d WpnAmmo0=%d WpnAmmo1=%d WpnAmmo2=%d Armor=%d MaxHealth=%d InventoryNum=%d DiveTics=%d Kills=%d FadeTics=%d FadeAmt=%d NightVision=%d Heads=%d HitBy=%d Reverb=%d IsDisconnected=%d input=%d,%d,%d,%d,%x\n",
             when, i, pp->posx, pp->posy, pp->posz, pp->oposx, pp->oposy, pp->oposz, pp->oang, pp->ohoriz, pp->lv_sectnum, pp->lv_x, pp->lv_y, pp->lv_z,
             pp->jump_count, pp->jump_speed, pp->down_speed, pp->up_speed, pp->z_speed, pp->oz_speed, pp->climb_ndx, pp->hiz, pp->loz, pp->ceiling_dist, pp->floor_dist,
             TestPtr(pp->hi_sectp, b1), TestPtr(pp->lo_sectp, b2), TestPtr(pp->hi_sp, b3), TestPtr(pp->lo_sp, b4),
@@ -798,7 +803,7 @@ static void TestStateFull(const char *when)
         u = User[i];
         if (!u)
             continue;
-        fprintf(f, "%s user %d State=%s Rot=%s StateStart=%s StateEnd=%s ActorActionFunc=%ld@ ActorActionSet=%s Personality=%s Attrib=%s sop_parent=%s ox=%d oy=%d oz=%d Flags=%x Flags2=%x Tics=%d RotNum=%d ID=%d Health=%d MaxHealth=%d LastDamage=%d PainThreshold=%d jump_speed=%d jump_grav=%d ceiling_dist=%d floor_dist=%d lo_step=%d hiz=%d loz=%d zclip=%d active_range=%d SpriteNum=%d Attach=%d SpriteP=%s PlayerP=%s Sibling=%d xchange=%d ychange=%d zchange=%d z_tgt=%d vel_tgt=%d vel_rate=%d speed=%d Counter=%d Counter2=%d Counter3=%d DamageTics=%d BladeDamageTics=%d WpnGoal=%d Radius=%u OverlapZ=%d flame=%d tgt_sp=%s scale_speed=%d scale_value=%d scale_tgt=%d DistCheck=%d Dist=%d TargetDist=%d WaitTics=%d track=%d point=%d track_dir=%d track_vel=%d slide_ang=%d slide_vel=%d slide_dec=%d wait_active_check=%d inactive_time=%d sx=%d sy=%d sz=%d sang=%d spal=%d ret=%d Flag1=%d LastWeaponNum=%d WeaponNum=%d bounce=%d ShellNum=%d FlagOwner=%d Vis=%d DidAlert=%d\n",
+        fprintf(f, "%s user %d State=%s Rot=%s StateStart=%s StateEnd=%s ActorActionFunc=%lld@ ActorActionSet=%s Personality=%s Attrib=%s sop_parent=%s ox=%d oy=%d oz=%d Flags=%x Flags2=%x Tics=%d RotNum=%d ID=%d Health=%d MaxHealth=%d LastDamage=%d PainThreshold=%d jump_speed=%d jump_grav=%d ceiling_dist=%d floor_dist=%d lo_step=%d hiz=%d loz=%d zclip=%d active_range=%d SpriteNum=%d Attach=%d SpriteP=%s PlayerP=%s Sibling=%d xchange=%d ychange=%d zchange=%d z_tgt=%d vel_tgt=%d vel_rate=%d speed=%d Counter=%d Counter2=%d Counter3=%d DamageTics=%d BladeDamageTics=%d WpnGoal=%d Radius=%u OverlapZ=%d flame=%d tgt_sp=%s scale_speed=%d scale_value=%d scale_tgt=%d DistCheck=%d Dist=%d TargetDist=%d WaitTics=%d track=%d point=%d track_dir=%d track_vel=%d slide_ang=%d slide_vel=%d slide_dec=%d wait_active_check=%d inactive_time=%d sx=%d sy=%d sz=%d sang=%d spal=%d ret=%d Flag1=%d LastWeaponNum=%d WeaponNum=%d bounce=%d ShellNum=%d FlagOwner=%d Vis=%d DidAlert=%d\n",
             when, i, TestPtr(u->State, b1), TestPtr(u->Rot, b2), TestPtr(u->StateStart, b3), TestPtr(u->StateEnd, b4),
             TestCode((const void *)u->ActorActionFunc), TestPtr(u->ActorActionSet, b5), TestPtr(u->Personality, b6), "-", "-",
             u->ox, u->oy, u->oz, u->Flags, u->Flags2, u->Tics, u->RotNum, u->ID, u->Health, u->MaxHealth, u->LastDamage, u->PainThreshold, u->jump_speed, u->jump_grav,
@@ -865,6 +870,42 @@ static void TestStateFull(const char *when)
 void TestStateStart(void)
     {
     TestStateFull("start");
+    }
+
+// -testslowstart<ms> (test-only, brief 04b): this machine waits <ms> milliseconds when RunLevel
+// starts, before its first frame, with its clock running. Its first frame then makes every input
+// that has fallen due, the others' inputs are already here, and it runs tic 1 straight after that
+// single frame, while the other machines have drawn many: the uneven start of the tic 1 case,
+// made certain (the tic1 scenario; on the master: a slave's tic 1 needs a round trip after its first
+// frame). It changes nothing but when this machine starts.
+static int TestSlowStartMs;
+
+void TestSlowStartArg(int ms)
+    {
+    TestSlowStartMs = ms;
+    }
+
+void TestSlowStart(void)
+    {
+#ifndef __EMSCRIPTEN__
+    unsigned int t0;
+#endif
+
+    if (TestSlowStartMs <= 0)
+        return;
+    buildprintf("TEST: waiting %d ms before the first frame\n", TestSlowStartMs);
+    // what waitforeverybody() last queued may still be held by mmulti's send window; let it out
+    // first, or the others would wait in theirs until this machine polls again after the wait
+    mmulti_vnet_flush();
+#ifdef __EMSCRIPTEN__
+    // in the browser by yielding (ASYNCIFY): a busy wait would also stop other pages that share
+    // the renderer process, the other players of a test among them
+    emscripten_sleep(TestSlowStartMs);
+#else
+    t0 = getticks();
+    while ((int)(getticks() - t0) < TestSlowStartMs)
+        ;
+#endif
     }
 
 static void TestStateTic(void)
@@ -950,13 +991,34 @@ static unsigned int TestLagQT[16][TESTLAG_Q];
 static int TestLagQIdx[16][TESTLAG_Q];
 static int TestLagQHW[16];
 static unsigned int TestLagDgrams[16], TestLagDBytes[16], TestLagDFirst[16], TestLagDLast[16];
+// what kind of datagram (brief 04b review N2): one that carries a new input or combined packet (sent
+// by sendpacket() itself or by the flush after it, SendInputNow), or one paced by mmulti's window
+// with only acknowledgements and resends (from getpacket()); and how many of the paced ones went in
+// the same getpackets() pass as a new-data one that came after them (that one carries the same
+// acknowledgements and every unacknowledged packet, so the paced one was redundant)
+static unsigned int TestLagDFlushed[16], TestLagDPaced[16], TestLagDRedundant[16];
+static int TestLagInFlush, TestLagPass, TestLagPacedPass[16];
+
+#ifdef _WIN32
+// kernel32's high resolution counter, declared as windows.h declares it (BOOL WINAPI, LARGE_INTEGER *)
+// so that this file need not include windows.h. MSVC has no clock_gettime.
+__declspec(dllimport) int __stdcall QueryPerformanceCounter(union _LARGE_INTEGER *);
+__declspec(dllimport) int __stdcall QueryPerformanceFrequency(union _LARGE_INTEGER *);
+#endif
 
 static unsigned int TestLagNow(void)
     {
-    struct timespec ts;
     unsigned long long t;
+#ifdef _WIN32
+    long long c = 0, fr = 0;
+    QueryPerformanceCounter((union _LARGE_INTEGER *)&c);
+    QueryPerformanceFrequency((union _LARGE_INTEGER *)&fr);
+    t = fr > 0 ? (unsigned long long)(c / fr) * 1000000ull + (unsigned long long)(c % fr) * 1000000ull / (unsigned long long)fr : 0;
+#else
+    struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     t = (unsigned long long)ts.tv_sec * 1000000ull + ts.tv_nsec / 1000;
+#endif
     if (!TestLagBase)
         TestLagBase = t;
     return (unsigned int)(t - TestLagBase);
@@ -978,6 +1040,20 @@ static void TestLagSendHook(int other, int ocnt1, int nbytes)
     TestLagDgrams[o]++;
     TestLagDBytes[o] += nbytes;
     TestLagDLast[o] = t;
+    if (TestLagInFlush || TestLagCurIdx >= 0)       // carries a new input or combined packet
+        {
+        TestLagDFlushed[o]++;
+        if (TestLagPacedPass[o] == TestLagPass)
+            {
+            TestLagDRedundant[o]++;
+            TestLagPacedPass[o] = 0;
+            }
+        }
+    else
+        {
+        TestLagDPaced[o]++;
+        TestLagPacedPass[o] = TestLagPass;
+        }
     for (i = TestLagQHW[o]; i < ocnt1; i++)
         {
         int idx = TestLagQIdx[o][i & (TESTLAG_Q - 1)];
@@ -987,6 +1063,17 @@ static void TestLagSendHook(int other, int ocnt1, int nbytes)
         }
     if (ocnt1 > TestLagQHW[o])
         TestLagQHW[o] = ocnt1;
+    }
+
+// getpackets() begins (a new pass), and SendInputNow() flushes (on = 1) or has flushed (on = 0).
+void TestLagPassStart(void)
+    {
+    TestLagPass++;
+    }
+
+void TestLagFlushing(int on)
+    {
+    TestLagInFlush = on;
     }
 
 void TestLagArg(const char *name)
@@ -1130,8 +1217,9 @@ void TestLagReport(void)
             TestLagWrite((movefifoplc - 1 - i) & (MOVEFIFOSIZ - 1));
     for (p = connecthead; p >= 0; p = connectpoint2[p])
         if (p != myconnectindex && TestLagDgrams[p & 15])
-            buildprintf("TEST: lag: %u datagrams (%u bytes) to player %d in %u ms\n", TestLagDgrams[p & 15], TestLagDBytes[p & 15],
-                p, (TestLagDLast[p & 15] - TestLagDFirst[p & 15]) / 1000);
+            buildprintf("TEST: lag: %u datagrams (%u bytes) to player %d in %u ms: %u with new data, %u paced (acks and resends only), %u of those just before one with new data in the same receive pass\n",
+                TestLagDgrams[p & 15], TestLagDBytes[p & 15], p, (TestLagDLast[p & 15] - TestLagDFirst[p & 15]) / 1000,
+                TestLagDFlushed[p & 15], TestLagDPaced[p & 15], TestLagDRedundant[p & 15]);
     }
 
 void TestTicHook(void)
