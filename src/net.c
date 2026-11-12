@@ -823,11 +823,11 @@ extern void MoveLoop(void);
 //     times a frame, never ahead of it. Otherwise the pass rate would cap the tic rate.
 //   * sendpacket() queues the input at once, but mmulti puts at most one datagram per peer on the
 //     wire every 25 ms (PAKRATE, dosendpackets), and getpackets() (called by faketimerhandler()
-//     before the input is made) can use that window for an acknowledgement. A visible tab comes
-//     round again at the next frame; a hidden tab has no frames and would send the input at the
-//     next network event. So the pass ends by flushing what mmulti holds back
-//     (mmulti_vnet_flush: sends now, ignoring the window). The datagram rate stays bounded by the
-//     pass rate, which follows the rate of network events.
+//     before the input is made) can use that window for an acknowledgement. A hidden tab has no
+//     frames and would send the input at the next network event. Brief 04 ended the pass with a
+//     flush for that; since brief 04b faketimerhandler() flushes every input (and the master's
+//     combined packet) as it is queued, in every tab (SendInputNow below), so the pass needs no
+//     flush of its own (the hidden-tab tests measured the same without it).
 VOID
 HiddenNetPass(VOID)
     {
@@ -837,7 +837,6 @@ HiddenNetPass(VOID)
     for (n = 0; n < 8 && totalclock >= ototalclock + synctics; n++)
         faketimerhandler();
     MoveLoop();
-    mmulti_vnet_flush();
     }
 #endif
 
