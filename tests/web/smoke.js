@@ -6,6 +6,7 @@
 //   SMOKE_SABOTAGE=blank node tests/web/smoke.js   # hides the canvas: the picture checks must FAIL
 //   SMOKE_SABOTAGE=nokey node tests/web/smoke.js   # presses no key: the keyboard check must FAIL
 //   SMOKE_SABOTAGE=noesc node tests/web/smoke.js   # the pointer is released like the game does it: the Escape check must FAIL
+//   SMOKE_SABOTAGE=unlockedmouse node tests/web/smoke.js   # mouse motion reaches the game while unlocked: the view check must FAIL
 //   SMOKE_SHOT=file.png                            # also save a screenshot of the page
 //
 // Loads the page with ?test=1, clicks "Click to start", gets to the main menu and checks that the
@@ -19,6 +20,7 @@ const PORT = 48101;
 const SABOTAGE = process.env.SMOKE_SABOTAGE === 'blank';
 const SABOTAGE_NOESC = process.env.SMOKE_SABOTAGE === 'noesc';   // release the pointer the way the game does: no Escape reaches it, that check must FAIL
 const SABOTAGE_NOKEY = process.env.SMOKE_SABOTAGE === 'nokey';   // do not press the key: the key check must FAIL
+const SABOTAGE_UNLOCKEDMOUSE = process.env.SMOKE_SABOTAGE === 'unlockedmouse';   // let unlocked mouse motion reach the game: the view check must FAIL
 
 async function main() {
   const env = await t.start(PORT);
@@ -133,6 +135,12 @@ async function main() {
       const ctrl = await t.changedPixels(e.page, MENU, () => e.page.evaluate(() => document.exitPointerLock()), 800);
       t.check(ctrl < 30000, `a release asked for by the game does not open the menu (${ctrl} pixels changed; ${byItself} by themselves)`);
       t.check(!(await e.page.evaluate(() => !!document.pointerLockElement)), 'the pointer was released');
+      // (a2) with the pointer released, the mouse is not the game's: moving it over the picture must not turn the view.
+      // (SDL keeps relative mode on and turns absolute positions into relative motion when the pointer is not locked.)
+      const sweep = async () => { await e.page.mouse.move(200, 250, { steps: 4 }); await e.page.mouse.move(800, 350, { steps: 8 }); await e.page.mouse.move(500, 300, { steps: 4 }); };
+      const VIEW = { x: 20, y: 10, width: 960, height: 540 };   // the 3D view above the status bar
+      const swept = await t.changedPixels(e.page, VIEW, SABOTAGE_UNLOCKEDMOUSE ? () => e.page.evaluate(() => { window.jfswTest.passUnlockedMouse = true; }).then(sweep) : sweep, 800);
+      t.check(swept < 2000, `moving the mouse while the pointer is released does not turn the view (${swept} pixels changed)`);
       t.check(await lock(), 'a click locks the pointer again');
       await e.page.waitForTimeout(2000);    // the click also swung the fist
       // (b) the browser takes the pointer (as for Escape): the page passes an Escape on and the menu opens
