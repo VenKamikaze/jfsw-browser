@@ -6,6 +6,7 @@
 //   SMOKE_SABOTAGE=blank node tests/web/smoke.js   # hides the canvas: the picture checks must FAIL
 //   SMOKE_SABOTAGE=nokey node tests/web/smoke.js   # presses no key: the keyboard check must FAIL
 //   SMOKE_SABOTAGE=noesc node tests/web/smoke.js   # the pointer is released like the game does it: the Escape check must FAIL
+//   SMOKE_SABOTAGE=unlockedmouse node tests/web/smoke.js   # mouse motion reaches the game while unlocked: the view check must FAIL
 //   SMOKE_SHOT=file.png                            # also save a screenshot of the page
 //
 // Loads the page with ?test=1, clicks "Click to start", gets to the main menu and checks that the
@@ -19,6 +20,7 @@ const PORT = 48101;
 const SABOTAGE = process.env.SMOKE_SABOTAGE === 'blank';
 const SABOTAGE_NOESC = process.env.SMOKE_SABOTAGE === 'noesc';   // release the pointer the way the game does: no Escape reaches it, that check must FAIL
 const SABOTAGE_NOKEY = process.env.SMOKE_SABOTAGE === 'nokey';   // do not press the key: the key check must FAIL
+const SABOTAGE_UNLOCKEDMOUSE = process.env.SMOKE_SABOTAGE === 'unlockedmouse';   // let unlocked mouse motion reach the game: the view check must FAIL
 
 async function main() {
   const env = await t.start(PORT);
@@ -72,20 +74,61 @@ async function main() {
     t.check(t.notBlank(stats), `the canvas is not blank (${stats.colors} colours, ${stats.width}x${stats.height})`, JSON.stringify(stats));
     if (SABOTAGE) { await page.evaluate(() => { document.getElementById('canvas').style.opacity = ''; }); }
 
-    // Skip the intro screens and get to the main menu: any key skips one.
+    // Skip the intro screens and get to the main menu: any key skips one (and opens the menu at the title
+    // screen). Not Space or Enter: in the menu they select, and a few too many started a level (New Game,
+    // episode, skill), after which the menu checks below were looking at the 3D view. Shift does nothing there.
     const menuLog = () => page.evaluate(() => window.jfswOut.join('\n'));
-    for (let i = 0; i < 12; i++) { await page.keyboard.press('Space'); await page.waitForTimeout(700); }
+    for (let i = 0; i < 12; i++) { await page.keyboard.press('ShiftLeft'); await page.waitForTimeout(700); }
     await page.waitForTimeout(1500);
     const menu1 = await t.canvasStats(page);
     t.check(t.notBlank(menu1), `the main menu is drawn (${menu1.colors} colours)`);
-    // The keyboard drives the menu: Down moves the cursor (the little yin-yang left of the items). The menu
-    // animates by itself, so count the pixels that change in the cursor's column with and without the key.
-    const CURSOR = { x: 90, y: 90, width: 90, height: 370 };
-    const idle = await t.changedPixels(page, CURSOR, null, 800);
-    const moved = await t.changedPixels(page, CURSOR, SABOTAGE_NOKEY ? null : () => t.tap(page, 'ArrowDown'), 800);
-    t.check(moved > 300 && moved > 3 * idle + 100, `Down moves the menu cursor (${moved} pixels changed in the cursor column; ${idle} with no key)`);
-    await t.tap(page, 'ArrowUp');
-    await page.waitForTimeout(800);
+    // The menu cursor is a spinning coin left of the items (New Game, Load Game, Save Game, Options, How to Order,
+    // Quit; 62 page pixels apart). Find the row it is on from one screenshot of the cursor column: the band with
+    // the light pixels of the coin (none at all when the coin is edge-on: then the answer is 0, unknown).
+    const COLUMN = { x: 95, y: 100, width: 80, height: 372 };
+    const decoder = await context.newPage();
+    const cursorRow = async () => {
+      const png = await page.screenshot({ clip: COLUMN, type: 'png' });
+      const counts = await decoder.evaluate(async (data) => {
+        const bmp = await createImageBitmap(await (await fetch('data:image/png;base64,' + data)).blob());
+        const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+        const g = c.getContext('2d'); g.drawImage(bmp, 0, 0);
+        const px = g.getImageData(0, 0, c.width, c.height).data;
+        const n = [0, 0, 0, 0, 0, 0];
+        for (let i = 0; i < px.length; i += 4) {
+          if (px[i] + px[i + 1] + px[i + 2] > 520) { n[Math.min(5, Math.floor(Math.floor(i / 4 / c.width) * 372 / c.height / 62))]++; }
+        }
+        return n;
+      }, png.toString('base64'));
+      const best = counts.indexOf(Math.max(...counts));
+      const others = counts.reduce((a, c, i) => (i === best ? a : a + c), 0);
+      return { row: counts[best] >= 30 && counts[best] > 4 * others ? best + 1 : 0, counts: counts.join(',') };
+    };
+    const settledRow = async () => {     // a few looks, so that an edge-on coin does not count
+      let r = { row: 0, counts: '' };
+      for (let k = 0; k < 6 && !r.row; k++) { r = await cursorRow(); if (!r.row) { await page.waitForTimeout(60); } }
+      return r;
+    };
+    const c0 = await settledRow();
+    t.check(c0.row === 1, `the main menu is open with the cursor on New Game (row ${c0.row}; light pixels per row ${c0.counts})`);
+    // The keyboard drives the menu: Down moves the cursor down, Up moves it up (the list wraps round). The menu
+    // reads the arrows' state, not presses: it looks at them when 10 clock tics have passed since its last look
+    // (REPEAT_DELAY and limitmove in src/menus.c, the original game's behaviour), about every 100 ms, or once per
+    // pass of its loop when frames are slower than that. A 150 ms press therefore spans one or two of those looks
+    // (if the game draws more than about 7 frames a second), so it moves the cursor one or two rows; never none,
+    // never three. A fixed 200 ms press moved it two rows, sometimes three. (Watching the cursor and letting go
+    // when it moves is no good: one look at the page takes about 450 ms here.)
+    const press = async (key) => {
+      await t.tap(page, key, 150);
+      await page.waitForTimeout(500);
+      return settledRow();
+    };
+    const steps = (from, to) => (to - from + 6) % 6;      // rows moved down, with the wrap
+    const c1 = SABOTAGE_NOKEY ? await settledRow() : await press('ArrowDown');
+    t.check(c0.row && c1.row && [1, 2].includes(steps(c0.row, c1.row)), `Down moves the menu cursor down (row ${c0.row} to ${c1.row}; light pixels per row ${c1.counts})`);
+    const c2 = await press('ArrowUp');
+    t.check(c1.row && c2.row && [1, 2].includes(steps(c2.row, c1.row)), `Up moves it up (row ${c1.row} to ${c2.row}; light pixels per row ${c2.counts})`);
+    await decoder.close();
     t.check(t.notBlank(await t.canvasStats(page)), 'the menu is still drawn after the key presses');
 
     // The game goes on running: frames keep being presented.
@@ -133,6 +176,12 @@ async function main() {
       const ctrl = await t.changedPixels(e.page, MENU, () => e.page.evaluate(() => document.exitPointerLock()), 800);
       t.check(ctrl < 30000, `a release asked for by the game does not open the menu (${ctrl} pixels changed; ${byItself} by themselves)`);
       t.check(!(await e.page.evaluate(() => !!document.pointerLockElement)), 'the pointer was released');
+      // (a2) with the pointer released, the mouse is not the game's: moving it over the picture must not turn the view.
+      // (SDL keeps relative mode on and turns absolute positions into relative motion when the pointer is not locked.)
+      const sweep = async () => { await e.page.mouse.move(200, 250, { steps: 4 }); await e.page.mouse.move(800, 350, { steps: 8 }); await e.page.mouse.move(500, 300, { steps: 4 }); };
+      const VIEW = { x: 20, y: 10, width: 960, height: 540 };   // the 3D view above the status bar
+      const swept = await t.changedPixels(e.page, VIEW, SABOTAGE_UNLOCKEDMOUSE ? () => e.page.evaluate(() => { window.jfswTest.passUnlockedMouse = true; }).then(sweep) : sweep, 800);
+      t.check(swept < 2000, `moving the mouse while the pointer is released does not turn the view (${swept} pixels changed)`);
       t.check(await lock(), 'a click locks the pointer again');
       await e.page.waitForTimeout(2000);    // the click also swung the fist
       // (b) the browser takes the pointer (as for Escape): the page passes an Escape on and the menu opens

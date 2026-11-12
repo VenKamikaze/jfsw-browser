@@ -23,7 +23,8 @@
 // shows the progress, the messages and the "use your own copy" picker.
 //
 // Test hooks, with ?test=1: window.jfswTest = { FS, readFile(name), writeFile(name, bytes),
-// listFiles(), start() }; Module.jfswFrameLog (see sdlayer2.c) is an array of frame times;
+// listFiles(), start(), passUnlockedMouse (set it true to let mouse motion reach the game while the pointer
+// is not locked, as before the fix; for the smoke test's sabotage run) }; Module.jfswFrameLog (see sdlayer2.c) is an array of frame times;
 // window.jfswOut holds every line the game printed; window.jfswExit is set when it ends.
 (function () {
   'use strict';
@@ -486,6 +487,23 @@
     window.dispatchEvent(new KeyboardEvent('keydown', init));
     // Held long enough for the game's next pass over its input.
     setTimeout(function () { window.dispatchEvent(new KeyboardEvent('keyup', init)); }, 100);
+  });
+
+  // The game keeps SDL in relative mouse mode. While SDL thinks the pointer is not locked, it turns every
+  // mousemove, mouseenter and mouseleave on the canvas into an absolute position and reports the jump from the
+  // last position it knew as relative motion, so a mouse moving over the picture, or the enter or leave the
+  // browser sends as the lock starts or ends, turns the player's view. The game reads only relative motion, so
+  // those events are the game's only while the pointer is locked. SDL learns of the lock from pointerlockchange,
+  // which can come after document.pointerLockElement has changed and after an enter or leave for the same
+  // change: hence our own copy of what SDL was last told.
+  var sdlSeesLock = false;
+  document.addEventListener('pointerlockchange', function () { sdlSeesLock = !!document.pointerLockElement; });
+  ['mousemove', 'mouseenter', 'mouseleave'].forEach(function (type) {
+    window.addEventListener(type, function (e) {
+      if (e.target !== canvas || (sdlSeesLock && document.pointerLockElement === canvas)) { return; }
+      if (TEST && window.jfswTest && window.jfswTest.passUnlockedMouse) { return; }
+      e.stopPropagation();
+    }, true);
   });
 
   // ---- Test hooks -------------------------------------------------------------------------------------
