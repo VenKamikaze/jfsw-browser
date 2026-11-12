@@ -920,12 +920,15 @@ SCENARIOS['old-new'] = {
   run: async () => {
     if (!process.env.NETPLAY_OLD_SW || !process.env.NETPLAY_OLD_WASM) { check(false, 'old-new needs NETPLAY_OLD_SW and NETPLAY_OLD_WASM'); return; }
     const tics = 60;
-    for (const [kinds, old] of [[['native', 'native'], 0], [['native', 'native'], 1], [['browser', 'browser'], 0], [['browser', 'browser'], 1],
-      [['browser', 'native'], 0], [['browser', 'native'], 1], [['native', 'browser'], 0], [['native', 'browser'], 1]]) {
+    // E1L1, and E1L3 (six override sectors, and two FLOOR_SLOPE_DONT_DRAW sectors whose slope bit the map already has)
+    const E1L3 = '-autonet 2,2,2,1,0,0,0,0,0,0';
+    for (const [kinds, old, autonet] of [[['native', 'native'], 0], [['native', 'native'], 1], [['browser', 'browser'], 0], [['browser', 'browser'], 1],
+      [['browser', 'native'], 0], [['browser', 'native'], 1], [['native', 'browser'], 0], [['native', 'browser'], 1],
+      [['native', 'native'], 0, E1L3], [['browser', 'native'], 1, E1L3], [['native', 'browser'], 0, E1L3]]) {
       const relay = await startRelay();
       try {
-        console.log('  ' + kinds.map((k, i) => k + (i === old ? ' (old)' : ' (new)')).join(' + ') + ' (' + LOAD() + ')');
-        const ms = await room(relay, kinds, { tics, state: true,
+        console.log('  ' + kinds.map((k, i) => k + (i === old ? ' (old)' : ' (new)')).join(' + ') + (autonet ? ', E1L3' : ', E1L1') + ' (' + LOAD() + ')');
+        const ms = await room(relay, kinds, { tics, state: true, autonet,
           machine: (i) => (i === old ? (kinds[i] === 'browser' ? { old: true } : { sw: process.env.NETPLAY_OLD_SW }) : {}) });
         for (const m of ms) { await m.waitEnd(90000 - (now() - ms[0].started)); }
         await checkGame(ms, tics);
@@ -939,7 +942,7 @@ SCENARIOS['old-new'] = {
         }
         const d = stateDifferences(st[0], st[1], 'start', true);
         const want = overridePlanes(st[old], 'start').map((p) => 'sec ' + p.sector + ' ' + p.plane).sort();
-        const got = d.map((x) => x.split(':')[0]).sort();
+        const got = d.map((x) => x.split(':')[0]).filter((x) => x !== 'hash list').sort();     // (the state hash covers those bits)
         console.log('  at the start: ' + d.join('; '));
         check(want.length > 0 && JSON.stringify(got) === JSON.stringify(want), 'at the level\'s start (no frame yet) they differ in exactly the override sectors\' stat (' + got.join(', ') + ')');
       } finally { await cleanup(relay); }
