@@ -610,7 +610,7 @@ void TestNudgeArg(int tic)
 // NumSyncBytes = 8 and so also changes the version that is sent.
 int TestVersionSalt(void)
     {
-    return (NumSyncBytes - 1) * 1000003 + TestQuitTics * 37;
+    return (NumSyncBytes - 1) * 1000003 + TestQuitTics * 37 + TestExitTic * 101;
     }
 
 // -testdump<name>: every machine writes its own record of every game tic to <name>, so that a test
@@ -701,7 +701,8 @@ static unsigned int TestStateHash(void)
 // alone gives only the first ones). Fields ending in '@' hold code or data addresses (as offsets from
 // a fixed symbol) and are equal only between machines running the same build. krandcount, numframes
 // and movefifoend are this machine's own (not simulation state), as are the angle and xvel of the
-// ceiling/floor picture override markers (TestStateHash). It is opt-in because it is slow: writing
+// ceiling/floor picture override markers (TestStateHash) and a player's FadeAmt and FadeTics (the
+// screen flash, set for the player this machine looks through: brief 04c, code-facts.md section 17). It is opt-in because it is slow: writing
 // the first dump (about 1.3 MB for E1L1) delays a browser's first frame noticeably, and that alone
 // changes the start of a game (it made the tic 1 case of brief 04b happen in most games).
 #include "interp.h"
@@ -867,9 +868,25 @@ static void TestStateFull(const char *when)
     }
 
 // Called when RunLevel starts (game.c), after InitRunLevel: the state before the first input.
+// The dumps of the first level played are labelled start, t1, t2, ...; those of later levels (brief
+// 04c, -testexit) get the number of the level played in front: L2.start, L2.t1, ...
+static int TestStateLevels;
+
+static void TestStateWhen(char *buf, const char *what)
+    {
+    if (TestStateLevels > 1)
+        sprintf(buf, "L%d.%s", TestStateLevels, what);
+    else
+        strcpy(buf, what);
+    }
+
 void TestStateStart(void)
     {
-    TestStateFull("start");
+    char when[32];
+
+    TestStateLevels++;
+    TestStateWhen(when, "start");
+    TestStateFull(when);
     }
 
 // -testslowstart<ms> (test-only, brief 04b): this machine waits <ms> milliseconds when RunLevel
@@ -911,7 +928,7 @@ void TestSlowStart(void)
 static void TestStateTic(void)
     {
     int i;
-    char when[32];
+    char what[16], when[32];
 
     if (!TestStateOn || !TestDumpName[0])
         return;
@@ -920,7 +937,8 @@ static void TestStateTic(void)
             break;
     if (MoveThingsCount > 3 && i == TestStateNum)
         return;
-    sprintf(when, "t%u", MoveThingsCount);
+    sprintf(what, "t%u", MoveThingsCount);
+    TestStateWhen(when, what);
     TestStateFull(when);
     }
 
@@ -1222,12 +1240,40 @@ void TestLagReport(void)
                 TestLagDFlushed[p & 15], TestLagDPaced[p & 15], TestLagDRedundant[p & 15]);
     }
 
+// -testexit<T>,<L> (test-only, brief 04c): at the start of game tic T of the first level, every
+// machine leaves the level for level L (the next one without ",<L>"), as a level exit switch does
+// (sector.c), but without the co-op bonus screen, which waits for a key (FinishedLevel is not set).
+// It happens in domovethings, at the same tic on every machine; MoveLoop then runs no further tic of
+// that level (TestExitReached), so every machine has run exactly T tics of it, whatever inputs it
+// had buffered. For testing what a machine has at the start of the next level (a hidden browser
+// tab: bugs.md L19). Inert without the argument.
+int TestExitTic;
+int TestExitReached;
+static int TestExitLevel, TestExitDone;
+
+void TestExitArg(const char *arg)
+    {
+    const char *c = strchr(arg, ',');
+
+    TestExitTic = atoi(arg);
+    TestExitLevel = c ? atoi(c + 1) : 0;
+    }
+
 void TestTicHook(void)
     {
     extern unsigned int MoveThingsCount;
 
     TestDumpTic();
     TestLagTic();
+
+    if (TestExitTic > 0 && !TestExitDone && (int)MoveThingsCount == TestExitTic)
+        {
+        TestExitDone = 1;
+        TestExitReached = 1;
+        Level = TestExitLevel > 0 ? TestExitLevel : Level + 1;
+        ExitLevel = TRUE;
+        buildprintf("TEST: leaving the level at tic %d for level %d\n", TestExitTic, Level);
+        }
 
     if (TestNudgeTic >= 0 && (int)MoveThingsCount == TestNudgeTic)
         {

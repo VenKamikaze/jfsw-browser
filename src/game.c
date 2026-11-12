@@ -1430,6 +1430,7 @@ InitLevel(VOID)
     PostSetupSectorObject();
     SetupMirrorTiles();
     initlava();
+    DrawSetupLevelStats();  // what the first frame would leave in the sector stats (draw.c, brief 04c)
 
     if (DemoMode)
         {
@@ -2981,6 +2982,11 @@ void MoveLoop(void)
             break;
 
         domovethings();
+        if (TestExitReached)
+            {
+            TestExitReached = 0;    // test-only (-testexit, sync.c): no further tic of this level
+            break;
+            }
 
         #if DEBUG
         //if (DemoSyncRecord)
@@ -3796,6 +3802,11 @@ int app_main(int argc, char const * const argv[])
         if (Bstrncasecmp(arg, "testslowstart", 13) == 0)
             {
             TestSlowStartArg(atoi(arg+13));     // test-only: wait before the first frame of the level
+            }
+        else
+        if (Bstrncasecmp(arg, "testexit", 8) == 0)
+            {
+            TestExitArg(arg+8);     // test-only: every machine leaves the first level at tic T for level L
             }
         else
         if (Bstrncasecmp(arg, "teststate", 9) == 0)

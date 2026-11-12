@@ -144,9 +144,10 @@ extern short NumSyncBytes;
 // -testdump<name> (this machine writes a record of
 // every game tic to the file <name>: see sync.c; no effect on the game) and -teststate[<T>]
 // (with -testdump, the whole state field by field at the start and at tics 1 to 3 and T),
-// -testslowstart<ms> (wait before the first frame of the level). -testquit works in network games only (a single player
-// game prints the TEST line but does not exit). All players of a game must be given the same -testsync
-// and -testquit; this is checked through the version exchange.
+// -testslowstart<ms> (wait before the first frame of the level), -testexit<T>,<L> (every machine
+// leaves the first level at tic T for level L, sync.c). -testquit works in network games only (a single player
+// game prints the TEST line but does not exit). All players of a game must be given the same -testsync,
+// -testquit and -testexit; this is checked through the version exchange.
 extern int TestQuitTics;        // 0 = off
 extern int TestQuitReached;
 extern int TestNudgeTic;        // -1 = off
@@ -169,6 +170,9 @@ void TestStateArg(int tic);     // -teststate[<T>]: with -testdump, full state d
 void TestStateStart(void);      // -teststate: the full state when RunLevel starts (sync.c)
 void TestSlowStartArg(int ms);  // -testslowstart<ms>: wait that long before the first frame (sync.c)
 void TestSlowStart(void);       // from RunLevel, after TestStateStart
+extern int TestExitTic;         // -testexit<T>,<L>: 0 = off (sync.c)
+extern int TestExitReached;     // set at that tic; MoveLoop runs no further tic of the level
+void TestExitArg(const char *arg);
 int TestVersionSalt(void);
 void TestTicHook(void);         // from domovethings, once per game tic
 void TestQuitFinish(void);      // from RunLevel when TestQuitReached

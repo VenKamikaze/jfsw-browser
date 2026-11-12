@@ -2265,6 +2265,36 @@ void FAF_DrawRooms(int x, int y, int z, short ang, int horiz, short sectnum)
         }
     }
 
+// What drawing leaves behind for good, applied once when a level is set up (brief 04c, bugs.md
+// L19). Every frame, FAF_DrawRooms() above restores each ceiling/floor picture override sector's
+// stat with the parallax bit cleared, and PostDraw() sets the slope bit of each
+// FLOOR_SLOPE_DONT_DRAW sector. The game's code reads those bits (missiles, a player landing on a
+// parallax floor, z ranges, hitscans and splashes test the parallax bit), and in the original game
+// every machine draws a frame before the first game tic of a level, so it always saw them as the
+// first frame leaves them. A machine that draws no frame before a tic (a hidden browser tab in a
+// network game) would keep the map's bits and go out of sync. So every machine does the same here,
+// after the level and its sprites are set up and before the first frame and the first tic; the
+// frames that follow change nothing more.
+VOID
+DrawSetupLevelStats(VOID)
+    {
+    short i, nexti;
+
+    TRAVERSE_SPRITE_STAT(headspritestat[STAT_CEILING_FLOOR_PIC_OVERRIDE], i, nexti)
+        {
+        if (SPRITE_TAG3(i) == 0)
+            RESET(sector[sprite[i].sectnum].ceilingstat, CEILING_STAT_PLAX);
+        else
+        if (SPRITE_TAG3(i) == 1)
+            RESET(sector[sprite[i].sectnum].floorstat, FLOOR_STAT_PLAX);
+        }
+
+    TRAVERSE_SPRITE_STAT(headspritestat[STAT_FLOOR_SLOPE_DONT_DRAW], i, nexti)
+        {
+        SET(sector[sprite[i].sectnum].floorstat, FLOOR_STAT_SLOPE);
+        }
+    }
+
 short ScreenSavePic = FALSE;
 
 VOID
