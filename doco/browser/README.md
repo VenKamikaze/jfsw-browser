@@ -16,7 +16,7 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 | 01 | [vnet transport for mmulti (native)](01-vnet-transport.md) | jfsw-browser, jfbuild | 00 | done |
 | 02 | [Emscripten port](02-emscripten-port.md) | jfsw-browser, jfbuild, jfaudiolib | 00, Q2 | done (play-test pending) |
 | 03 | [Data download from a URL](03-data-download.md) | jfsw-browser | 02 | done (play-test pending) |
-| 04 | Browser netplay | jfsw-browser, jfbuild | 01, 02 | not written |
+| 04 | [Browser netplay](04-browser-netplay.md) | jfsw-browser, jfbuild | 01, 02 | written |
 | 05 | Host and join from the game | jfsw-browser (+ jfbuild) | 03, 04 | not written |
 | 06 | Deployment guide | jfsw-browser | 05 | not written |
 
