@@ -18,7 +18,14 @@
 // and forget the copy it had of the old url.
 //
 // ?data=<url> in the page address overrides url (and size and crc32 are then not checked).
+//
+// relay: the vnet relay for network games, as its WebSocket URL ('wss://host/vnet', or
+//        'ws://127.0.0.1:PORT/vnet' for a local one). Empty (the default): none configured.
+//        The game takes it as `-net -relay URL -host-room N | -room CODE`; the pages that
+//        start a network game from the menus are brief 05, this field is what they will use.
+//        WebTransport is tried first and derived from a wss:// URL; a ws:// URL uses WebSocket only.
 window.JFSW_CONFIG = {
+  relay: '',
   data: {
     url: 'swshare.grp',
     size: 26056769,

@@ -3135,6 +3135,10 @@ RunLevel(VOID)
 
     while (TRUE)
         {
+#ifdef __EMSCRIPTEN__
+        static BOOL wasHidden = FALSE;
+        BOOL hidden;
+#endif
         handleevents();
         OSD_DispatchQueued();
 
@@ -3146,6 +3150,32 @@ RunLevel(VOID)
                 QuitFlag = TRUE;
             }
 
+#ifdef __EMSCRIPTEN__
+        // A hidden browser tab in a network game: no picture (nobody sees it), and the
+        // inputs and moves are run from network events (net.c, sdlayer2.c). A hidden
+        // single player game does not get here: it pauses in the yield.
+        hidden = jfbuild_browser_hidden_netgame();
+        if (wasHidden && !hidden)
+            SetRedrawScreen(Player + myconnectindex);       // the borders were not kept up to date
+        wasHidden = hidden;
+        if (hidden)
+            {
+            HiddenNetPass();
+            if (TestQuitReached)
+                {
+                TestQuitFinish();
+                QuitFlag = TRUE;
+                }
+            if (QuitFlag)
+                break;
+            if (ExitLevel)
+                {
+                ExitLevel = FALSE;
+                break;
+                }
+            continue;
+            }
+#endif
           //MONO_PRINT("Before MoveLoop");
         MoveLoop();
         if (TestQuitReached)
@@ -3728,6 +3758,11 @@ int app_main(int argc, char const * const argv[])
         if (Bstrncasecmp(arg, "testquit", 8) == 0)
             {
             TestQuitArg(atoi(arg+8));   // test-only: quit cleanly after N game tics
+            }
+        else
+        if (Bstrncasecmp(arg, "testdump", 8) == 0)
+            {
+            TestDumpArg(arg+8);     // test-only: this machine's per-tic record of the simulation, to a file
             }
         else
         if (Bstrncasecmp(arg, "testnudge", 9) == 0)

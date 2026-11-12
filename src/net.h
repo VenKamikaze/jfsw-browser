@@ -138,9 +138,10 @@ extern short NumSyncBytes;
 
 // ---- Test-only hooks (sync.c). Not for players. ----
 // Arguments: -testsync (8 sync bytes in a network game), -testquit<N> (quit
-// cleanly, exit status 0, after N game tics) and -testnudge<T> (this player
+// cleanly, exit status 0, after N game tics), -testnudge<T> (this player
 // moves 8 units in x at tic T: a deliberate desync, for proving that the
-// sync check bites). -testquit works in network games only (a single player
+// sync check bites) and -testdump<name> (this machine writes a record of
+// every game tic to the file <name>: see sync.c; no effect on the game). -testquit works in network games only (a single player
 // game prints the TEST line but does not exit). All players of a game must be given the same -testsync
 // and -testquit; this is checked through the version exchange.
 extern int TestQuitTics;        // 0 = off
@@ -150,6 +151,8 @@ extern int SyncChecks, SyncMismatches;      // counted in every game
 void TestSyncArg(void);
 void TestQuitArg(int tics);
 void TestNudgeArg(int tic);
+VOID HiddenNetPass(VOID);        // browser build: one pass of the game loop of a hidden tab (net.c)
+void TestDumpArg(const char *name);   // -testdump<name>: every machine records each tic to <name> (sync.c)
 int TestVersionSalt(void);
 void TestTicHook(void);         // from domovethings, once per game tic
 void TestQuitFinish(void);      // from RunLevel when TestQuitReached
