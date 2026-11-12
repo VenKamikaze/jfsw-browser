@@ -16,6 +16,7 @@
 //   ?idb=quota    storing the game data in the cache fails with a QuotaExceededError (test only).
 //   ?stall=<ms>   how long without a byte before a download is called stalled (default 30000; test only).
 //   ?revalidate=1|0  overrides config.js's `revalidate` (test only).
+//   ?wake_every=N   only every Nth vnet wake-up reaches the game (brief 04; test only: imitates a quiet peer).
 //   ?relay_wt=<url>, ?relay_cert=<hex>, ?impair=<spec>   relay test knobs for network games (brief 04; test only): an explicit
 //                 WebTransport URL, the SHA-256 of a relay development certificate (-dev-cert), and a vnet impairment spec
 //                 ("lat=40,jit=10,loss=5,dup=2,reorder=3,seed=7"; every machine its own seed). They go to the game in
@@ -527,6 +528,8 @@
     Module.jfswFrameLog = capped([], 50000);
     Module.jfswYieldLog = capped([], 50000);
     Module.jfswShowframes = 0;              // pictures the game asked to present (showframe(); none while a hidden tab plays a network game)
+    Module.jfswOwedLog = capped([], 50000);     // ms each hidden yield lasted that was entered with data held back by mmulti's send window
+    if (params.get('wake_every')) { Module.jfswWakeEvery = +params.get('wake_every'); }   // only every Nth network wake-up gets through (test only)
     Module.jfswWakes = 0;                   // how often vnet's wake callback fired (sdlayer2.c)
     Module.jfswHiddenLog = capped([], 50000);   // why each hidden-tab yield ended: 1 a network event, 2 the page became visible, 0 the timer
     testInfoEl.hidden = false;

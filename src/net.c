@@ -809,19 +809,34 @@ AddSyncInfoToPacket(int *j)
     }
 
 #ifdef __EMSCRIPTEN__
+#include "mmulti_vnet.h"
 extern void MoveLoop(void);
 
 // One pass of the game loop of a hidden browser tab in a network game (brief 04). The tab has no
 // animation frames and about one timer tick a second, so it is driven by network events (see
 // jfbuild/src/sdlayer2.c) and draws nothing. Drawing is where the engine calls faketimerhandler()
 // (the "timer interrupt" that makes this player's input for each tic and sends it), so the pass
-// calls it itself, then receives and moves as MoveLoop() does. Each input is sent as it is made
-// (netsendpacket -> sendpacket sends at once), not at the next pass.
+// calls it itself, then receives and moves as MoveLoop() does.
+//   * It makes every input that is due by this tab's own clock (a few at most), not only one:
+//     catching up to its own clock, as the drawing path does by calling faketimerhandler() many
+//     times a frame, never ahead of it. Otherwise the pass rate would cap the tic rate.
+//   * sendpacket() hands the input to mmulti at once, but mmulti puts at most one datagram per peer
+//     on the wire every 25 ms (PAKRATE, dosendpackets), and getpackets() (called by
+//     faketimerhandler() before the input is made) can use that window for an acknowledgement.
+//     A visible tab comes round again at the next frame. A hidden tab has no frames: so while
+//     anything is held back it asks for another pass at once (jfbuild_browser_kick, a message, not
+//     a timer) and the pass after the window has gone by sends it.
 VOID
 HiddenNetPass(VOID)
     {
+    int n;
+
     faketimerhandler();
+    for (n = 0; n < 8 && totalclock >= ototalclock + synctics; n++)
+        faketimerhandler();
     MoveLoop();
+    if (mmulti_vnet_sendpending())
+        jfbuild_browser_kick();
     }
 #endif
 
