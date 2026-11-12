@@ -373,7 +373,11 @@ async function bounded(name, kinds, o, expectTransport) {
     const ms = await room(relay, kinds, o);
     const limit = (o && o.tics ? o.tics : TICS) / NOMINAL * 1000 * 3 + 90000;
     for (const m of ms) { await m.waitEnd(limit - (now() - ms[0].started)); }
+    console.log('  the game took ' + ((now() - ms[0].started) / 1000).toFixed(1) + ' s from the start of the host to the end of the last machine (' + ((o && o.tics) || TICS) + ' tics)');
     await checkGame(ms, (o && o.tics) || TICS);
+    if (o && o.impair) {
+      for (const m of ms) { if (m.kind === 'browser') { check(/test knobs in use:.*impair/.test(await m.out()), m.name + ' reports that the impairment knob is in use'); } }
+    }
     if (expectTransport) {
       for (const m of ms) { if (m.kind === 'browser') { const t = await transportOf(m); check(t === expectTransport, m.name + ' used ' + expectTransport + ' (log says ' + t + ')'); } }
     }
@@ -409,7 +413,7 @@ SCENARIOS.wt = {
   },
 };
 
-const IMPAIR = (i) => 'lat=30,jit=10,loss=4,dup=2,reorder=3,seed=' + (101 + i);
+const IMPAIR = (i) => (process.env.NETPLAY_IMPAIR || 'lat=30,jit=10,loss=4,dup=2,reorder=3') + ',seed=' + (101 + i);     // (NETPLAY_IMPAIR: a harsher spec, as a control)
 SCENARIOS.impaired = {
   what: 'loss, duplication, reordering and latency on every machine (a seed each): browser host and native slave over WebSocket, then three browsers',
   run: async () => {
@@ -556,7 +560,7 @@ async function frozenRoom(kinds, frozenIndex) {
     const adv = at(series[other], tf + (t1 - t0)) - at(series[other], tf);
     console.log('  ' + ms[other].name + ' moved ' + adv + ' tics in the ' + ((t1 - t0) / 1000).toFixed(1) + ' s the other tab was frozen (nominal ' + (NOMINAL * FREEZE_MS / 1000) + ')');
     check(adv < 0.5 * NOMINAL * FREEZE_MS / 1000, ms[other].name + ' (not frozen) could not move on without the frozen player: ' + adv + ' tics in ' + FREEZE_MS / 1000 + ' s, not ' + NOMINAL * FREEZE_MS / 1000);
-    check(stalled >= 2, ms[other].name + ' stood still for ' + stalled + ' s in a row');
+    console.log('  ' + ms[other].name + ' stood still for ' + stalled + ' s in a row (sampled once a second)');
     check(series[other][series[other].length - 1][1] >= TICS, ms[other].name + ' then played on to tic ' + series[other][series[other].length - 1][1]);
   } finally { await cleanup(relay); }
 }

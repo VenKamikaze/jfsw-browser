@@ -526,6 +526,7 @@
     window.jfswDownloadLog = [];
     Module.jfswFrameLog = capped([], 50000);
     Module.jfswYieldLog = capped([], 50000);
+    Module.jfswShowframes = 0;              // pictures the game asked to present (showframe(); none while a hidden tab plays a network game)
     Module.jfswWakes = 0;                   // how often vnet's wake callback fired (sdlayer2.c)
     Module.jfswHiddenLog = capped([], 50000);   // why each hidden-tab yield ended: 1 a network event, 2 the page became visible, 0 the timer
     testInfoEl.hidden = false;
