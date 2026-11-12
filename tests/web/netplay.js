@@ -257,7 +257,10 @@ function firstDifference(dumps) {
         const diff = [];
         const names = ['tic0', 'tic1', 'tic2', 'tic3', 'RandomSync', 'PlayerSync', 'PlayerSync2', 'SOSync', 'EnemySync', 'MissileSync', 'ShrapSync', 'MiscSync', 'MissileSkip4Sync', 'hash0', 'hash1', 'hash2', 'hash3'];
         for (let j = 0; j < REC; j++) { if (a[j] !== b[j]) { diff.push(names[j]); } }
-        return { index: i, tic: a.readUInt32LE(0), against: k, what: diff.join(',') };
+        let count = 0;
+        const n2 = Math.min(dumps[0].length, dumps[k].length) / REC;
+        for (let q = i; q < n2; q++) { if (!dumps[0].subarray(q * REC, (q + 1) * REC).equals(dumps[k].subarray(q * REC, (q + 1) * REC))) { count++; } }
+        return { index: i, tic: a.readUInt32LE(0), against: k, what: diff.join(',') + ' (' + count + ' of the ' + (n2 - i) + ' records from there on differ; first: ' + a.toString('hex') + ' against ' + b.toString('hex') + ')' };
       }
     }
   }
@@ -515,9 +518,16 @@ const LAT30 = (i) => 'lat=30,seed=' + (201 + i);       // 30 ms on everything a 
 SCENARIOS['lag-matrix'] = {
   what: 'input-to-tic delay of master and slave: browsers, browser and native, native and native; unimpaired and with 30 ms each way (a report; agreement is checked)',
   run: async () => {
-    for (const [name, kinds] of [['browsers', ['browser', 'browser']], ['browser-host', ['browser', 'native']], ['native-host', ['native', 'browser']], ['natives', ['native', 'native']]]) {
-      await lagGame(name, kinds, {});
-      await lagGame(name + '-30ms', kinds, { impair: LAT30 });
+    // NETPLAY_LAG_ONLY=browsers,natives-30ms picks games; NETPLAY_LAG_REPS=3 repeats each (the numbers move with the machine's load)
+    const only = (process.env.NETPLAY_LAG_ONLY || '').split(',').filter(Boolean), reps = +process.env.NETPLAY_LAG_REPS || 1;
+    for (let r = 0; r < reps; r++) {
+      for (const [name, kinds] of [['browsers', ['browser', 'browser']], ['browser-host', ['browser', 'native']], ['native-host', ['native', 'browser']], ['natives', ['native', 'native']]]) {
+        for (const [label, o] of [[name, {}], [name + '-30ms', { impair: LAT30 }]]) {
+          if (only.length && !only.includes(label)) { continue; }
+          const g = await lagGame(label, kinds, o);
+          g.stats.forEach((st, i) => console.log('LAGSUM ' + label + ' ' + (i === 0 ? 'master' : 'slave') + ' ' + f1(st.total.med) + ' ' + f1(st.total.p95) + ' ' + f1(st.sendwait.med) + ' ' + f1(st.fwdwait.med) + ' ' + f1(st.fwdwait.p95) + ' ' + g.rates[i].map((x) => x.perSec.toFixed(1)).join(',') + ' ' + g.load));
+        }
+      }
     }
   },
 };
