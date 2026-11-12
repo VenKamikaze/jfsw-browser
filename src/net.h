@@ -171,8 +171,13 @@ void TestStateStart(void);      // -teststate: the full state when RunLevel star
 void TestSlowStartArg(int ms);  // -testslowstart<ms>: wait that long before the first frame (sync.c)
 void TestSlowStart(void);       // from RunLevel, after TestStateStart
 extern int TestExitTic;         // -testexit<T>,<L>: 0 = off (sync.c)
+extern int TestExitLevel;       // L, 0 = the next level
 extern int TestExitReached;     // set at that tic; MoveLoop runs no further tic of the level
 void TestExitArg(const char *arg);
+extern int TestDrawCheck;       // -testdrawcheck[2]: DrawSetupLevelStats against the first frame (sync.c)
+void TestDrawCheckArg(int mode);
+int TestDrawCheckLevel(void);   // from InitLevel: 1 = it took the place of DrawSetupLevelStats
+void TestDrawCheckFrame(void);  // from RunLevel after each frame
 int TestVersionSalt(void);
 void TestTicHook(void);         // from domovethings, once per game tic
 void TestQuitFinish(void);      // from RunLevel when TestQuitReached

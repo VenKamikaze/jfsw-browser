@@ -289,7 +289,7 @@ $(SRC)/version-auto.c:
 # NETWORK TESTS (brief 01; see doco/browser/building.md). The top-level rule
 # above never re-makes an existing jfbuild/libengine.a, so these bring the
 # engine library up to date first.
-.PHONY: test test-mmulti test-net engine-current
+.PHONY: test test-mmulti test-net test-draw engine-current
 MMULTI_RUNS ?= 10
 GAME_RUNS ?= 1
 engine-current: sw$(EXESUFFIX)
@@ -311,4 +311,8 @@ test-net: engine-current
 	tests/net/test-udp-unchanged.sh --base-sw "$$(tests/net/build-baseline.sh)"
 	tests/net/test-errors.sh
 
-test: test-mmulti test-net
+# brief 04c: DrawSetupLevelStats() against a drawn frame on every shareware level (needs the GRP)
+test-draw: sw$(EXESUFFIX)
+	tests/draw-setup.sh
+
+test: test-mmulti test-net test-draw

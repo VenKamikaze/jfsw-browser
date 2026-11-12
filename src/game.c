@@ -1430,7 +1430,8 @@ InitLevel(VOID)
     PostSetupSectorObject();
     SetupMirrorTiles();
     initlava();
-    DrawSetupLevelStats();  // what the first frame would leave in the sector stats (draw.c, brief 04c)
+    if (!TestDrawCheckLevel())  // test-only (-testdrawcheck, sync.c): compared with the first frame instead
+        DrawSetupLevelStats();  // what the first frame would leave in the sector stats (draw.c, brief 04c)
 
     if (DemoMode)
         {
@@ -3220,6 +3221,7 @@ RunLevel(VOID)
         //MONO_PRINT("After MoveLoop");
         //MONO_PRINT("Before DrawScreen");
         drawscreen(Player + screenpeek);
+        TestDrawCheckFrame();   // test-only (-testdrawcheck, sync.c)
         //MONO_PRINT("After DrawScreen");
 
         if (QuitFlag)
@@ -3802,6 +3804,11 @@ int app_main(int argc, char const * const argv[])
         if (Bstrncasecmp(arg, "testslowstart", 13) == 0)
             {
             TestSlowStartArg(atoi(arg+13));     // test-only: wait before the first frame of the level
+            }
+        else
+        if (Bstrncasecmp(arg, "testdrawcheck", 13) == 0)
+            {
+            TestDrawCheckArg(atoi(arg+13));     // test-only: DrawSetupLevelStats against the first frame
             }
         else
         if (Bstrncasecmp(arg, "testexit", 8) == 0)

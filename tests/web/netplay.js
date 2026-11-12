@@ -277,14 +277,16 @@ function parseState(text) {
   return m;
 }
 // The fields two machines' state dumps disagree about at `when` (e.g. 't1'). Fields that are this machine's own and not simulation
-// state are left out (myconnectindex, krandcount, numframes, the input queue's movefifoend, a player's FadeAmt and FadeTics, and the
-// fields a sprite line lists in drawscratch=: what the drawing code keeps there), and code and data addresses (values ending in
-// '@') when the machines run different builds. FadeAmt and FadeTics (brief 04c) are the screen flash when a player is hurt or
-// picks something up: PlayerUpdateHealth() (panel.c) and the other callers of SetFadeAmt() (menus.c) set them only for the player
-// this machine looks through (screenpeek), so in the original game they differ between machines as soon as a player is hurt;
-// nothing but the palette code reads them (DoPaletteFlash, SetFadeAmt).
+// state are left out (myconnectindex, krandcount, numframes, the input queue's movefifoend, a player's FadeAmt, FadeTics and
+// NightVision, and the fields a sprite line lists in drawscratch=: what the drawing code keeps there), and code and data addresses
+// (values ending in '@') when the machines run different builds. FadeAmt and FadeTics (brief 04c) are the screen flash when a
+// player is hurt or picks something up: PlayerUpdateHealth() (panel.c) and the other callers of SetFadeAmt() (menus.c) set them
+// only for the player this machine looks through (screenpeek), so in the original game they differ between machines as soon as a
+// player is hurt; nothing but the palette code reads them (DoPaletteFlash, SetFadeAmt). NightVision likewise: only
+// DoPlayerNightVisionPalette() (inv.c) sets it, only for screenpeek, and only drawing (analyzesprites) and the F11 key read it.
+// None of the three is in the state hash.
 function stateDifferences(a, b, when, mixed) {
-  const ignore = new Set(['global myconnectindex', 'global krandcount', 'global numframes', 'player movefifoend', 'player FadeAmt', 'player FadeTics']);
+  const ignore = new Set(['global myconnectindex', 'global krandcount', 'global numframes', 'player movefifoend', 'player FadeAmt', 'player FadeTics', 'player NightVision']);
   const out = [];
   const keys = new Set([...a.keys(), ...b.keys()].filter((k) => k.startsWith(when + ' ')));
   for (const k of keys) {
