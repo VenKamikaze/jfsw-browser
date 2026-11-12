@@ -17,7 +17,7 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 | 02 | [Emscripten port](02-emscripten-port.md) | jfsw-browser, jfbuild, jfaudiolib | 00, Q2 | done (play-test pending) |
 | 03 | [Data download from a URL](03-data-download.md) | jfsw-browser | 02 | done (play-test pending) |
 | 04 | [Browser netplay](04-browser-netplay.md) | jfsw-browser, jfbuild | 01, 02 | done (play-test pending) |
-| 04b | [Netcode lag cuts](04b-lag-cuts.md) | jfsw-browser, jfbuild | 04 | review |
+| 04b | [Netcode lag cuts](04b-lag-cuts.md) | jfsw-browser, jfbuild | 04 | done (play-test pending) |
 | 05 | Host and join from the game | jfsw-browser (+ jfbuild) | 03, 04 | not written |
 | 06 | Deployment guide | jfsw-browser | 05 | not written |
 
