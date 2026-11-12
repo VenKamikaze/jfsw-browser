@@ -140,9 +140,10 @@ extern short NumSyncBytes;
 // Arguments: -testsync (8 sync bytes in a network game), -testquit<N> (quit
 // cleanly, exit status 0, after N game tics), -testnudge<T> (this player
 // moves 8 units in x at tic T: a deliberate desync, for proving that the
-// sync check bites) and -testlag<name> (input-to-tic timing, sync.c) and
+// sync check bites), -testlag<name> (input-to-tic timing, sync.c),
 // -testdump<name> (this machine writes a record of
-// every game tic to the file <name>: see sync.c; no effect on the game). -testquit works in network games only (a single player
+// every game tic to the file <name>: see sync.c; no effect on the game) and -teststate[<T>]
+// (with -testdump, the whole state field by field at the start and at tics 1 to 3 and T). -testquit works in network games only (a single player
 // game prints the TEST line but does not exit). All players of a game must be given the same -testsync
 // and -testquit; this is checked through the version exchange.
 extern int TestQuitTics;        // 0 = off
@@ -161,6 +162,8 @@ void TestLagScan(void);         // after getpackets() stored a packet
 void TestLagForward(int idx);   // master: combined packet for idx is handed to sendpacket
 void TestLagCorrect(int clockticks);    // a totalclock correction of the lag correction
 void TestDumpArg(const char *name);   // -testdump<name>: every machine records each tic to <name> (sync.c)
+void TestStateArg(int tic);     // -teststate[<T>]: with -testdump, full state dumps at the start, tics 1-3 and T (sync.c)
+void TestStateStart(void);      // -teststate: the full state when RunLevel starts (sync.c)
 int TestVersionSalt(void);
 void TestTicHook(void);         // from domovethings, once per game tic
 void TestQuitFinish(void);      // from RunLevel when TestQuitReached
