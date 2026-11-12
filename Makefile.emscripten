@@ -24,6 +24,8 @@ WEBDIR = web
 #  INVOKE_RUN=0        - the page starts main (callMain) from the "Click to start"
 #                        button, so that audio may start.
 #  idbfs.js            - config and saves persist in IndexedDB.
+#  websocket.js        - vnet's WebSocket relay transport (brief 04); the WebTransport
+#                        transport needs no library or flag.
 WASM_LDFLAGS = \
 	-O2 \
 	-sASYNCIFY=$(ASYNCIFY) \
@@ -37,7 +39,8 @@ WASM_LDFLAGS = \
 	-sENVIRONMENT=web \
 	-sEXPORTED_RUNTIME_METHODS=callMain,FS,IDBFS,ccall \
 	-sEXPORTED_FUNCTIONS=_main,_malloc,_free \
-	-lidbfs.js
+	-lidbfs.js \
+	-lwebsocket.js
 
 ASYNCIFY ?= 1
 WASM_EXTRA_LDFLAGS ?=

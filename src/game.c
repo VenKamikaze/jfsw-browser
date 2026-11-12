@@ -3135,8 +3135,38 @@ RunLevel(VOID)
 
     while (TRUE)
         {
+#ifdef __EMSCRIPTEN__
+        static BOOL wasHidden = FALSE;
+        BOOL hidden;
+#endif
+        static int lostplc = -1;
+        static unsigned int lostsince;
+
         handleevents();
         OSD_DispatchQueued();
+
+        // The relay session was lost during the game (the relay timed us out or restarted, the
+        // room closed): once the game has nothing more to move because the other players' inputs
+        // have stopped coming, say so and end it with status 1, instead of standing still for
+        // ever. (Only relay games ever get here: FAILED is a relay state.) A player who is merely
+        // behind still has inputs to move and is left alone.
+        if (CommEnabled && mmulti_vnet_state() == MMULTI_VNET_FAILED)
+            {
+            if (movefifoplc != lostplc)
+                {
+                lostplc = movefifoplc;
+                lostsince = getticks();
+                }
+            else if (getticks() - lostsince > 2000)
+                {
+                buildprintf("Network game failed: %s\n", mmulti_vnet_errormsg());
+                uninitmultiplayers();
+                wm_msgbox("Network game failed", "%s.", mmulti_vnet_errormsg());
+                exit(1);
+                }
+            }
+        else
+            lostplc = -1;
 
         if (quitevent)
             {
@@ -3146,6 +3176,32 @@ RunLevel(VOID)
                 QuitFlag = TRUE;
             }
 
+#ifdef __EMSCRIPTEN__
+        // A hidden browser tab in a network game: no picture (nobody sees it), and the
+        // inputs and moves are run from network events (net.c, sdlayer2.c). A hidden
+        // single player game does not get here: it pauses in the yield.
+        hidden = jfbuild_browser_hidden_netgame();
+        if (wasHidden && !hidden)
+            SetRedrawScreen(Player + myconnectindex);       // the borders were not kept up to date
+        wasHidden = hidden;
+        if (hidden)
+            {
+            HiddenNetPass();
+            if (TestQuitReached)
+                {
+                TestQuitFinish();
+                QuitFlag = TRUE;
+                }
+            if (QuitFlag)
+                break;
+            if (ExitLevel)
+                {
+                ExitLevel = FALSE;
+                break;
+                }
+            continue;
+            }
+#endif
           //MONO_PRINT("Before MoveLoop");
         MoveLoop();
         if (TestQuitReached)
@@ -3728,6 +3784,11 @@ int app_main(int argc, char const * const argv[])
         if (Bstrncasecmp(arg, "testquit", 8) == 0)
             {
             TestQuitArg(atoi(arg+8));   // test-only: quit cleanly after N game tics
+            }
+        else
+        if (Bstrncasecmp(arg, "testdump", 8) == 0)
+            {
+            TestDumpArg(arg+8);     // test-only: this machine's per-tic record of the simulation, to a file
             }
         else
         if (Bstrncasecmp(arg, "testnudge", 9) == 0)

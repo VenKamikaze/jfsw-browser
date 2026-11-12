@@ -99,13 +99,13 @@ scripts/build-wasm.sh clean             # remove the wasm objects only
 scripts/build-wasm.sh veryclean         # and the libraries and build-wasm/
 ```
 
-That is `emmake make -j4 USE_POLYMOST=0 USE_OPENGL=0` after sourcing the emsdk (the software renderer only, D6). `Makefile` includes `Makefile.emscripten` when the compiler is `emcc`; `jfbuild/Makefile.shared` and `jfaudiolib/Makefile.shared` recognise `wasm32-unknown-emscripten` as `PLATFORM=EMSCRIPTEN`. There is no startup window, no GTK and no editor (`build`); the network code is `mmulti_null.c` (single player) until the vnet transport is built for the browser (brief 04).
+That is `emmake make -j4 USE_POLYMOST=0 USE_OPENGL=0` after sourcing the emsdk (the software renderer only, D6). `Makefile` includes `Makefile.emscripten` when the compiler is `emcc`; `jfbuild/Makefile.shared` and `jfaudiolib/Makefile.shared` recognise `wasm32-unknown-emscripten` as `PLATFORM=EMSCRIPTEN`. There is no startup window, no GTK and no editor (`build`). Network games go through vnet (brief 04): the engine library contains `mmulti.c` (its plain UDP code compiled out under `__EMSCRIPTEN__`), `mmulti_vnet.c` and `ext/vnet/src/*.c`, and the link adds `-lwebsocket.js`; see section 6.5. **A browser build tree from before brief 04 has a `jfbuild/libengine.wasm.a` that still holds `mmulti_null.wasm.o`** (`ar rc` keeps old members and the linker found `initmultiplayersparms` there first, so `-net` silently did nothing): the engine `Makefile` now removes the archive before it builds it, so an ordinary `scripts/build-wasm.sh` fixes it.
 
 Objects are named `*.wasm.o` and libraries `lib*.wasm.a`, so a native build and a browser build live in the same tree without touching each other (`make clean` in one does not remove the other's objects, except `src/version-auto.c`, which both regenerate). The output is in `build-wasm/` (git-ignored): `index.html`, `jfsw.js`, `jfsw.css`, `config.js`, `grptable.js`, `data.js` (copied from `web/`), `sw.js` and `sw.wasm`. About 25 s for a full build on 4 cores once the system libraries are cached (they are built on first use).
 
 Debug build (function names in traces, run-time assertions) into another directory: `scripts/build-wasm.sh WASM_DEBUG=1 WASMDIR=build-wasm-debug`.
 
-Link options: `-sASYNCIFY` (the game's loops block; `jfbuild/src/sdlayer2.c` hands control back to the browser once per frame, and in event-pumping loops that do not draw), `-sALLOW_MEMORY_GROWTH`, `-sEXIT_RUNTIME` (so `exit()` from anywhere reaches the page's `onExit`), `-sINVOKE_RUN=0` (the page starts `main` from the button), `-lidbfs.js`.
+Link options: `-sASYNCIFY` (the game's loops block; `jfbuild/src/sdlayer2.c` hands control back to the browser once per frame, and in event-pumping loops that do not draw), `-sALLOW_MEMORY_GROWTH`, `-sEXIT_RUNTIME` (so `exit()` from anywhere reaches the page's `onExit`), `-sINVOKE_RUN=0` (the page starts `main` from the button), `-lidbfs.js`, `-lwebsocket.js` (vnet's WebSocket transport; WebTransport needs no flag).
 
 ### 6.3 Serve and play
 
@@ -131,6 +131,30 @@ node tests/web/grptable.js                  # web/grptable.js agrees with src/gr
 
 They use the preinstalled Chromium through Playwright (`require('playwright')`; never run `playwright install`), serve `build-wasm/` and `testdata/swshare.grp` on 127.0.0.1 ports 48101 and up (data.js: 48201 and 48202), and clean up after themselves.
 
+### 6.5 Network games in the browser, and their tests (brief 04)
+
+A browser plays only through a relay. The game takes the same arguments as the desktop one, with one difference: `-relay` is the relay's **WebSocket URL** (`wss://host/vnet`; `ws://127.0.0.1:PORT/vnet` for a local relay) instead of `HOST:PORT`. vnet then tries WebTransport first (derived from a `wss://` URL) and falls back to WebSocket; the game prints which it got (`... relay-wt` or `... relay-ws`). A plain `-net` without `-relay`, or a `HOST:PORT` for `-relay`, ends the game with a message on the page (exit status 1). Starting a network game from the page, without `?test=1`, is brief 05; for now:
+
+```sh
+# a local relay for the page, a native player and the browser (WebSocket on /vnet, UDP for native games;
+# -origins must name the page's host:port exactly)
+(cd ext/vnet/relay && go build -o /tmp/vnet-relay ./cmd/vnet-relay)
+/tmp/vnet-relay -udp 127.0.0.1:7777 -http 127.0.0.1:7778 -origins 127.0.0.1:8000 -v
+# page: http://127.0.0.1:8000/?test=1&args=-net%20-relay%20ws://127.0.0.1:7778/vnet%20-host-room%202%20--%20-autonet%202,0,2,1,0,0,0,0,0,0
+./sw -net -relay 127.0.0.1:7777 -room CODE -- -autonet 2,0,2,1,0,0,0,0,0,0
+```
+
+Test-only page parameters (only with `?test=1`; the top of `web/jfsw.js` has the list): `?relay_wt=<https url>` and `?relay_cert=<64 hex>` (an explicit WebTransport URL and the certificate hash of a relay started with `-wt ADDR -dev-cert`), `?impair=<spec>` (`lat=30,jit=10,loss=4,dup=2,reorder=3,seed=N`, a browser has no `VNET_IMPAIR`). Test-only game arguments (all machines): `-testsync`, `-testquit<N>`, `-testnudge<T>` (brief 01) and **`-testdump<name>`** (brief 04: this machine writes 17 bytes for every game tic to the file `<name>`: the tic, the nine sync bytes and a 32 bit hash of the whole simulation state; flushed per tic).
+
+```sh
+scripts/build-wasm.sh && make -j4 && scripts/fetch-test-data.sh   # the tests need the native ./sw as well
+node tests/web/netplay.js --list           # the scenarios
+node tests/web/netplay.js ws               # one scenario
+node tests/web/netplay.js                  # all of them, about 15 minutes; one at a time, the tests are real time
+```
+
+`tests/web/netplay.js` builds the relay with Go as `tests/net/lib.sh` does (`~/.cache/jfsw-browser/vnet-relay-<rev>`), serves `build-wasm/` (`WASM_DIR=other node tests/web/netplay.js ...` for another build, as the mutation runs do) and uses 127.0.0.1 ports 48300 (page), 48301 (relay UDP), 48302 (relay WebSocket) and 48303 (relay WebTransport, UDP). Native machines run under `scripts/run-headless.sh` in a temporary directory (`JFSW_TEST_KEEP=1` keeps it). Every scenario ends with "no process this test started is left running".
+
 ## 7. Layout of what brief 00 added
 
 | Path | What |
@@ -140,7 +164,7 @@ They use the preinstalled Chromium through Playwright (`require('playwright')`; 
 | `scripts/fetch-test-data.sh` | verified `testdata/swshare.grp` |
 | `scripts/run-headless.sh` | headless, bounded game runs |
 | `tests/fetch-test-data.sh`, `tests/run-headless.sh` | tests for the fetch and run scripts |
-| `ext/vnet` | vnet `v0.4.0` (submodule; not built yet) |
+| `ext/vnet` | vnet `v0.4.0` (submodule; built into the engine library, native and browser) |
 | `Makefile.emscripten`, `scripts/build-wasm.sh`, `web/` | the browser build and its page (brief 02) |
 | `tests/web/`, `tests/tools/`, `tests/data/` | browser tests, the key-playing shim that records demos, the committed demo |
 | `doco/browser/code-facts.md` | what the code does, with file:line |

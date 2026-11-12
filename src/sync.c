@@ -606,9 +606,102 @@ int TestVersionSalt(void)
     return (NumSyncBytes - 1) * 1000003 + TestQuitTics * 37;
     }
 
+// -testdump<name>: every machine writes its own record of every game tic to <name>, so that a test
+// can compare all machines byte for byte (the game's own sync check compares on the master only, and
+// only the low byte of each coordinate: code-facts section 8). One record of 17 bytes per tic:
+//   game tic (MoveThingsCount, little endian, 4 bytes), the nine sync bytes (the same functions
+//   getsyncstat() uses, computed here whatever NumSyncBytes is), and a 32 bit FNV-1a hash of the
+//   whole simulation state that matters (random seed, every player's full position, angle, horizon,
+//   health and bcnt, every sprite's full x, y, z, angle, picnum, statnum and sector, every sector's
+//   floor and ceiling height, the sector objects). Nothing goes on the wire and nothing in the game
+//   changes; the file is flushed after every record so that a test can watch its growth (tics a
+//   second) while the game runs. Without the argument none of this runs.
+static char TestDumpName[260];
+static FILE *TestDumpFile;
+static int TestDumpFailed;
+
+void TestDumpArg(const char *name)
+    {
+    strncpy(TestDumpName, name, sizeof(TestDumpName) - 1);
+    TestDumpName[sizeof(TestDumpName) - 1] = 0;
+    }
+
+#define FNV_STEP(h, v) ((h) = ((h) ^ ((unsigned int)(v) & 255)) * 16777619u)
+static void fnv_int(unsigned int *h, int v)
+    {
+    FNV_STEP(*h, v); FNV_STEP(*h, v >> 8); FNV_STEP(*h, v >> 16); FNV_STEP(*h, v >> 24);
+    }
+
+static unsigned int TestStateHash(void)
+    {
+    unsigned int h = 2166136261u;
+    int i;
+    PLAYERp pp;
+    SECTOR_OBJECTp sop;
+
+    fnv_int(&h, randomseed);
+    TRAVERSE_CONNECT(i)
+        {
+        pp = Player + i;
+        fnv_int(&h, pp->posx); fnv_int(&h, pp->posy); fnv_int(&h, pp->posz);
+        fnv_int(&h, pp->pang); fnv_int(&h, pp->horiz); fnv_int(&h, pp->bcnt);
+        fnv_int(&h, User[pp->PlayerSprite] ? User[pp->PlayerSprite]->Health : 0);
+        }
+    for (i = 0; i < MAXSPRITES; i++)
+        {
+        if (sprite[i].statnum >= MAXSTATUS)
+            continue;
+        fnv_int(&h, i);
+        fnv_int(&h, sprite[i].x); fnv_int(&h, sprite[i].y); fnv_int(&h, sprite[i].z);
+        fnv_int(&h, sprite[i].ang); fnv_int(&h, sprite[i].picnum);
+        fnv_int(&h, sprite[i].statnum); fnv_int(&h, sprite[i].sectnum);
+        }
+    for (i = 0; i < numsectors; i++)
+        {
+        fnv_int(&h, sector[i].floorz); fnv_int(&h, sector[i].ceilingz);
+        }
+    for (sop = SectorObject; sop < &SectorObject[MAX_SECTOR_OBJECTS]; sop++)
+        {
+        fnv_int(&h, sop->xmid); fnv_int(&h, sop->ymid); fnv_int(&h, sop->zmid);
+        fnv_int(&h, sop->ang);
+        }
+    return h;
+    }
+
+static void TestDumpTic(void)
+    {
+    extern unsigned int MoveThingsCount;
+    unsigned char rec[17];
+    unsigned int t = MoveThingsCount, h;
+    int i;
+
+    if (!TestDumpName[0] || TestDumpFailed)
+        return;
+    if (!TestDumpFile)
+        {
+        TestDumpFile = fopen(TestDumpName, "wb");
+        if (!TestDumpFile)
+            {
+            TestDumpFailed = 1;
+            buildprintf("TEST: cannot write the sync dump %s\n", TestDumpName);
+            return;
+            }
+        buildprintf("TEST: writing the sync dump %s (17 bytes a tic)\n", TestDumpName);
+        }
+    rec[0] = t & 255; rec[1] = (t >> 8) & 255; rec[2] = (t >> 16) & 255; rec[3] = (t >> 24) & 255;
+    for (i = 0; SyncFunc[i]; i++)
+        rec[4 + i] = (*SyncFunc[i])();
+    h = TestStateHash();
+    rec[13] = h & 255; rec[14] = (h >> 8) & 255; rec[15] = (h >> 16) & 255; rec[16] = (h >> 24) & 255;
+    fwrite(rec, 1, sizeof(rec), TestDumpFile);
+    fflush(TestDumpFile);
+    }
+
 void TestTicHook(void)
     {
     extern unsigned int MoveThingsCount;
+
+    TestDumpTic();
 
     if (TestNudgeTic >= 0 && (int)MoveThingsCount == TestNudgeTic)
         {

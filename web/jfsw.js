@@ -16,6 +16,12 @@
 //   ?idb=quota    storing the game data in the cache fails with a QuotaExceededError (test only).
 //   ?stall=<ms>   how long without a byte before a download is called stalled (default 30000; test only).
 //   ?revalidate=1|0  overrides config.js's `revalidate` (test only).
+//   ?wake_every=N   only every Nth vnet wake-up reaches the game (brief 04; test only: imitates a quiet peer).
+//   ?relay_wt=<url>, ?relay_cert=<hex>, ?impair=<spec>   relay test knobs for network games (brief 04; test only): an explicit
+//                 WebTransport URL, the SHA-256 of a relay development certificate (-dev-cert), and a vnet impairment spec
+//                 ("lat=40,jit=10,loss=5,dup=2,reorder=3,seed=7"; every machine its own seed). They go to the game in
+//                 Module.jfswKnobs and are read from the address only on a ?test=1 page: a crafted link must not route a
+//                 visitor through another relay or degrade their connection. window.jfswKnobs shows what was handed over.
 //
 // The game data (brief 03): data.js downloads and checks the GRP, keeps it in its own IndexedDB cache and
 // hands the bytes here; this file writes them to /data/sw.grp with a stable modification time (so the game's
@@ -144,6 +150,15 @@
     }
   };
   window.Module = Module;
+
+  // Relay test knobs (see the top): only with ?test=1. mmulti_vnet.c reads Module.jfswKnobs and nothing else.
+  Module.jfswKnobs = {};
+  if (TEST) {
+    ['relay_wt', 'relay_cert', 'impair'].forEach(function (k) {
+      if (params.get(k)) { Module.jfswKnobs[k] = params.get(k); }
+    });
+  }
+  window.jfswKnobs = Module.jfswKnobs;
 
   // A trap in WebAssembly, or an error in the game's own scripts, would otherwise just freeze the picture.
   // Errors from elsewhere (a browser extension, say) are logged and the game goes on.
@@ -512,6 +527,11 @@
     window.jfswDownloadLog = [];
     Module.jfswFrameLog = capped([], 50000);
     Module.jfswYieldLog = capped([], 50000);
+    Module.jfswShowframes = 0;              // pictures the game asked to present (showframe(); none while a hidden tab plays a network game)
+    Module.jfswOwedLog = capped([], 50000);     // ms each hidden yield lasted that was entered with data held back by mmulti's send window
+    if (params.get('wake_every')) { Module.jfswWakeEvery = +params.get('wake_every'); }   // only every Nth network wake-up gets through (test only)
+    Module.jfswWakes = 0;                   // how often vnet's wake callback fired (sdlayer2.c)
+    Module.jfswHiddenLog = capped([], 50000);   // why each hidden-tab yield ended: 1 a network event, 2 the page became visible, 0 the timer
     testInfoEl.hidden = false;
     testInfoEl.textContent = 'test mode: args=' + JSON.stringify(gameArgs()) + ' persist=' + PERSIST;
     window.jfswTest = {
