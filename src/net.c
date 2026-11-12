@@ -808,8 +808,9 @@ AddSyncInfoToPacket(int *j)
         }
     }
 
-#ifdef __EMSCRIPTEN__
 #include "mmulti_vnet.h"
+
+#ifdef __EMSCRIPTEN__
 extern void MoveLoop(void);
 
 // One pass of the game loop of a hidden browser tab in a network game (brief 04). The tab has no
@@ -839,6 +840,19 @@ HiddenNetPass(VOID)
     mmulti_vnet_flush();
     }
 #endif
+
+// Brief 04b: this machine's input (or the master's combined packet) goes on the wire when it is
+// made, not at the next dosendpackets() after mmulti's 25 ms send window (PAKRATE) has passed.
+// getpackets(), which faketimerhandler() calls before it makes the input, can already have spent
+// the window on a datagram with only acknowledgements, and then the input waited 16 to 33 ms (a
+// browser frame or two) or up to 25 ms natively. This changes when a datagram goes, not what is
+// in it. mmulti_vnet_flush() (mmulti.c) is not specific to vnet: it sends whatever sendpacket()
+// has queued, to plain UDP peers as well.
+static void
+SendInputNow(void)
+    {
+    mmulti_vnet_flush();
+    }
 
 void
 faketimerhandler(void)
@@ -1034,6 +1048,7 @@ faketimerhandler(void)
         if (TestLagOn) TestLagTag(Player[myconnectindex].movefifoend - 1);
 		netbroadcastpacket(packbuf, j);
         if (TestLagOn) TestLagTag(-1);
+        SendInputNow();
 
         return;
         } // NetBroadcastMode
@@ -1089,6 +1104,7 @@ faketimerhandler(void)
         if (TestLagOn) TestLagTag(pp->movefifoend - 1);
         netsendpacket(connecthead, packbuf, j);
         if (TestLagOn) TestLagTag(-1);
+        SendInputNow();
         return;
         }
 
@@ -1165,6 +1181,7 @@ faketimerhandler(void)
             }
 
         if (TestLagOn) TestLagTag(-1);
+        SendInputNow();
         movefifosendplc += MovesPerPacket;
         }
     }
