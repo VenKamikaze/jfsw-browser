@@ -854,6 +854,87 @@ SendInputNow(void)
     mmulti_vnet_flush();
     }
 
+// The master hands every tic for which all inputs (its own and every slave's) are in to the
+// slaves, as one packet per tic, in order. Brief 04b: it is called from faketimerhandler(), as
+// before, and from getpackets() as soon as it has stored a slave's input, so a tic whose last
+// missing input was a slave's goes out then, not at the master's next own input (up to 25 ms
+// later). It builds the packet in packbuf, so it must not run while getpackets() is still
+// reading a datagram into that buffer: getpackets() calls it after its receive loop. The
+// packets and their order are the same whichever place sends them.
+static void
+MasterForward(void)
+    {
+    int i, j;
+    PLAYERp pp;
+    int sent = 0;
+
+    while (1)
+        {
+        TRAVERSE_CONNECT(i)
+            {
+            if ((Player[i].movefifoend <= movefifosendplc))
+                {
+                if (sent)
+                    SendInputNow();
+                return;
+                }
+            }
+
+        packbuf[0] = PACKET_TYPE_MASTER_TO_SLAVE;
+        j = 1;
+
+        // Fix timers and buffer/jitter value
+        if ((movefifosendplc & (TIMERUPDATESIZ - 1)) == 0)
+            {
+            for (i = connectpoint2[connecthead]; i >= 0; i = connectpoint2[i])
+                {
+                if (Player[i].IsDisconnected)
+                    continue;
+                packbuf[j++] = min(max(Player[i].myminlag, -128), 127);
+                }
+
+            for (i = connecthead; i >= 0; i = connectpoint2[i])
+                Player[i].myminlag = 0x7fffffff;
+            }
+
+        TRAVERSE_CONNECT(i)
+            {
+            pp = Player + i;
+
+            #if !BIT_CODEC
+            memcpy(&packbuf[j], &pp->inputfifo[movefifosendplc & (MOVEFIFOSIZ - 1)], sizeof(SW_PACKET));
+            j += sizeof(SW_PACKET);
+            #else
+            j += EncodeBits(&pp->inputfifo[(movefifosendplc) & (MOVEFIFOSIZ - 1)],
+                       &pp->inputfifo[(movefifosendplc - 1) & (MOVEFIFOSIZ - 1)],
+                       &packbuf[j]);
+            #endif
+            //pp->movefifoend++;
+            }
+
+        #if SYNC_TEST
+        AddSyncInfoToPacket(&j);
+        #endif
+
+        if (TestLagOn) { TestLagForward(movefifosendplc); TestLagTag(movefifosendplc); }
+        for (i = connectpoint2[connecthead]; i >= 0; i = connectpoint2[i])
+            {
+            if (Player[i].IsDisconnected)
+                continue;
+            netsendpacket(i, packbuf, j);
+            /*
+            pp = Player + i;
+            if (TEST(pp->inputfifo[movefifosendplc & (MOVEFIFOSIZ - 1)].bits,QUITBIT)
+               playerquitflag[i] = 1;
+            */
+            }
+
+        if (TestLagOn) TestLagTag(-1);
+        sent = 1;
+        movefifosendplc += MovesPerPacket;
+        }
+    }
+
 void
 faketimerhandler(void)
     {
@@ -1123,67 +1204,7 @@ faketimerhandler(void)
     //    }
 
     // I am MASTER...
-    while (1)
-        {
-        TRAVERSE_CONNECT(i)
-            {
-            if ((Player[i].movefifoend <= movefifosendplc))
-                return;
-            }
-
-        packbuf[0] = PACKET_TYPE_MASTER_TO_SLAVE;
-        j = 1;
-
-        // Fix timers and buffer/jitter value
-        if ((movefifosendplc & (TIMERUPDATESIZ - 1)) == 0)
-            {
-            for (i = connectpoint2[connecthead]; i >= 0; i = connectpoint2[i])
-                {
-                if (Player[i].IsDisconnected)
-                    continue;
-                packbuf[j++] = min(max(Player[i].myminlag, -128), 127);
-                }
-
-            for (i = connecthead; i >= 0; i = connectpoint2[i])
-                Player[i].myminlag = 0x7fffffff;
-            }
-
-        TRAVERSE_CONNECT(i)
-            {
-            pp = Player + i;
-
-            #if !BIT_CODEC
-            memcpy(&packbuf[j], &pp->inputfifo[movefifosendplc & (MOVEFIFOSIZ - 1)], sizeof(SW_PACKET));
-            j += sizeof(SW_PACKET);
-            #else
-            j += EncodeBits(&pp->inputfifo[(movefifosendplc) & (MOVEFIFOSIZ - 1)],
-                       &pp->inputfifo[(movefifosendplc - 1) & (MOVEFIFOSIZ - 1)],
-                       &packbuf[j]);
-            #endif
-            //pp->movefifoend++;
-            }
-
-        #if SYNC_TEST
-        AddSyncInfoToPacket(&j);
-        #endif
-
-        if (TestLagOn) { TestLagForward(movefifosendplc); TestLagTag(movefifosendplc); }
-        for (i = connectpoint2[connecthead]; i >= 0; i = connectpoint2[i])
-            {
-            if (Player[i].IsDisconnected)
-                continue;
-            netsendpacket(i, packbuf, j);
-            /*
-            pp = Player + i;
-            if (TEST(pp->inputfifo[movefifosendplc & (MOVEFIFOSIZ - 1)].bits,QUITBIT)
-               playerquitflag[i] = 1;
-            */
-            }
-
-        if (TestLagOn) TestLagTag(-1);
-        SendInputNow();
-        movefifosendplc += MovesPerPacket;
-        }
+    MasterForward();
     }
 
 VOID
@@ -1575,4 +1596,9 @@ getpackets(VOID)
         if (TestLagOn)
             TestLagScan();
         }
+
+    // Brief 04b: a slave's input may have been the last one missing for a tic: pass the tic on now,
+    // after the receive loop (packbuf is free again), not when the master next makes an input.
+    if (!NetBroadcastMode && myconnectindex == connecthead && ready2send)
+        MasterForward();
     }

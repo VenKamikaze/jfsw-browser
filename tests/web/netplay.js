@@ -164,7 +164,7 @@ function nativeMachine(name, args, o) {
     kind: 'native', name, wd, started: 0, errors: [],
     async start() {
       const out = fs.openSync(outFile, 'w');
-      m.child = spawn(path.join(L.root, 'scripts', 'run-headless.sh'), ['--workdir', wd, '--timeout', String(o.timeout || 400), '--'].concat(args),
+      m.child = spawn(path.join(L.root, 'scripts', 'run-headless.sh'), ['--workdir', wd, '--timeout', String(o.timeout || 400)].concat(process.env.NETPLAY_SW ? ['--sw', process.env.NETPLAY_SW] : [], ['--'], args),
         { env: envv, stdio: ['ignore', out, out], detached: true });
       m.done = new Promise((r) => m.child.on('exit', (c, s) => { m.code = c; r(c); }));
       m.started = now();
