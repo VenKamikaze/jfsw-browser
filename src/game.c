@@ -3791,6 +3791,11 @@ int app_main(int argc, char const * const argv[])
             TestDumpArg(arg+8);     // test-only: this machine's per-tic record of the simulation, to a file
             }
         else
+        if (Bstrncasecmp(arg, "testlag", 7) == 0)
+            {
+            TestLagArg(arg+7);      // test-only: input-to-tic timing of this machine, to a file
+            }
+        else
         if (Bstrncasecmp(arg, "testnudge", 9) == 0)
             {
             TestNudgeArg(atoi(arg+9));// test-only: a deliberate desync of this player at tic T

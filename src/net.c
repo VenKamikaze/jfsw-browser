@@ -892,6 +892,7 @@ faketimerhandler(void)
                &pp->inputfifo[(pp->movefifoend-1) & (MOVEFIFOSIZ - 1)],
                sizeof(SW_PACKET));
 
+        if (TestLagOn) TestLagMade(pp->movefifoend);
         pp->movefifoend++;
         return;
         }
@@ -905,6 +906,7 @@ faketimerhandler(void)
     memset(&AveragePacket, 0, sizeof(AveragePacket));
 
     pp->inputfifo[Player[myconnectindex].movefifoend & (MOVEFIFOSIZ - 1)] = loc;
+    if (TestLagOn) TestLagMade(pp->movefifoend);
     pp->movefifoend++;
 
 #if 0
@@ -1005,6 +1007,7 @@ faketimerhandler(void)
                             i = 1;
                         }
                     totalclock -= synctics * i;
+                    if (TestLagOn) TestLagCorrect(-synctics * i);
                     otherminlag += i;
                     }
                 }
@@ -1028,7 +1031,9 @@ faketimerhandler(void)
         AddSyncInfoToPacket(&j);
         #endif
 
+        if (TestLagOn) TestLagTag(Player[myconnectindex].movefifoend - 1);
 		netbroadcastpacket(packbuf, j);
+        if (TestLagOn) TestLagTag(-1);
 
         return;
         } // NetBroadcastMode
@@ -1055,6 +1060,7 @@ faketimerhandler(void)
                         i = 1;
                     }
                 totalclock -= synctics * i;
+                if (TestLagOn) TestLagCorrect(-synctics * i);
                 otherminlag += i;
                 }
 
@@ -1080,7 +1086,9 @@ faketimerhandler(void)
         AddSyncInfoToPacket(&j);
         #endif
 
+        if (TestLagOn) TestLagTag(pp->movefifoend - 1);
         netsendpacket(connecthead, packbuf, j);
+        if (TestLagOn) TestLagTag(-1);
         return;
         }
 
@@ -1143,6 +1151,7 @@ faketimerhandler(void)
         AddSyncInfoToPacket(&j);
         #endif
 
+        if (TestLagOn) { TestLagForward(movefifosendplc); TestLagTag(movefifosendplc); }
         for (i = connectpoint2[connecthead]; i >= 0; i = connectpoint2[i])
             {
             if (Player[i].IsDisconnected)
@@ -1155,6 +1164,7 @@ faketimerhandler(void)
             */
             }
 
+        if (TestLagOn) TestLagTag(-1);
         movefifosendplc += MovesPerPacket;
         }
     }
@@ -1545,5 +1555,7 @@ getpackets(VOID)
             DSPRINTF(ds,"Packet type unknown %d",packbuf[0]);
             MONO_PRINT(ds);
             }
+        if (TestLagOn)
+            TestLagScan();
         }
     }

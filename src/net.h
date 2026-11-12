@@ -140,7 +140,8 @@ extern short NumSyncBytes;
 // Arguments: -testsync (8 sync bytes in a network game), -testquit<N> (quit
 // cleanly, exit status 0, after N game tics), -testnudge<T> (this player
 // moves 8 units in x at tic T: a deliberate desync, for proving that the
-// sync check bites) and -testdump<name> (this machine writes a record of
+// sync check bites) and -testlag<name> (input-to-tic timing, sync.c) and
+// -testdump<name> (this machine writes a record of
 // every game tic to the file <name>: see sync.c; no effect on the game). -testquit works in network games only (a single player
 // game prints the TEST line but does not exit). All players of a game must be given the same -testsync
 // and -testquit; this is checked through the version exchange.
@@ -152,6 +153,13 @@ void TestSyncArg(void);
 void TestQuitArg(int tics);
 void TestNudgeArg(int tic);
 VOID HiddenNetPass(VOID);        // browser build: one pass of the game loop of a hidden tab (net.c)
+extern int TestLagOn;           // -testlag<name>: input-to-tic timing, see sync.c
+void TestLagArg(const char *name);
+void TestLagMade(int idx);      // own input idx made
+void TestLagTag(int idx);       // the next packet handed to mmulti carries fifo index idx
+void TestLagScan(void);         // after getpackets() stored a packet
+void TestLagForward(int idx);   // master: combined packet for idx is handed to sendpacket
+void TestLagCorrect(int clockticks);    // a totalclock correction of the lag correction
 void TestDumpArg(const char *name);   // -testdump<name>: every machine records each tic to <name> (sync.c)
 int TestVersionSalt(void);
 void TestTicHook(void);         // from domovethings, once per game tic

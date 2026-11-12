@@ -109,6 +109,7 @@ function gameArgs(o) {
   if (o.testsync !== false) { a.push('-testsync'); }
   if (o.tics) { a.push('-testquit' + o.tics); }
   if (o.dump) { a.push('-testdump' + o.dump); }
+  if (o.lag) { a.push('-testlag' + o.lag); }
   if (o.nudge) { a.push('-testnudge' + o.nudge); }
   return a.concat(o.extra || []);
 }
@@ -133,10 +134,11 @@ async function browserMachine(name, args, o) {
     async dumpSize() {
       return page.evaluate((f) => { try { return window.jfswTest.FS.stat('/persist/' + f).size; } catch (er) { return 0; } }, o.dump || 'd.bin').catch(() => 0);
     },
-    async readDump() {
-      const b64 = await page.evaluate((f) => { const b = window.jfswTest.readFile(f); return b ? btoa(Array.from(b, (c) => String.fromCharCode(c)).join('')) : null; }, o.dump || 'd.bin');
+    async readFile(name) {
+      const b64 = await page.evaluate((f) => { const b = window.jfswTest.readFile(f); return b ? btoa(Array.from(b, (c) => String.fromCharCode(c)).join('')) : null; }, name);
       return b64 === null ? null : Buffer.from(b64, 'base64');
     },
+    async readDump() { return m.readFile(o.dump || 'd.bin'); },
     async exitCode() { return page.evaluate(() => (window.jfswExit ? window.jfswExit.code : null)).catch(() => null); },
     async status() { return page.evaluate(() => document.getElementById('status').textContent).catch(() => ''); },
     async waitEnd(ms) {
@@ -170,7 +172,8 @@ function nativeMachine(name, args, o) {
     out: async () => { try { return fs.readFileSync(outFile, 'utf8'); } catch (e) { return ''; } },
     async state() { return m.code === undefined ? 'running' : (m.code === 0 ? 'ended' : 'error'); },
     async dumpSize() { try { return fs.statSync(path.join(wd, o.dump || 'd.bin')).size; } catch (e) { return 0; } },
-    async readDump() { try { return fs.readFileSync(path.join(wd, o.dump || 'd.bin')); } catch (e) { return null; } },
+    async readFile(name) { try { return fs.readFileSync(path.join(wd, name)); } catch (e) { return null; } },
+    async readDump() { return m.readFile(o.dump || 'd.bin'); },
     async exitCode() { return m.code === undefined ? null : m.code; },
     async status() { return ''; },
     async waitEnd(ms) {
@@ -342,7 +345,7 @@ async function room(relay, kinds, o) {
     const net = (kind) => (kind === 'browser'
       ? ['-relay', relay.ws].concat(i === 0 ? ['-host-room', String(kinds.length)] : ['-room', code])
       : ['-relay', relay.udp].concat(i === 0 ? ['-host-room', String(kinds.length)] : ['-room', code]));
-    const args = gameArgs({ net: net(kinds[i]), tics, dump: 'd.bin', nudge: o.nudge && o.nudge[i], autonet: o.autonet });
+    const args = gameArgs({ net: net(kinds[i]), tics, dump: 'd.bin', lag: o.lag ? 'l.bin' : '', nudge: o.nudge && o.nudge[i], autonet: o.autonet });
     const impair = o.impair ? o.impair(i) : null;
     let m;
     if (kinds[i] === 'browser') {
@@ -423,6 +426,100 @@ SCENARIOS.impaired = {
 SCENARIOS['impaired-wt'] = {
   what: 'the same over WebTransport: two browsers',
   run: () => bounded('impaired-wt', ['browser', 'browser'], { impair: IMPAIR, query: WT }, 'relay-wt'),
+};
+
+// ---- input-to-tic delay (brief 04b) ------------------------------------------------------------------
+// Every machine also runs -testlag<file> (sync.c): 36 bytes a game tic, nine little endian 32 bit fields, one machine's own
+// clock (microseconds): tic, made (this machine's own input for the tic), ready (every player's input is here), ran (the tic
+// ran), sendwait (sendpacket() to the datagram leaving), fwdwait (master: ready to the combined packet being queued),
+// otherminlag, bufferjitter, the sum of the totalclock corrections. The delay a player feels is ran - made.
+const LREC = 36, LNONE = 0xFFFFFFFF;
+function parseLag(buf) {
+  const rows = [];
+  for (let i = 0; i + LREC <= buf.length; i += LREC) {
+    rows.push({ tic: buf.readUInt32LE(i), made: buf.readUInt32LE(i + 4), ready: buf.readUInt32LE(i + 8), ran: buf.readUInt32LE(i + 12),
+      sendwait: buf.readUInt32LE(i + 16), fwdwait: buf.readUInt32LE(i + 20), minlag: buf.readInt32LE(i + 24), jitter: buf.readInt32LE(i + 28), corr: buf.readInt32LE(i + 32) });
+  }
+  return rows;
+}
+function pct(a, p) {
+  if (!a.length) { return NaN; }
+  const b = a.slice().sort((x, y) => x - y);
+  return b[Math.min(b.length - 1, Math.floor(p / 100 * b.length))];
+}
+// median and 95th percentile (ms) of the delays, from tic `from` on
+function lagStats(rows, from) {
+  const r = rows.filter((x) => x.tic >= from);
+  const ms = (f) => r.map(f).filter((v) => v >= 0 && v < 5e6).map((v) => v / 1000);
+  const col = (name, f) => { const a = ms(f); return { name, n: a.length, med: pct(a, 50), p95: pct(a, 95) }; };
+  const sw = r.filter((x) => x.sendwait !== LNONE).map((x) => x.sendwait / 1000);
+  const fw = r.filter((x) => x.fwdwait !== LNONE).map((x) => x.fwdwait / 1000);
+  const last = rows[rows.length - 1] || { corr: 0 };
+  const lags = r.map((x) => x.minlag), jit = r.map((x) => x.jitter);
+  return {
+    total: col('input to tic', (x) => x.ran - x.made),
+    toReady: col('input to complete', (x) => x.ready - x.made),
+    wait: col('complete to tic', (x) => x.ran - x.ready),
+    sendwait: { n: sw.length, med: pct(sw, 50), p95: pct(sw, 95) },
+    fwdwait: { n: fw.length, med: pct(fw, 50), p95: pct(fw, 95) },
+    minlag: { med: pct(lags, 50), min: Math.min(...lags), max: Math.max(...lags) },
+    jitter: { med: pct(jit, 50), min: Math.min(...jit), max: Math.max(...jit) },
+    corrections: rows.length ? last.corr : 0,
+    // the clock corrections made after tic `from`, in clock ticks (a game tic is 3)
+    corrLate: rows.length ? last.corr - (rows.find((x) => x.tic >= from) || last).corr : 0,
+  };
+}
+const f1 = (x) => (Number.isFinite(x) ? x.toFixed(1) : 'n/a');
+// "TEST: lag: 1234 datagrams (56789 bytes) to player 1 in 30000 ms" lines -> datagrams a second to each peer
+function datagramRates(out) {
+  const r = [];
+  const re = /TEST: lag: (\d+) datagrams \((\d+) bytes\) to player (\d+) in (\d+) ms/g;
+  let m;
+  while ((m = re.exec(out))) { r.push({ to: +m[3], n: +m[1], bytes: +m[2], perSec: +m[1] / Math.max(1, +m[4]) * 1000, bytesPerSec: +m[2] / Math.max(1, +m[4]) * 1000 }); }
+  return r;
+}
+
+// One measured game: `kinds` as for room(); o.impair(i) as there. Returns { ms, stats: per machine, rates: per machine }.
+async function lagGame(label, kinds, o) {
+  o = o || {};
+  const relay = await startRelay();
+  try {
+    console.log('  ' + label + ': ' + kinds.join(' + ') + (o.impair ? ', impaired' : '') + ' (' + LOAD() + ')');
+    const tics = o.tics || TICS;
+    const ms = await room(relay, kinds, Object.assign({}, o, { lag: true, tics }));
+    const limit = tics / NOMINAL * 1000 * 3 + 90000;
+    for (const m of ms) { await m.waitEnd(limit - (now() - ms[0].started)); }
+    const load = LOAD();
+    await checkGame(ms, tics);
+    const stats = [], rates = [];
+    for (let i = 0; i < ms.length; i++) {
+      const buf = await ms[i].readFile('l.bin');
+      check(!!buf && buf.length >= LREC * tics, ms[i].name + ' wrote its lag record (' + (buf ? buf.length / LREC : 0) + ' tics)');
+      const st = lagStats(buf ? parseLag(buf) : [], 200);
+      stats.push(st);
+      rates.push(datagramRates(await ms[i].out()));
+      const role = i === 0 ? 'master' : 'slave ' + i;
+      console.log('    ' + ms[i].name + ' (' + ms[i].kind + ' ' + role + '): input to tic ' + f1(st.total.med) + ' ms median, ' + f1(st.total.p95) + ' p95'
+        + '; own input to tic complete ' + f1(st.toReady.med) + ' / ' + f1(st.toReady.p95) + '; complete to tic ' + f1(st.wait.med) + ' / ' + f1(st.wait.p95)
+        + '; sendpacket to datagram ' + f1(st.sendwait.med) + ' / ' + f1(st.sendwait.p95) + (i === 0 ? '; last input to combined packet ' + f1(st.fwdwait.med) + ' / ' + f1(st.fwdwait.p95) : '')
+        + '; otherminlag ' + st.minlag.med + ' (' + st.minlag.min + '..' + st.minlag.max + '), bufferjitter ' + st.jitter.med + ' (' + st.jitter.min + '..' + st.jitter.max + ')'
+        + '; clock corrections after tic 200: ' + st.corrLate + ' clock ticks (' + st.corrections + ' in all)');
+      console.log('    ' + ms[i].name + ' datagrams: ' + rates[i].map((r) => r.perSec.toFixed(1) + '/s to player ' + r.to + ' (' + r.bytesPerSec.toFixed(0) + ' B/s)').join(', '));
+    }
+    console.log('    ' + load);
+    return { ms, stats, rates, load };
+  } finally { await cleanup(relay); }
+}
+const LAT30 = (i) => 'lat=30,seed=' + (201 + i);       // 30 ms on everything a machine sends: 30 ms each way
+
+SCENARIOS['lag-matrix'] = {
+  what: 'input-to-tic delay of master and slave: browsers, browser and native, native and native; unimpaired and with 30 ms each way (a report; agreement is checked)',
+  run: async () => {
+    for (const [name, kinds] of [['browsers', ['browser', 'browser']], ['browser-host', ['browser', 'native']], ['native-host', ['native', 'browser']], ['natives', ['native', 'native']]]) {
+      await lagGame(name, kinds, {});
+      await lagGame(name + '-30ms', kinds, { impair: LAT30 });
+    }
+  },
 };
 
 // A hidden, throttled tab as slave or as host: the room must keep at least 90 % of the nominal tic rate, measured on

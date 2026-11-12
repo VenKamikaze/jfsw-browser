@@ -30,6 +30,8 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "tags.h"
 #include "names2.h"
 #include "net.h"
+#include "mmulti_vnet.h"
+#include <time.h>
 #include "menus.h"
 
 BOOL SyncPrintMode = TRUE;
@@ -697,11 +699,202 @@ static void TestDumpTic(void)
     fflush(TestDumpFile);
     }
 
+
+// -testlag<name>: input-to-tic timing (brief 04b). This machine writes 36 bytes (nine little endian
+// 32 bit fields) for every game tic to the file <name>, all from this machine's own clock
+// (CLOCK_MONOTONIC, microseconds since the first record). For the tic that domovethings() ran, with
+// n the input fifo index it consumed:
+//   0 tic             MoveThingsCount, as in -testdump
+//   1 made            when this machine's own input n was made (faketimerhandler, after getinput)
+//   2 ready           when every player's input n was on this machine (the last of the others'
+//                     arrivals as getpackets() stored them, and the own input)
+//   3 ran             when the tic was run (the record is written at the start of the tic)
+//   4 sendwait        how long the packet that carried this tic's data for the next machine waited
+//                     between sendpacket() and a datagram leaving: a slave's own input, or the
+//                     master's combined packet (the longest over its slaves); 0xFFFFFFFF if unknown
+//   5 fwdwait         the master only: from "ready" to the combined packet being handed to sendpacket();
+//                     0xFFFFFFFF on a slave
+//   6 otherminlag     (signed) the lag correction's view
+//   7 bufferjitter    (signed)
+//   8 clockcorr       (signed) the sum of every totalclock correction so far, in clock ticks
+// and at -testquit the log says how many datagrams went to each peer. Input to tic is ran - made;
+// ran - ready is the time a complete tic waits for the lockstep buffer. Nothing goes on the wire and
+// nothing in the game changes; without the argument none of this runs.
+int TestLagOn;
+static char TestLagName[260];
+static FILE *TestLagFile;
+static unsigned long long TestLagBase;
+static unsigned int TestLagMadeT[MOVEFIFOSIZ], TestLagReadyT[MOVEFIFOSIZ], TestLagSendWait[MOVEFIFOSIZ], TestLagFwdWait[MOVEFIFOSIZ];
+static unsigned int TestLagArrive[MAX_SW_PLAYERS_REG][MOVEFIFOSIZ];
+static int TestLagSeen[MAX_SW_PLAYERS_REG];
+static int TestLagCurIdx = -1;
+static int TestLagClockCorr;
+// per peer output queue (mmulti's ocnt): when queued, which fifo index it belongs to, how far datagrams have carried it
+#define TESTLAG_Q 512
+static unsigned int TestLagQT[16][TESTLAG_Q];
+static int TestLagQIdx[16][TESTLAG_Q];
+static int TestLagQHW[16];
+static unsigned int TestLagDgrams[16], TestLagDBytes[16], TestLagDFirst[16], TestLagDLast[16];
+
+static unsigned int TestLagNow(void)
+    {
+    struct timespec ts;
+    unsigned long long t;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    t = (unsigned long long)ts.tv_sec * 1000000ull + ts.tv_nsec / 1000;
+    if (!TestLagBase)
+        TestLagBase = t;
+    return (unsigned int)(t - TestLagBase);
+    }
+
+static void TestLagQueueHook(int other, int ocnt)
+    {
+    TestLagQT[other & 15][ocnt & (TESTLAG_Q - 1)] = TestLagNow();
+    TestLagQIdx[other & 15][ocnt & (TESTLAG_Q - 1)] = TestLagCurIdx;
+    }
+
+static void TestLagSendHook(int other, int ocnt1, int nbytes)
+    {
+    unsigned int t = TestLagNow();
+    int o = other & 15, i;
+
+    if (!TestLagDgrams[o])
+        TestLagDFirst[o] = t;
+    TestLagDgrams[o]++;
+    TestLagDBytes[o] += nbytes;
+    TestLagDLast[o] = t;
+    for (i = TestLagQHW[o]; i < ocnt1; i++)
+        {
+        int idx = TestLagQIdx[o][i & (TESTLAG_Q - 1)];
+        unsigned int w = t - TestLagQT[o][i & (TESTLAG_Q - 1)];
+        if (idx >= 0 && (TestLagSendWait[idx & (MOVEFIFOSIZ - 1)] == 0xFFFFFFFFu || w > TestLagSendWait[idx & (MOVEFIFOSIZ - 1)]))
+            TestLagSendWait[idx & (MOVEFIFOSIZ - 1)] = w;
+        }
+    if (ocnt1 > TestLagQHW[o])
+        TestLagQHW[o] = ocnt1;
+    }
+
+void TestLagArg(const char *name)
+    {
+    strncpy(TestLagName, name, sizeof(TestLagName) - 1);
+    TestLagName[sizeof(TestLagName) - 1] = 0;
+    TestLagOn = 1;
+    mmulti_test_queuehook = TestLagQueueHook;
+    mmulti_test_sendhook = TestLagSendHook;
+    }
+
+// This machine made its own input number idx (called just before movefifoend++).
+void TestLagMade(int idx)
+    {
+    int k = idx & (MOVEFIFOSIZ - 1);
+    TestLagMadeT[k] = TestLagNow();
+    TestLagArrive[myconnectindex][k] = TestLagMadeT[k];
+    TestLagSendWait[k] = 0xFFFFFFFFu;
+    TestLagFwdWait[k] = 0xFFFFFFFFu;
+    }
+
+// Note for the next packet handed to mmulti which fifo index it carries (-1: none).
+void TestLagTag(int idx)
+    {
+    TestLagCurIdx = idx;
+    }
+
+// Called after getpackets() stored a packet: stamp every input that has arrived since.
+void TestLagScan(void)
+    {
+    int p, i;
+    unsigned int t = 0;
+
+    for (p = connecthead; p >= 0; p = connectpoint2[p])
+        {
+        if (p == myconnectindex)
+            continue;
+        if (Player[p].movefifoend < TestLagSeen[p])
+            TestLagSeen[p] = 0;     // a new level: the fifos started again
+        for (i = TestLagSeen[p]; i < Player[p].movefifoend; i++)
+            {
+            if (!t)
+                t = TestLagNow();
+            TestLagArrive[p][i & (MOVEFIFOSIZ - 1)] = t;
+            }
+        if (Player[p].movefifoend > TestLagSeen[p])
+            TestLagSeen[p] = Player[p].movefifoend;
+        }
+    }
+
+// The master is about to hand the combined packet for fifo index idx to sendpacket(): how long since
+// that tic was complete (the own input made and every slave's arrived).
+void TestLagForward(int idx)
+    {
+    int p, k = idx & (MOVEFIFOSIZ - 1);
+    unsigned int ready = 0, t = TestLagNow();
+
+    for (p = connecthead; p >= 0; p = connectpoint2[p])
+        if (TestLagArrive[p][k] > ready)
+            ready = TestLagArrive[p][k];
+    TestLagFwdWait[k] = t - ready;
+    TestLagSendWait[k] = 0xFFFFFFFFu;
+    }
+
+void TestLagCorrect(int clockticks)
+    {
+    TestLagClockCorr += clockticks;
+    }
+
+static void TestLagTic(void)
+    {
+    extern unsigned int MoveThingsCount;
+    extern int otherminlag, bufferjitter;
+    unsigned int rec[9], ready = 0;
+    int p, k = (movefifoplc - 1) & (MOVEFIFOSIZ - 1);
+
+    if (!TestLagOn)
+        return;
+    if (!TestLagFile)
+        {
+        TestLagFile = fopen(TestLagName, "wb");
+        if (!TestLagFile)
+            {
+            TestLagOn = 0;
+            buildprintf("TEST: cannot write the lag record %s\n", TestLagName);
+            return;
+            }
+        buildprintf("TEST: writing the lag record %s (36 bytes a tic)\n", TestLagName);
+        }
+    for (p = connecthead; p >= 0; p = connectpoint2[p])
+        if (TestLagArrive[p][k] > ready)
+            ready = TestLagArrive[p][k];
+    rec[0] = MoveThingsCount;
+    rec[1] = TestLagMadeT[k];
+    rec[2] = ready;
+    rec[3] = TestLagNow();
+    rec[4] = TestLagSendWait[k];
+    rec[5] = (myconnectindex == connecthead) ? TestLagFwdWait[k] : 0xFFFFFFFFu;
+    rec[6] = (unsigned int)otherminlag;
+    rec[7] = (unsigned int)bufferjitter;
+    rec[8] = (unsigned int)TestLagClockCorr;
+    fwrite(rec, 1, sizeof(rec), TestLagFile);
+    fflush(TestLagFile);
+    }
+
+void TestLagReport(void)
+    {
+    int p;
+
+    if (!TestLagOn)
+        return;
+    for (p = connecthead; p >= 0; p = connectpoint2[p])
+        if (p != myconnectindex && TestLagDgrams[p & 15])
+            buildprintf("TEST: lag: %u datagrams (%u bytes) to player %d in %u ms\n", TestLagDgrams[p & 15], TestLagDBytes[p & 15],
+                p, (TestLagDLast[p & 15] - TestLagDFirst[p & 15]) / 1000);
+    }
+
 void TestTicHook(void)
     {
     extern unsigned int MoveThingsCount;
 
     TestDumpTic();
+    TestLagTic();
 
     if (TestNudgeTic >= 0 && (int)MoveThingsCount == TestNudgeTic)
         {
@@ -716,6 +909,8 @@ void TestTicHook(void)
 void TestQuitFinish(void)
     {
     unsigned int until;
+
+    TestLagReport();
 
     buildprintf("TEST: quitting after %u game tics: %d sync checks, %d mismatches, %d sync bytes, player %d of %d\n",
         MoveThingsCount, SyncChecks, SyncMismatches, (int)NumSyncBytes, myconnectindex, CommPlayers);
