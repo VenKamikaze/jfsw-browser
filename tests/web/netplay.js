@@ -484,7 +484,10 @@ async function hiddenRoom(kinds, hiddenIndex, opts) {
     }
     if (wakes) {
       console.log('  hidden tab: ' + wakes.wakes + ' wake-ups, ' + wakes.log + ' hidden yields (resumed by: ' + JSON.stringify(wakes.reasons) + ': 1 network event, 0 timer), ' + wakes.frames + ' pictures asked for in all (' + framesAtHide + ' when it was hidden)');
-      check(wakes.log - hiddenLogAtHide > 100, h.name + ' was driven by hidden-tab passes (' + (wakes.log - hiddenLogAtHide) + ' after it was hidden)');
+      // 200 as before for a hidden tab that gets every wake-up; a thinned one (hidden-thin) gets only
+      // every Nth, so about 190 passes in all at N = 6: it needs a lower bar of its own.
+      const minPasses = opts.wakeEvery ? 150 : 200;
+      check(wakes.log - hiddenLogAtHide > minPasses, h.name + ' was driven by hidden-tab passes (' + (wakes.log - hiddenLogAtHide) + ' after it was hidden, more than ' + minPasses + ')');
       check((wakes.reasons[1] || 0) > 0.8 * wakes.log, h.name + ' was resumed by network events, not the timer (' + (wakes.reasons[1] || 0) + ' of ' + wakes.log + ')');
       // S1: an input that is made but held back by mmulti's 25 ms send window must not wait for the next network event: the pass
       // flushes it. So (almost) no yield is entered with data still owed.
