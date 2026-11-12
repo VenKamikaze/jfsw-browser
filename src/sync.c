@@ -702,9 +702,10 @@ static unsigned int TestStateHash(void)
 // a fixed symbol) and are equal only between machines running the same build. krandcount, numframes
 // and movefifoend are this machine's own (not simulation state), as are the angle and xvel of the
 // ceiling/floor picture override markers (TestStateHash) and a player's FadeAmt and FadeTics (the
-// screen flash, set for the player this machine looks through: brief 04c, code-facts.md section 17). It is opt-in because it is slow: writing
-// the first dump (about 1.3 MB for E1L1) delays a browser's first frame noticeably, and that alone
-// changes the start of a game (it made the tic 1 case of brief 04b happen in most games).
+// screen flash, set for the player this machine looks through: brief 04c, code-facts.md section
+// 17). It is opt-in because it is slow: writing the first dump (about 1.3 MB for E1L1) delays a
+// browser's first frame noticeably, and that alone changes the start of a game (it made the tic 1
+// case of brief 04b happen in most games).
 #include "interp.h"
 static int TestStateOn;
 static int TestStateTics[16];
