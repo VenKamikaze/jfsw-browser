@@ -74,20 +74,61 @@ async function main() {
     t.check(t.notBlank(stats), `the canvas is not blank (${stats.colors} colours, ${stats.width}x${stats.height})`, JSON.stringify(stats));
     if (SABOTAGE) { await page.evaluate(() => { document.getElementById('canvas').style.opacity = ''; }); }
 
-    // Skip the intro screens and get to the main menu: any key skips one.
+    // Skip the intro screens and get to the main menu: any key skips one (and opens the menu at the title
+    // screen). Not Space or Enter: in the menu they select, and a few too many started a level (New Game,
+    // episode, skill), after which the menu checks below were looking at the 3D view. Shift does nothing there.
     const menuLog = () => page.evaluate(() => window.jfswOut.join('\n'));
-    for (let i = 0; i < 12; i++) { await page.keyboard.press('Space'); await page.waitForTimeout(700); }
+    for (let i = 0; i < 12; i++) { await page.keyboard.press('ShiftLeft'); await page.waitForTimeout(700); }
     await page.waitForTimeout(1500);
     const menu1 = await t.canvasStats(page);
     t.check(t.notBlank(menu1), `the main menu is drawn (${menu1.colors} colours)`);
-    // The keyboard drives the menu: Down moves the cursor (the little yin-yang left of the items). The menu
-    // animates by itself, so count the pixels that change in the cursor's column with and without the key.
-    const CURSOR = { x: 90, y: 90, width: 90, height: 370 };
-    const idle = await t.changedPixels(page, CURSOR, null, 800);
-    const moved = await t.changedPixels(page, CURSOR, SABOTAGE_NOKEY ? null : () => t.tap(page, 'ArrowDown'), 800);
-    t.check(moved > 300 && moved > 3 * idle + 100, `Down moves the menu cursor (${moved} pixels changed in the cursor column; ${idle} with no key)`);
-    await t.tap(page, 'ArrowUp');
-    await page.waitForTimeout(800);
+    // The menu cursor is a spinning coin left of the items (New Game, Load Game, Save Game, Options, How to Order,
+    // Quit; 62 page pixels apart). Find the row it is on from one screenshot of the cursor column: the band with
+    // the light pixels of the coin (none at all when the coin is edge-on: then the answer is 0, unknown).
+    const COLUMN = { x: 95, y: 100, width: 80, height: 372 };
+    const decoder = await context.newPage();
+    const cursorRow = async () => {
+      const png = await page.screenshot({ clip: COLUMN, type: 'png' });
+      const counts = await decoder.evaluate(async (data) => {
+        const bmp = await createImageBitmap(await (await fetch('data:image/png;base64,' + data)).blob());
+        const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+        const g = c.getContext('2d'); g.drawImage(bmp, 0, 0);
+        const px = g.getImageData(0, 0, c.width, c.height).data;
+        const n = [0, 0, 0, 0, 0, 0];
+        for (let i = 0; i < px.length; i += 4) {
+          if (px[i] + px[i + 1] + px[i + 2] > 520) { n[Math.min(5, Math.floor(Math.floor(i / 4 / c.width) * 372 / c.height / 62))]++; }
+        }
+        return n;
+      }, png.toString('base64'));
+      const best = counts.indexOf(Math.max(...counts));
+      const others = counts.reduce((a, c, i) => (i === best ? a : a + c), 0);
+      return { row: counts[best] >= 30 && counts[best] > 4 * others ? best + 1 : 0, counts: counts.join(',') };
+    };
+    const settledRow = async () => {     // a few looks, so that an edge-on coin does not count
+      let r = { row: 0, counts: '' };
+      for (let k = 0; k < 6 && !r.row; k++) { r = await cursorRow(); if (!r.row) { await page.waitForTimeout(60); } }
+      return r;
+    };
+    const c0 = await settledRow();
+    t.check(c0.row === 1, `the main menu is open with the cursor on New Game (row ${c0.row}; light pixels per row ${c0.counts})`);
+    // The keyboard drives the menu: Down moves the cursor down, Up moves it up (the list wraps round). The menu
+    // reads the arrows' state, not presses: it looks at them when 10 clock tics have passed since its last look
+    // (REPEAT_DELAY and limitmove in src/menus.c, the original game's behaviour), about every 100 ms, or once per
+    // pass of its loop when frames are slower than that. A 150 ms press therefore spans one or two of those looks
+    // (if the game draws more than about 7 frames a second), so it moves the cursor one or two rows; never none,
+    // never three. A fixed 200 ms press moved it two rows, sometimes three. (Watching the cursor and letting go
+    // when it moves is no good: one look at the page takes about 450 ms here.)
+    const press = async (key) => {
+      await t.tap(page, key, 150);
+      await page.waitForTimeout(500);
+      return settledRow();
+    };
+    const steps = (from, to) => (to - from + 6) % 6;      // rows moved down, with the wrap
+    const c1 = SABOTAGE_NOKEY ? await settledRow() : await press('ArrowDown');
+    t.check(c0.row && c1.row && [1, 2].includes(steps(c0.row, c1.row)), `Down moves the menu cursor down (row ${c0.row} to ${c1.row}; light pixels per row ${c1.counts})`);
+    const c2 = await press('ArrowUp');
+    t.check(c1.row && c2.row && [1, 2].includes(steps(c2.row, c1.row)), `Up moves it up (row ${c1.row} to ${c2.row}; light pixels per row ${c2.counts})`);
+    await decoder.close();
     t.check(t.notBlank(await t.canvasStats(page)), 'the menu is still drawn after the key presses');
 
     // The game goes on running: frames keep being presented.
