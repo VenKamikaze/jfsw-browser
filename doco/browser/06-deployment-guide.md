@@ -152,4 +152,87 @@ Keep them small and say why. Don't change the game's simulation or the netcode.
 
 ## Outcome
 
-(To be written by the implementer.)
+**Status: review.** Implemented 13 Nov 2026 on `browser/06-deployment-guide` (jfsw-browser only; no submodule moved, no game or netcode change). Commits: `cef0ee9` (the draft guide), `613c891` (the check script and `play.js`, bugs.md L24 and L25), `73e1bd8` (`--no-tls`, data-hosting.md's wasm header, building.md §6.7, links), `6e00ee1` (the sysctl step, the "checked where" section), and the Outcome commit. A container restart in the middle lost nothing that was committed or built; every test below was run after it.
+
+### What was done
+
+- **[`deploy.md`](deploy.md)**, Bit Riot's layout for this game: placeholders, the layout diagram and the ports table; building the web game from a fresh clone and the exact file list (eight files plus the GRP; `rsync --delay-updates`); the game data (where it comes from, the licence quoted, the registered GRP kept off the site); `config.js` (`relay`, `testMode: false`, `data`) kept as the operator's own copy outside the build; Apache on Arch (modules, a port-80 vhost for the redirect and ACME, a 443 vhost with the game's `<Directory>`, MIME types, gzip, `no-cache` on everything but the GRP, `DeflateAlterETag NoChange`, `ProxyPass /vnet ... upgrade=websocket`, `SSLSessionCache`), certbot with the timer and a reload hook; the relay (build, cross-compile, own user, the WebTransport certificate copy by a certbot deploy hook, the sysctl, the hardened unit, every flag explained, limits and time-outs with measurements); desktop players (build on Arch, every way to join, no Windows or macOS build); builds that must match and what happens when they do not; the `curl` checks with their answers, the `?test=1` check and the play steps; without TLS (its own vhost block); updating; a troubleshooting table of this game's own messages; and what was checked where.
+- **`tests/deploy/check-deploy.sh`** (root; not in `make test`) and **`tests/deploy/play.js`**: follow the guide with its own configuration blocks (each after a `<!-- check-deploy: NAME -->` comment, so a change to the guide is what gets tested; `--guide FILE` takes another copy, which is how the mutations were made), check what it says, and play through it. `--quick` (no browsers), `--no-tls`, `--keep`. It removes everything it added and stops Apache and the relay. How to run it, what it touches and its ports (the guide's own: TCP 80 and 443, UDP 443 and 7777, 127.0.0.1:8080 and 8081) are in `building.md` §6.7.
+- **Small fixes the validation showed** (no change to the game, the page or the build script):
+  - `data-hosting.md`'s Apache example cached `sw.wasm` for a day (`max-age=86400`, with the GRP). After a redeploy a browser could then pair an old `sw.wasm` with a new `sw.js`, which does not start (measured, below). Now `no-cache`, rechecked on Apache 2.4.58.
+  - `data-hosting.md` said `build-wasm.sh` copies `web/config.js` "each time it runs". It copies it when `web/config.js` is newer than the copy (a make rule), so an edit made in `build-wasm/` survives until the next change to `web/config.js`, then is silently lost. The guide keeps the site's `config.js` outside the build instead; `build-wasm.sh` needed no change, and no `--deploy` output either (nothing in `build-wasm/` is test-only).
+- `bugs.md` **L24** (no build check between machines) and **L25** (WebTransport and a browser host with two guests run slow), both open, for the coordinator.
+- README: the status row (review) and a link to the guide; `building.md` §6.6 and `data-hosting.md` link to it.
+
+### The known facts, checked
+
+1. **Files to deploy:** `build-wasm/` holds exactly `index.html`, `jfsw.css`, `config.js`, `grptable.js`, `data.js`, `jfsw.js`, `sw.js`, `sw.wasm`, and the site needs all of them and `swshare.grp`. None is test-only: the hooks are in `jfsw.js`, and need `testMode: true`. The check compares the guide's table, `build-wasm/` and the deployed directory.
+2. **`config.js`:** true, with the correction above about when it is copied. The deployed one has `testMode: false` (checked with `curl`); `--guide` with `testMode: true` is mutation 2.
+3. **The relay only from `config.js`:** true. With `relay: 'wss://game.example.org/vnet'` and the relay on `-wt :443`, both browsers reported `relay-wt`, so the game derived `https://game.example.org/vnet` on UDP 443 and used it; with `ws://` (`--no-tls`) both reported `relay-ws`.
+4. **The relay's limits** (measured; see the tables below and in the guide): the defaults are enough. A host sends 68 datagrams a second per other player in a 2-player game and 63 in a 4-player game; the master of a 4-player game (the largest shareware game) sends 188 a second and 15,800 bytes a second, against `-client-pps 600` and `-client-bps 600000`. No 8-player game could be run (no registered data; there is no test setting for more players with the shareware GRP, and a modified GRP was ruled out: the archive's licence forbids modifying the game). Computed for 8: about 440 a second (7 × 63), and at most about 560 (7 × 80, the pacing bound); bytes about 50,000 to 70,000 a second. `rate_limited` stayed 0 in every game. The guide says: defaults enough; for 8-player registered games raise `-client-pps` to 1000 for headroom; nothing else.
+5. **Time-outs:** the relay's 15 s session time-out and the game's 15 s `NET_GONE_MS` are meant to be equal (brief 05 chose the game's from the relay's default), and brief 05's rejoin cases, which depend on the relay freeing a vanished member's address, pass with the defaults (`rejoin-vanish`, `rejoin-quit` in the full `netplay.js` run below, on a relay with default time-outs). The guide says to leave `-session-timeout` and `-keepalive` alone and why.
+6. **Builds must match** (found out; the game not changed; `bugs.md` L24). Every build announces game version 13, `CheckVersion()` only logs, and the relay lobby has no build check:
+   - A **simulation difference** (made deliberately: `-testnudge200` on the guest of a 2-player native relay game, no `-testsync`): the game goes on; from tic 200 the master logs `GAME OUT OF SYNC: tic 200, sync byte 0 (RandomSync), player 1 differs from the master` and shows "GAME OUT OF SYNC! Restart the game."; 198 of 398 sync checks failed; the guest says nothing (slaves never compare, L11). So: a desync caught by sync.c on the host only, not a refusal.
+   - A **desktop player on an older checkout**: the build from before brief 05 (`f21a67a`, no session ids in the lobby) against the current one, 400 tics, host old and guest new and the other way round: both played and their dumps were identical.
+   - **A browser with an old cached `.wasm`**: the current page and `sw.js` with the pre-05 `sw.wasm`: "The game could not start: ASM_CONSTS[emAsmAddr] is not a function"; the pre-05 `sw.js` with the current `sw.wasm`: "The game crashed: LinkError: WebAssembly.instantiate(): Import #1 "env" "jfsw_page_lobby": function import requires a callable". With every file `no-cache` (the guide's Apache, checked: `304` on revalidation thanks to `DeflateAlterETag NoChange`), a reload always gets one build.
+   - The guide says how to see a build's commit (the `Version ...-g<commit>` line) and to have desktop players check out the site's commit.
+7. **Desktop players:** the check's desktop game joins with exactly `sw -net -relay game.example.org:7777 -room CODE --` (through `/etc/hosts`). The console, menu and startup-window ways are brief 05's and are covered by its tests, not rerun against this deployment. No Windows or macOS build: said.
+8. **The data file:** served by the site; `data-hosting.md`'s headers checked again (gzip, ETag, `max-age=86400`, the CRC check of the download). Source and MD5 as in `fetch-test-data.sh`. `LICENSE.TXT` of `3dsw12.zip` (also in `SWSW12.SHR`), section [3] "GRANT", [A] and [D], quoted word for word; no other claim. The registered GRP: the picker only.
+9. **No COOP/COEP:** the wasm link has no `-pthread` and no shared memory (`Makefile.emscripten`); no such header is sent, and the game runs (checked).
+
+**Measurements for known 4** (30 s co-op games on E1L1 through a local relay, every player native unless said; `-testlag` counts; load average 0.4 to 2.4):
+
+| Game | Host sends: datagrams a second (to each) | payload bytes a datagram | Host's bytes a second, relay frames |
+|---|---|---|---|
+| 2 natives | 68.3 | 51.9 | 5,250 |
+| 3 natives | 129.8 (65.1, 64.7) | 59.0 | 10,900 |
+| 4 natives | 187.5 (62.8, 62.4, 62.3) | 59.2 | 15,800 |
+| 4 natives, all firing (`-testfire100`) | 191.8 | 59.1 | 16,100 |
+| browser host, browser and native guests, WebSocket (in `check-deploy.sh`) | 96.4 to 98.6 (48 to 49 each) | 93 to 99 | about 10,000 |
+| the same over WebTransport (L25) | 68 (34 each) | 212 to 219 | about 15,000 |
+
+A guest sends 66 to 69 datagrams a second, all to the host.
+
+**L25, found by the validation.** In the deployment, a game hosted by a browser with a browser and a desktop guest ran at 24.8 to 26.8 tics a second over WebTransport (three games measured from the host's `-testlag`; a fourth took 56 s for 1,200 tics), against 40.0 over WebSocket in the same set-up, 40.0 for two browsers over WebTransport, 40.0 for a browser host with one desktop guest over WebTransport, and 26.7 for three browsers over WebTransport. The host's page dropped 951 datagrams and the guest's 223 in one game because more than 16 writes to the WebTransport datagram stream were pending (vnet `relay_wt.c`, `JS_MAX_DATAGRAMS_IN_FLIGHT`). Pinning the certificate by hash (`?relay_cert=` on the test copy) instead of `--webtransport-developer-mode` gave 25.6, so the test's Chromium flags are not the cause. Brief 04's `netplay.js wt` (native host, two browser guests) runs at full speed, which is why it was not seen before. The game is still correct (every tic agrees); it is slower. vnet is not changed here; the guide says WebTransport can be left off for browser-hosted games of three or more until it is fixed. `check-deploy.sh` prints a WARNING line with the tic rate but does not fail on it.
+
+### What was checked where
+
+In the cloud container (Ubuntu 24.04 x86_64, Apache 2.4.58, Go 1.24.7, Chromium under Playwright, no systemd): everything in "What was checked where" at the end of `deploy.md`: the whole guide through `check-deploy.sh`, with and without TLS, Chromium with WebTransport on UDP 443 (with `--ignore-certificate-errors-spki-list` and `--webtransport-developer-mode`; `--origin-to-force-quic-on`, the brief's suggestion, sent the page's own requests over HTTP/3 to the relay and broke the page; trusting the certificate in Chromium's NSS store was not enough for QUIC either), `systemd-analyze verify` on the unit, the relay cross-compiled for aarch64, the `rsync` line into a local directory, `sysctl -w` with the guide's values.
+
+Not checkable there, and why: certbot and Let's Encrypt (no public name, no inbound internet), the certbot timer and the Apache reload hook (no systemd, no certbot), `systemctl`/`journalctl`, the `sysctl.d` file with `sysctl --system` (system-wide; `sysctl -w` was used and undone), Arch itself (`pacman`, Arch's own `httpd.conf`, `/usr/bin/nologin`, the `http` user, package versions; the check uses an Arch-style configuration on Ubuntu's Apache), an aarch64 machine, `ssh` to a server, Firefox, and a real network between players (loss, NAT, a phone on another network).
+
+### Tests
+
+The check script (one at a time; load average while running):
+
+| Run | Result |
+|---|---|
+| `check-deploy.sh` (final tree) | RESULT_FULL |
+| `check-deploy.sh --no-tls` | RESULT_NOTLS |
+
+Regression (acceptance 5), one at a time, after the restart, on the final code:
+
+REGRESSION_TABLE
+
+### Mutations
+
+Each is a copy of the guide with one line changed, deployed with `check-deploy.sh --guide FILE` (the full run), so the deployment really is broken that way:
+
+| Mutation | Result |
+|---|---|
+| the unit's `-origins game.example.org` changed to `-origins other.example.org` | FAILED, 3 checks: "the WebSocket upgrade through /vnet from the site's Origin: 101: missing [^HTTP/1.1 101 Switching Protocols]; got: HTTP/1.1 403 Forbidden", the 403 check for another Origin (it got 101), and `play.js`: "A: the lobby shows a room code (... Network game failed: the relay could not be reached (relay unreachable).)" |
+| `testMode: true` in the guide's `config.js` block | FAILED, 2 checks: "config.js: testMode false ...: missing [^ *testMode: false,$]; got: testMode: true, ...", and `play.js`: "the deployed page gives ?test=1 no test hooks (window.jfswTest is object)", "and shows no "test mode: args=" line", and "and the game does not see ?args= ... (mmulti: creating a room on relay wss://relay.example.org/vnet ...)": the crafted link sent the game to another relay, the danger S2 describes |
+
+### Play-test on Arch Linux (the user)
+
+On your own server (Arch, Apache, a real domain), following `deploy.md` from the top; replace the placeholders with your names.
+
+1. On the PC: section 1 (clone the branch, `scripts/setup-emsdk.sh`, `scripts/build-wasm.sh`, `scripts/fetch-test-data.sh`), section 2 (`~/sw-site/config.js` with your relay URL and `testMode: false`), the `rsync`.
+2. On the server: section 3 (modules, `sw.conf`, certbot, the reload hook, `apachectl configtest`), section 4 (the relay built or copied, the user, the certificate hook run once, the sysctl, the unit, `systemctl enable --now vnet-relay`). Open TCP 80 and 443, UDP 7777 and UDP 443 on the firewall and the router.
+3. Section 6's `curl` checks from another machine: each must give the answer shown. Open `https://game.example.org/games/sw/?test=1`: no "test mode" line.
+4. **A browser host:** `https://game.example.org/games/sw/?host=3` on the PC, "Click to host a game of 3"; note the code.
+5. **A browser guest from the invite link, on another network if possible:** send the link to a phone on its mobile data (not your Wi-Fi), or a laptop on a phone's hotspot; "Click to join room ...": both lobbies say 2 of 3.
+6. **A desktop player on Arch joining by code:** section 5's build, at the commit you deployed, then `./sw -net -relay game.example.org:7777 -room CODE --`. All three start; the host picks co-op in the menus; play a few minutes, including a fight.
+7. **WebTransport:** in the browsers' consoles (F12), `relay-wt`; on the server `curl -s 127.0.0.1:8081/stats` shows `"webtransports": 2` during the game, and `journalctl -u vnet-relay` shows the room created and closed. Please also say whether that three-player game felt slow (L25: in the container a browser host with two guests over WebTransport ran at two thirds of the normal speed); compare with a game where the host's browser cannot use UDP 443 (block it, or remove `-wt` and restart the relay: then all say `relay-ws`).
+8. **A redeploy reaching an open browser:** leave a browser on the page; change something visible (for example the `<title>` in `build-wasm/index.html`, or rebuild after a `git pull`), `rsync` again; reload the open page: the change is there, and the browser's network panel shows `304` for the files that did not change.
+9. Optional: the check script on a spare Arch machine or VM (`sudo tests/deploy/check-deploy.sh`), which would check the Arch-only parts it could not check here (`httpd`, `/usr/lib/httpd/modules`, the `http` user); it needs the ports free and nothing at `/srv/http/games/sw`.
