@@ -31,7 +31,9 @@ const path = require('path');
 const { serve, configText } = require('./server.js');
 const L = require('./lib.js');
 
-const PORT_WEB = 48300, PORT_UDP = 48301, PORT_HTTP = 48302, PORT_WT = 48303;
+// NETPLAY_PORT_BASE=N (brief 02c): ports N to N+3 instead of 48300 to 48303, for a run next to another one on the same machine.
+const PORT_BASE = +(process.env.NETPLAY_PORT_BASE || 48300);
+const PORT_WEB = PORT_BASE, PORT_UDP = PORT_BASE + 1, PORT_HTTP = PORT_BASE + 2, PORT_WT = PORT_BASE + 3;
 const NOMINAL = 40;                       // game tics a second (120 Hz clock, 3 clock ticks a game tic)
 const REC = 17;                           // bytes per tic in a -testdump file
 const AUTONET = '-autonet 2,0,2,1,0,0,0,0,0,0';
@@ -1601,7 +1603,7 @@ SCENARIOS['host-join'] = {
         await h.start();
         const code = await waitRoomCode(h, 60000);
         const out = await h.out();
-        check(/Re-launching: \S+ -net -relay 127\.0\.0\.1:48301 -host-room 2 --/.test(out), h.name + ' re-launched itself with -net -relay <its setting> -host-room 2', (out.match(/Re-launching:[^\n]*/) || [''])[0]);
+        check(new RegExp('Re-launching: \\S+ -net -relay 127\\.0\\.0\\.1:' + PORT_UDP + ' -host-room 2 --').test(out), h.name + ' re-launched itself with -net -relay <its setting> -host-room 2', (out.match(/Re-launching:[^\n]*/) || [''])[0]);
         const g = await netPage('p1', '&join=' + code, play);
         await g.start();
         await finish([h, g], 'native console host');
@@ -1614,7 +1616,7 @@ SCENARIOS['host-join'] = {
         const code = await waitRoomCode(h);
         const g = nativeMachine('p1', play.concat(['-testosd60,join ' + code.toLowerCase()]), { dump: 'd.bin', cfg });
         await g.start();
-        check(!!(await outHas(g, new RegExp('Re-launching: \\S+ -net -relay 127\\.0\\.0\\.1:48301 -room ' + code + ' --'), 60000)), g.name + ' re-launched itself with -room ' + code);
+        check(!!(await outHas(g, new RegExp('Re-launching: \\S+ -net -relay 127\\.0\\.0\\.1:' + PORT_UDP + ' -room ' + code + ' --'), 60000)), g.name + ' re-launched itself with -room ' + code);
         await finish([h, g], 'native console join');
       }
       // 4. the menus: Escape, Host Online Game (G), 2 Players (2) on one page; Escape, Join Online Game (J), the code, Enter on another

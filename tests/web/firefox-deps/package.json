@@ -1,0 +1,8 @@
+{
+  "name": "jfsw-browser-firefox-test-deps",
+  "private": true,
+  "description": "puppeteer-core for tests/web/firefox.js; scripts/setup-firefox.sh installs it with npm ci into ~/.cache/jfsw-browser (brief 02c)",
+  "dependencies": {
+    "puppeteer-core": "25.17.0"
+  }
+}

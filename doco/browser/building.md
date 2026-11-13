@@ -127,9 +127,22 @@ node tests/web/determinism.js               # native against wasm: sync bytes, f
 node tests/web/persist.js                   # settings and saves survive a reload (also one without quitting, and one 500 ms after a save)
 node tests/web/data.js                      # game data: download, cache, errors, picker, quota, config changes (about 2 minutes)
 node tests/web/grptable.js                  # web/grptable.js agrees with src/grpscan.c (no browser)
+node tests/web/focus.js                     # brief 02c: a refused pointer lock or a lost focus does not end the game; a trap still does (about 1 minute)
 ```
 
-They use the preinstalled Chromium through Playwright (`require('playwright')`; never run `playwright install`), serve `build-wasm/` and `testdata/swshare.grp` on 127.0.0.1 ports 48101 and up (data.js: 48201 and 48202), and clean up after themselves.
+They use the preinstalled Chromium through Playwright (`require('playwright')`; never run `playwright install`), serve `build-wasm/` and `testdata/swshare.grp` on 127.0.0.1 ports 48101 and up (data.js: 48201 and 48202; focus.js: 48104), and clean up after themselves. `focus.js` uses the full Chromium build in headless mode (`channel: 'chromium'`, the same preinstalled browser) rather than Playwright's default headless shell, which reports no mouse movement under pointer lock and crashes on a wasm trap (`code-facts.md` §20). `FOCUS_SABOTAGE=unhandled node tests/web/focus.js` leaves the lock's promise unhandled, as before the fix: its first part must fail.
+
+#### Firefox (brief 02c; optional, not part of the default runs)
+
+```sh
+scripts/setup-firefox.sh                    # a pinned stock Firefox (160.0, SHA-256 checked) and puppeteer-core (25.17.0), in ~/.cache/jfsw-browser
+node tests/web/firefox.js                   # about 1 minute
+FIREFOX=/usr/bin/firefox node tests/web/firefox.js     # another Firefox (Arch: sudo pacman -S firefox); puppeteer-core still from the script
+```
+
+Playwright's Firefox needs Playwright's own patched build, so `firefox.js` drives a stock Firefox headless over WebDriver BiDi with `puppeteer-core`. The repository has no `package.json`: the tests use the globally installed Playwright, and `setup-firefox.sh` installs `puppeteer-core` with `npm ci` into the cache, from `tests/web/firefox-deps/package-lock.json`, which pins it and every dependency (`FIREFOX_CACHE=DIR` moves both; `--no-firefox` installs only `puppeteer-core`; `PUPPETEER_CORE=DIR` points the test at another copy). Headless Firefox never gives the page the focus, so it refuses every pointer-lock request as a desktop Firefox does after Alt+Tab. The test checks a single player game (refusals at start-up and after a click: logged, game running, no overlay), a wasm trap (still fatal, with `?persist=0` and with persistence on), and a network game through a local relay (Chromium hosts by `?host=2`, Firefox joins with persistence on: 400 tics, both end by themselves with "The game has ended." and agree on every tic). Ports 48400 (page), 48401 and 48402 (relay). Without a Firefox or `puppeteer-core` it prints `firefox: NOT RUN` and exits with status 3, which is not a pass; when the cache holds other versions than the test pins (or the pinned Firefox reports another version) it prints `firefox: VERSION MISMATCH` and exits with status 3. `FIREFOX_SABOTAGE=unhandled` leaves the lock's promise unhandled, as before the fix: it must fail.
+
+A real Alt+Tab is not tested (it depends on the window manager and on timing). It was checked by hand under `xvfb-run` with `openbox` and `xdotool` (`apt-get install openbox xdotool`): the Outcome of brief 02c says how.
 
 ### 6.5 Network games in the browser, and their tests (brief 04)
 
@@ -153,7 +166,7 @@ node tests/web/netplay.js ws               # one scenario
 node tests/web/netplay.js                  # all of them but lag-matrix and old-new, about 28 minutes (brief 05); one at a time, the tests are real time
 ```
 
-`tests/web/netplay.js` builds the relay with Go as `tests/net/lib.sh` does (`~/.cache/jfsw-browser/vnet-relay-<rev>`), serves `build-wasm/` (`WASM_DIR=other node tests/web/netplay.js ...` for another build, as the mutation runs do) and uses 127.0.0.1 ports 48300 (page), 48301 (relay UDP), 48302 (relay WebSocket) and 48303 (relay WebTransport, UDP). Native machines run under `scripts/run-headless.sh` in a temporary directory (`JFSW_TEST_KEEP=1` keeps it). Every scenario ends with "no process this test started is left running".
+`tests/web/netplay.js` builds the relay with Go as `tests/net/lib.sh` does (`~/.cache/jfsw-browser/vnet-relay-<rev>`), serves `build-wasm/` (`WASM_DIR=other node tests/web/netplay.js ...` for another build, as the mutation runs do) and uses 127.0.0.1 ports 48300 (page), 48301 (relay UDP), 48302 (relay WebSocket) and 48303 (relay WebTransport, UDP); `NETPLAY_PORT_BASE=N` moves them to N to N+3 (brief 02c), for a run next to another on the same machine. Native machines run under `scripts/run-headless.sh` in a temporary directory (`JFSW_TEST_KEEP=1` keeps it). Every scenario ends with "no process this test started is left running".
 
 Brief 04b added three scenarios. `lag` (about 3 minutes, in the full run) plays three measured games (two browsers; a native host with a browser; two native games with 30 ms each way) and checks the send path: a machine's packets wait under 5 ms in mmulti at the median, the master hands on a complete tic within 2 ms at the median and 8 ms at p95, at most 80 datagrams a second go to each peer, the lag correction does not oscillate, and the native slave with 30 ms each way sees its input in a tic within 85 ms at the median. `tic1` (about 2 minutes) gives the master `-testslowstart3000` in 8 games, so it runs tic 1 after one frame while the slave draws many, and checks that they agree field by field. `lag-matrix` (about 7 minutes, **only by name**) is the report: input-to-tic delay of master and slave for every pairing, unimpaired and with 30 ms each way (`NETPLAY_LAG_ONLY=browsers,natives-30ms` picks games, `NETPLAY_LAG_REPS=3` repeats them). Other knobs: `NETPLAY_SW=/path/to/sw` runs another native build (as `WASM_DIR` does for the page); `NETPLAY_STATE=1` gives every machine `-teststate`, and a dump difference then names the objects and fields that differ (`NETPLAY_STATE=600,1200` adds those tics).
 
@@ -234,6 +247,7 @@ While it runs it adds `game.example.org` to `/etc/hosts`, the game to `/srv/http
 | `scripts/setup.sh` | native dependencies (apt, pacman) |
 | `scripts/setup-emsdk.sh` | pinned Emscripten and the ports |
 | `scripts/fetch-test-data.sh` | verified `testdata/swshare.grp` |
+| `scripts/setup-firefox.sh` | a pinned stock Firefox and `puppeteer-core` for `tests/web/firefox.js` (brief 02c) |
 | `scripts/run-headless.sh` | headless, bounded game runs |
 | `tests/fetch-test-data.sh`, `tests/run-headless.sh` | tests for the fetch and run scripts |
 | `ext/vnet` | vnet `v0.4.0` (submodule; built into the engine library, native and browser) |
