@@ -200,7 +200,7 @@
         return;
       }
       var msg = code === 0 ? 'The game has ended.' : 'The game stopped with an error (exit status ' + code + ').';
-      if (lastMessage) { msg += ' ' + lastMessage; }
+      if (lastMessage) { msg += ' ' + sentence(lastMessage); }
       var again = NET ? '' : ' Reload the page to play again.';
       syncNow().then(function () { finish(msg + again, code !== 0); },
                      function () { finish(msg + ' (Saving to the browser failed.)' + again, code !== 0); });
@@ -334,15 +334,19 @@
   // A trap or an error inside the game's frame reaches Module.onExit first: Emscripten's callUserCallback() ends the
   // runtime (exit with the last status, usually 0) on its way out, and the error itself comes after, as an 'error'
   // event or an unhandled rejection (the order of the two is the browser's). So such an error shortly after an exit is
-  // still the game's, and its message replaces "The game has ended." (brief 02c). Not a DOMException: that is a browser
-  // API refusing something, not the game failing; for example, when the game closes its audio on the way out, Firefox
-  // rejects every AudioContext.resume() still pending with "Closed before resume completed".
+  // still the game's, and its message replaces "The game has ended." (brief 02c, bugs.md L32). The error comes within
+  // a few ms; the window is 250 ms. Not a DOMException once the game has exited, whether or not the exit's save is still
+  // running (`running` is true until then): that is a browser API refusing something, not the game failing; for
+  // example, when the game closes its audio on the way out, Firefox rejects every AudioContext.resume() still pending
+  // with "Closed before resume completed". Nor Emscripten's ExitStatus, which is how exit() unwinds.
   var exitedAt = 0;
   function gameError(err, file) {
     if (!fromGame(err, file)) { return false; }
-    if (running) { return true; }
+    if (err && err.name === 'ExitStatus') { return false; }
     var refusal = typeof DOMException !== 'undefined' && err instanceof DOMException;
-    return !refusal && exitedAt > 0 && performance.now() - exitedAt < 2000;
+    if (exitedAt > 0 && refusal) { return false; }
+    if (running) { return true; }
+    return exitedAt > 0 && performance.now() - exitedAt < 250;
   }
   window.addEventListener('error', function (e) {
     if (gameError(e.error, e.filename)) { finish('Something went wrong: ' + sentence(describe(e)) + ' Reload the page to try again.', true, true); }
@@ -661,7 +665,7 @@
     } catch (e) {
       if (e === 'unwind') { return; }                       // ASYNCIFY suspended main, as it should
       if (e && e.name === 'ExitStatus') { return; }         // exit(), reported by onExit
-      finish('The game could not start: ' + describe(e), true);
+      finish('The game could not start: ' + sentence(describe(e)), true);
     }
   }
   startBtn.addEventListener('click', start);
@@ -708,15 +712,34 @@
   // (sdlayer2.c keeps the canvas a window), but they are handled alike in case it ever does. So does SDL's audio with
   // AudioContext.resume() (it asks on every audio callback while the context is suspended): when the game closes its
   // audio device (on exit, or to reopen it after a sound setting changed) every pending resume() is rejected.
+  // Dropped promises left alone: AudioContext.close() (rejects only for a context already closed), webkitAudioContext
+  // (no browser this page supports lacks AudioContext), and Browser.requestFullscreen()'s new container element in
+  // sw.js (nothing calls it).
+  // A burst of refusals (Firefox rejects 130 to 195 pending resume() calls at once at the end of a game) is logged as
+  // its first one and then one line with the count, a second after the burst.
   // Test hook: window.jfswTest.unhandledPointerLock = true leaves the lock's promise unhandled, as before the fix.
+  var refusalBursts = {};
+  function logRefusal(what, e) {
+    var b = refusalBursts[what] || (refusalBursts[what] = { more: 0, timer: 0 });
+    if (b.timer) { b.more++; clearTimeout(b.timer); } else { console.warn(what + ' refused:', describe(e)); }
+    b.timer = setTimeout(function () {
+      if (b.more) { console.warn(what + ' refused ' + b.more + ' more time' + (b.more === 1 ? '' : 's') + ' (the same way)'); }
+      b.more = 0; b.timer = 0;
+    }, 1000);
+  }
   function quietRefusal(obj, name, what) {
     var real = obj[name];
     if (typeof real !== 'function') { return; }
     obj[name] = function () {
       var r;
-      try { r = real.apply(this, arguments); } catch (e) { console.warn(what + ' refused:', describe(e)); return undefined; }
+      try { r = real.apply(this, arguments); } catch (e) {
+        // what the browser would have done with a refusal: a rejected promise, here one that already has its handler
+        var p = Promise.reject(e);
+        p.then(null, function (x) { logRefusal(what, x); });
+        return p;
+      }
       if (TEST && name === 'requestPointerLock' && window.jfswTest && window.jfswTest.unhandledPointerLock) { return r; }
-      if (r && typeof r.then === 'function') { r.then(null, function (e) { console.warn(what + ' refused:', describe(e)); }); }
+      if (r && typeof r.then === 'function') { r.then(null, function (e) { logRefusal(what, e); }); }
       return r;
     };
   }

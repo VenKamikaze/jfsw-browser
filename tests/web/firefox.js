@@ -15,9 +15,10 @@
 // through sw.js, which before the fix made the page show "Something went wrong" (the user's report). The game asks
 // for the lock at start-up (grabmouse(1) in jfbuild/src/sdlayer2.c) and on every click on the canvas.
 // 1. A single player game: the refusal at start-up and after a click are logged, the game keeps running, no overlay.
-// 2. A wasm trap in the game's frame is still fatal in Firefox.
-// 3. A network game through a local relay: Chromium (Playwright) hosts by ?host=2, Firefox joins by ?join=CODE;
-//    400 tics; both end by themselves and agree on every tic (-testdump), and Firefox showed no overlay on the way.
+// 2. A wasm trap in the game's frame is still fatal in Firefox, with ?persist=0 and with persistence on.
+// 3. A network game through a local relay: Chromium (Playwright) hosts by ?host=2, Firefox joins by ?join=CODE with
+//    persistence on; 400 tics; both end by themselves and agree on every tic (-testdump), Firefox showed no overlay on
+//    the way, and its end says "The game has ended." (not a refusal at the exit taken for an error).
 // Ports: 48400 (page), 48401 (relay UDP), 48402 (relay WebSocket).
 'use strict';
 const fs = require('fs');
@@ -38,11 +39,21 @@ const TICS = 400;
 // Single player games start in a level: in headless Firefox, which plays no sound, the title sequence stops drawing
 // after a few seconds (it waits for its sound), so frames would stop coming there for a reason of its own.
 const LEVEL = '?test=1&persist=0&args=' + encodeURIComponent('-level3 -s1');
+const LEVEL_PERSIST = '?test=1&args=' + encodeURIComponent('-level3 -s1');      // the game's folder kept in IndexedDB, as on a real page
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function notRun(why) {
   console.log('firefox: NOT RUN: ' + why);
   console.log('  (scripts/setup-firefox.sh installs a pinned Firefox and puppeteer-core; FIREFOX=/path/to/firefox uses another Firefox)');
+  process.exit(3);
+}
+// The cache holds other versions than the ones this test pins (scripts/setup-firefox.sh was changed, or not run since).
+function versionMismatch(what, want, dirPrefix) {
+  let have = [];
+  try { have = fs.readdirSync(CACHE).filter((d) => d.startsWith(dirPrefix)).map((d) => d.slice(dirPrefix.length)); } catch (e) { /* no cache */ }
+  if (!have.length) { return; }
+  console.log(`firefox: VERSION MISMATCH: this test wants ${what} ${want}, the cache (${CACHE}) has ${have.join(', ')}`);
+  console.log('  (run scripts/setup-firefox.sh; or FIREFOX=/path/to/firefox, PUPPETEER_CORE=/path/to/puppeteer-core to use others)');
   process.exit(3);
 }
 
@@ -107,13 +118,14 @@ async function singleIn(browser, base) {
   if (s.overlay) { console.log('  (the page said: ' + s.status + ')'); }
 }
 
-async function trap(puppeteer, base) {
+async function trap(puppeteer, base, persist) {
   const browser = await launchFirefox(puppeteer);
-  try { await trapIn(browser, base); } finally { await browser.close().catch(() => {}); }
+  try { await trapIn(browser, base, persist); } finally { await browser.close().catch(() => {}); }
 }
-async function trapIn(browser, base) {
-  console.log('2. a wasm trap is still fatal');
-  const { page } = await firefoxPage(browser, base + LEVEL);
+// persist: the game's folder kept in IndexedDB (every real page; the exit's save delays "The game has ended.") or not
+async function trapIn(browser, base, persist) {
+  console.log('2. a wasm trap is still fatal' + (persist ? ' (persistence on)' : ' (?persist=0)'));
+  const { page } = await firefoxPage(browser, base + (persist ? LEVEL_PERSIST : LEVEL));
   await page.click('#start');
   await sleep(5000);
   const before = await pageState(page);
@@ -154,7 +166,7 @@ async function startRelay() {
 }
 
 async function network(puppeteer, base) {
-  console.log('3. a network game: Chromium hosts, Firefox joins');
+  console.log('3. a network game: Chromium hosts, Firefox joins (Firefox with persistence on)');
   const { chromium } = require('playwright');
   const relay = await startRelay();
   const chrome = await chromium.launch();
@@ -167,7 +179,8 @@ async function network(puppeteer, base) {
     await host.click('#start');
     await host.waitForFunction(() => window.jfswLobby && window.jfswLobby.code, null, { timeout: 40000 });
     const code = await host.evaluate(() => window.jfswLobby.code);
-    const g = await firefoxPage(browser, base + '?test=1&persist=0&join=' + code + '&args=' + args);
+    // Firefox with persistence on, as on a real page (the end of its game is then reported after the exit's save)
+    const g = await firefoxPage(browser, base + '?test=1&join=' + code + '&args=' + args);
     await g.page.click('#start');
     // until both have ended; Firefox's overlay is watched on the way (it would show over a running game)
     let overlaySeen = '';
@@ -183,7 +196,10 @@ async function network(puppeteer, base) {
     const exitG = await g.page.evaluate(() => window.jfswExit && window.jfswExit.code);
     const exitH = await host.evaluate(() => window.jfswExit && window.jfswExit.code);
     t.check(gs.ff.lockErrors >= 1, `Firefox refused the game's pointer-lock request (${gs.ff.lockErrors} refusals)`);
-    t.check(!overlaySeen && gs.state === 'ended' && exitG === 0, `Firefox: no overlay while the game ran, and it ended by itself (state ${gs.state}, exit ${exitG})`, overlaySeen || gs.status);
+    t.check(!overlaySeen && gs.state === 'ended' && exitG === 0 && /^The game has ended\./.test(gs.status), `Firefox: no overlay while the game ran, and it ended by itself with "The game has ended." (state ${gs.state}, exit ${exitG})`, overlaySeen || gs.status);
+    await sleep(1500);      // the summary of a burst of refusals comes a second after its last one
+    const audio = g.warnings.filter((w) => /^audio resume refused/.test(w));
+    t.check(audio.length <= 2, `Firefox: the audio refusals at the end are at most two lines, the first and a count (${audio.length}: ${audio.slice(0, 2).join(' | ')})`);
     t.check(hs.state === 'ended' && exitH === 0, `Chromium: the game ended by itself (state ${hs.state}, exit ${exitH})`, hs.status);
     const read = async (p) => { const b64 = await p.evaluate(() => { const b = window.jfswTest.readFile('d.bin'); return b ? btoa(Array.from(b, (c) => String.fromCharCode(c)).join('')) : null; }); return b64 === null ? null : Buffer.from(b64, 'base64'); };
     const dg = await read(g.page), dh = await read(host);
@@ -200,9 +216,23 @@ async function network(puppeteer, base) {
 }
 
 async function main() {
-  if (!fs.existsSync(FIREFOX)) { notRun('no Firefox at ' + FIREFOX); }
+  if (!fs.existsSync(FIREFOX)) {
+    if (!process.env.FIREFOX) { versionMismatch('Firefox', FIREFOX_VERSION, 'firefox-'); }
+    notRun('no Firefox at ' + FIREFOX);
+  }
   let puppeteer;
-  try { puppeteer = require(PUPPETEER); } catch (e) { notRun('no puppeteer-core at ' + PUPPETEER); }
+  try { puppeteer = require(PUPPETEER); } catch (e) {
+    if (!process.env.PUPPETEER_CORE) { versionMismatch('puppeteer-core', PUPPETEER_VERSION, 'puppeteer-core-'); }
+    notRun('no puppeteer-core at ' + PUPPETEER);
+  }
+  const version = execSync(JSON.stringify(FIREFOX) + ' --version').toString().trim();
+  if (version.indexOf(' ' + FIREFOX_VERSION) < 0) {
+    if (!process.env.FIREFOX) {
+      console.log(`firefox: VERSION MISMATCH: ${FIREFOX} says "${version}", this test wants ${FIREFOX_VERSION} (run scripts/setup-firefox.sh)`);
+      process.exit(3);
+    }
+    console.log(`(FIREFOX: "${version}", not the pinned ${FIREFOX_VERSION}; the results are for that version)`);
+  }
   if (!fs.existsSync(path.join(t.BUILD, 'sw.wasm'))) { throw new Error(`${t.BUILD}/sw.wasm not found: run scripts/build-wasm.sh`); }
   if (!fs.existsSync(t.GRP)) { throw new Error(`${t.GRP} not found: run scripts/fetch-test-data.sh`); }
   const cfg = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'jfsw-firefox-')), 'config.js');
@@ -210,9 +240,10 @@ async function main() {
   const server = await serve(t.BUILD, { '/swshare.grp': t.GRP, '/config.js': cfg }, PORT_WEB);
   const base = 'http://127.0.0.1:' + PORT_WEB + '/index.html';
   try {
-    console.log('Firefox: ' + execSync(JSON.stringify(FIREFOX) + ' --version').toString().trim() + ' (' + FIREFOX + ')');
+    console.log('Firefox: ' + version + ' (' + FIREFOX + ')');
     await single(puppeteer, base);
-    await trap(puppeteer, base);
+    await trap(puppeteer, base, false);
+    await trap(puppeteer, base, true);
     await network(puppeteer, base);
   } finally {
     await new Promise((r) => server.close(r));

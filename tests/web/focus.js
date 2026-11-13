@@ -17,7 +17,7 @@
 //    And a real focus loss: another page comes to the front and goes; no overlay, and a click locks the pointer again.
 // 2. A real failure is still fatal: a wasm trap (an out-of-bounds access in free()) and an error thrown by the
 //    game's own scripts, both inside the game's frame (from Module.jfswShowframes, which sdlayer2.c updates for every
-//    picture, in sw.js), show the overlay with the message as one sentence.
+//    picture, in sw.js), show the overlay with the message as one sentence; the trap also with persistence on.
 // Port 48104. The full Chromium build in headless mode, not the headless shell (see startEnv()).
 'use strict';
 const fs = require('fs');
@@ -88,8 +88,8 @@ async function refused(env) {
   t.check(s.state === 'running', `the game is still running (state ${s.state})`, s.status);
   t.check(!s.overlay, 'no overlay', s.status);
   t.check(!/\.\. /.test(s.status), 'no doubled full stop in the page\'s message', s.status);
-  const n1 = await framesIn(page, 1000);
-  t.check(n1 > 20, `frames keep coming (${n1} in a second)`);
+  const n1 = await framesIn(page, 3000);
+  t.check(n1 > 60, `frames keep coming (${n1} in 3 s; more than 20 a second needed)`);
   t.check(r.warnings.some((w) => w === 'pointer lock refused: ' + MSG), 'the refusal is logged ("pointer lock refused: ' + MSG + '")', r.warnings.slice(0, 3).join(' | '));
   t.check(lock.unhandled === 0, `no unhandled rejection (${lock.unhandled})`);
   // a click on the canvas asks again (SDL's mousedown handler: relative mode on and no lock); refused again
@@ -102,37 +102,42 @@ async function refused(env) {
   await page.waitForTimeout(1500);       // the click also swung the fist
   // while the pointer is free, the mouse is not the game's (02's filter): the refusal left SDL and the page agreeing on that
   const sweep = async () => { await page.mouse.move(200, 250, { steps: 4 }); await page.mouse.move(800, 350, { steps: 8 }); await page.mouse.move(500, 300, { steps: 4 }); };
+  const still0 = await t.changedPixels(page, VIEW, null, 800);       // how much the picture changes by itself meanwhile
   const swept = await t.changedPixels(page, VIEW, sweep, 800);
-  t.check(swept < 2000, `after a refusal, moving the mouse over the picture does not turn the view (${swept} pixels changed)`);
+  t.check(swept < still0 + 2000, `after a refusal, moving the mouse over the picture does not turn the view (${swept} pixels changed; ${still0} by themselves)`);
   // the browser stops refusing: the next click locks the pointer, and the mouse turns the view. The screenshots are taken
-  // first and compared afterwards: the comparison opens a page of its own, which takes the focus (and so the lock) away.
+  // now and compared at the end: the comparison opens a page of its own, which takes the focus and the lock away.
   await page.evaluate(() => { window.__lock.refuse = false; });
   await page.bringToFront();
   s = await lockByClicking(page);
   t.check(s.locked, 'once the browser allows it, a click on the canvas locks the pointer');
   await page.waitForTimeout(2000);       // the click also swung the fist
   const shot = () => page.screenshot({ clip: VIEW, type: 'png' });
-  const still0 = await shot(); await page.waitForTimeout(800); const still1 = await shot();
+  const look0 = await shot(); await page.waitForTimeout(800); const look1 = await shot();
   for (let i = 0; i < 10; i++) { await page.mouse.move(500 + 30 * (i + 1), 300, { steps: 2 }); }
   await page.waitForTimeout(800);
-  const look1 = await shot();
-  const lockedDuringLook = await page.evaluate(() => document.pointerLockElement === document.getElementById('canvas'));
-  const still = await t.pixelDiff(page, still0, still1), look = await t.pixelDiff(page, still1, look1);
-  t.check(lockedDuringLook && look > 20000, `with the pointer locked, moving the mouse turns the view (${look} pixels changed; ${still} by themselves)`);
-  // 3. a real focus loss in Chromium: another page comes to the front, then this one again
+  const look2 = await shot();
+  s = await pageState(page);
+  const lockedDuringLook = s.locked;
+  // 3. a real focus loss in Chromium: another page comes to the front, then this one again. The pointer is locked when
+  // it starts (checked just above, and no other page has been opened since). Playwright fakes the focus: this page's
+  // document.hasFocus() stays true, so to the page the lock loss looks like the player's Escape, and it sends the game
+  // an Escape (its menu opens); a real browser reports the lost focus and sends none.
   const other = await r.context.newPage();
   await other.bringToFront();
   await page.waitForTimeout(1500);
   s = await pageState(page);
   const focused = await page.evaluate(() => document.hasFocus());
-  // (Playwright emulates focus, so document.hasFocus() stays true here; the browser still takes the lock away)
-  t.check(!s.locked && s.state === 'running' && !s.overlay, `another page in front: this one lost the lock, and the game goes on with no overlay (state ${s.state}, hasFocus ${focused})`, s.status);
+  t.check(lockedDuringLook && !s.locked && s.state === 'running' && !s.overlay, `another page in front: this one lost the lock it had, and the game goes on with no overlay (state ${s.state}, hasFocus ${focused})`, s.status);
   await other.close();
   await page.bringToFront();
   await page.waitForTimeout(1000);
   s = await lockByClicking(page);
-  const n2 = await framesIn(page, 1000);
-  t.check(s.locked && s.state === 'running' && !s.overlay && n2 > 20, `back in front, a click locks the pointer again and frames keep coming (${n2} in a second)`, s.status);
+  const n2 = await framesIn(page, 3000);
+  t.check(s.locked && s.state === 'running' && !s.overlay && n2 > 60, `back in front, a click locks the pointer again and frames keep coming (${n2} in 3 s)`, s.status);
+  // the mouse-look screenshots from before, compared now
+  const still = await t.pixelDiff(page, look0, look1), look = await t.pixelDiff(page, look1, look2);
+  t.check(lockedDuringLook && look > still + 20000, `with the pointer locked, moving the mouse turned the view (${look} pixels changed; ${still} by themselves)`);
   s = await pageState(page);
   t.check(s.state === 'running' && !s.overlay, `the game is still running at the end (state ${s.state})`, s.status);
   lock = await page.evaluate(() => ({ unhandled: window.__lock.unhandled }));
@@ -143,8 +148,11 @@ async function refused(env) {
 
 // A failure inside the game's frame: sdlayer2.c reads and increments Module.jfswShowframes for every picture it presents
 // (an EM_JS function in sw.js). `how` is 'trap' (wasm: free() of an address beyond memory) or 'throw' (an Error from the script).
-async function fatal(env, how) {
-  const r = await openPage(env, '?test=1&persist=0');
+// `persist`: with the game's folder kept in IndexedDB, as on every real page (the exit's save then delays "The game has
+// ended."), or not (?persist=0, as in the other tests: the exit's message came at once, bugs.md L32).
+async function fatal(env, how, persist) {
+  console.log('  ' + how + (persist ? ', persistence on' : ', ?persist=0'));
+  const r = await openPage(env, persist ? '?test=1' : '?test=1&persist=0');
   const { page } = r;
   await t.waitState(page, 'ready');
   await page.click('#start');
@@ -190,8 +198,9 @@ async function main() {
   try {
     await refused(env);
     console.log('2. a real failure is still fatal');
-    await fatal(env, 'trap');
-    await fatal(env, 'throw');
+    await fatal(env, 'trap', false);
+    await fatal(env, 'throw', false);
+    await fatal(env, 'trap', true);
   } finally {
     await t.stop(env);
   }
