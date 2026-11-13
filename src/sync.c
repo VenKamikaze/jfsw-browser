@@ -1534,8 +1534,9 @@ static void TestAimKeyLog(void)
 
 // -testslope<T>,<P>[,<L>] (test-only, F4; every machine): at the start of game tic T of the L-th level
 // played (1 if left out) player P is put, standing still, in the middle of a sloped sector (the one
-// with the most walls among the plain ones whose middle is inside them), where PlayerAutoLook()
-// tilts the view of a player without mouse aiming. It changes the simulation, so it is in the
+// with the most walls among the plain ones whose middle is inside them), facing along the slope
+// (at right angles to the sector's first wall, the way a Build slope runs), where PlayerAutoLook()
+// tilts the view of a player without mouse aiming, on any level. It changes the simulation, so it is in the
 // version salt. Logs "TEST: player P put on sloped sector S ...".
 void TestSlopeArg(const char *arg)
     {
@@ -1579,11 +1580,14 @@ static void TestSlope(void)
     pp->posz = pp->oposz = getflorzofslope(best, cx, cy) - PLAYER_HEIGHT;
     pp->cursectnum = pp->lastcursectnum = best;
     pp->xvect = pp->yvect = pp->oxvect = pp->oyvect = 0;
+    w = sector[best].wallptr;
+    pp->pang = pp->oang = NORM_ANGLE(getangle(wall[wall[w].point2].x - wall[w].x, wall[wall[w].point2].y - wall[w].y) + (sector[best].floorheinum > 0 ? -512 : 512));
     sp = &sprite[pp->PlayerSprite];
     sp->x = cx; sp->y = cy; sp->z = pp->posz + PLAYER_HEIGHT;
+    sp->ang = pp->pang;
     changespritesect(pp->PlayerSprite, best);
-    buildprintf("TEST: player %d put on sloped sector %d (heinum %d) at tic %u of level %d\n",
-        TestSlopeP, best, sector[best].floorheinum, MoveThingsCount, TestStateLevels);
+    buildprintf("TEST: player %d put on sloped sector %d (heinum %d), facing %d, at tic %u of level %d\n",
+        TestSlopeP, best, sector[best].floorheinum, pp->pang, MoveThingsCount, TestStateLevels);
     }
 
 // -testfire[<N>] (test-only, F3): from game tic N of the first level on (from its start without N)

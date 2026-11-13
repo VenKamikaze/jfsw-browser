@@ -22,6 +22,12 @@
 #            the key at tic 199 and the joiner at tic 201 (an input of the
 #            first level that is never played); the joiner is put on a slope at
 #            tic 100 of E1L2.
+#   l2ctl    the level ends at tic 200 and nobody presses the key: the slope at
+#            tic 100 of E1L2 tilts the joiner's view (the control for l2);
+#   l2       the same, and the joiner toggles at tic 30 of E1L2: a mid-level
+#            toggle in the second level, on the slope at its tic 100;
+#   off      the host starts with mouse aiming on (-testaimon) and toggles it
+#            off at tic 100; on the slope at tic 300 its view must tilt;
 #   oldjoin  the joiner stands in for a build without the fix (-testoldaim:
 #            no SK_MOUSE_AIM, the short options packet) and starts with mouse
 #            aiming on (-testaimon); it is put on the slope at tic 300. The new
@@ -29,7 +35,11 @@
 #   oldhost  the same the other way round: the host is the stand-in, the
 #            joiner (new) starts with mouse aiming on and goes on the slope.
 #
-#   tests/net/test-mouse-aim.sh [--sw FILE] [--runs N] [--only NAME]
+#   tests/net/test-mouse-aim.sh [--sw FILE] [--runs N] [--only NAME] [--old]
+#
+# --old gives every machine -testoldaim, so that all of them handle mouse aiming
+# as a build without the fix: the mutation run, in which every game that
+# toggles mid-level (master, slave, held, off, l2) must fail.
 #
 # Passes when, in every game: both exit 0; the key presses and the slope were
 # logged; no "OUT OF SYNC"; both -testdump files have every tic and agree byte
@@ -40,12 +50,13 @@
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-sw="$root/sw"; runs=1; only=""
+sw="$root/sw"; runs=1; only=""; old=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --sw) sw="$2"; shift 2 ;;
         --runs) runs="$2"; shift 2 ;;
         --only) only="$2"; shift 2 ;;
+        --old) old="-testoldaim"; shift ;;
         *) echo "unknown option $1" >&2; exit 2 ;;
     esac
 done
@@ -74,7 +85,7 @@ game() {
     for run in $(seq 1 "$runs"); do
         d="$t_tmp/$name.$run"
         t_note "$name, run $run of $runs ($transport; load $(cut -d' ' -f1-3 /proc/loadavg))"
-        local common="$coop -testsync -testquit$tics -testdumpd.bin -teststate $cargs"
+        local common="$coop -testsync -testquit$tics -testdumpd.bin -teststate $cargs $old"
         if [ "$transport" = relay ]; then
             t_game "$name-h" "$d/h" --sw "$sw" --timeout 90 -- -net -relay "127.0.0.1:$rport" -host-room 2 -- $common $hargs
             hp=$game_pid
@@ -99,12 +110,14 @@ game() {
             master) t_check "$name: the host's key turned mouse aiming on at tic 100" grep -q 'TEST: Mouse_Aiming key pressed at tic 100 of level 1: mouse aiming on' "$d/h/sw.log" ;;
             slave)  t_check "$name: the joiner's key turned mouse aiming on at tic 100" grep -q 'TEST: Mouse_Aiming key pressed at tic 100 of level 1: mouse aiming on' "$d/j/sw.log" ;;
             held)   t_check "$name: the joiner held the key (on from tic 250, off at 350)" bash -c "grep -q 'key pressed at tic 250 of level 1: mouse aiming on' '$d/j/sw.log' && grep -q 'key held at tic 349 of level 1: mouse aiming on' '$d/j/sw.log' && grep -q 'key released at tic 350 of level 1: mouse aiming off' '$d/j/sw.log'" ;;
+            off)    t_check "$name: the host's key turned mouse aiming off at tic 100" grep -q 'TEST: Mouse_Aiming key pressed at tic 100 of level 1: mouse aiming off' "$d/h/sw.log" ;;
+            l2)     t_check "$name: the joiner's key turned mouse aiming on at tic 30 of the second level" grep -q 'TEST: Mouse_Aiming key pressed at tic 30 of level 2: mouse aiming on' "$d/j/sw.log" ;;
             exit)   t_check "$name: the host pressed the key at tic 199 and the joiner at tic 201" bash -c "grep -q 'key pressed at tic 199 of level 1: mouse aiming on' '$d/h/sw.log' && grep -q 'key pressed at tic 201 of level 1: mouse aiming on' '$d/j/sw.log'"
                     t_check "$name: both left the first level at tic 200" bash -c "grep -q 'TEST: leaving the level at tic 200 for level 2\$' '$d/h/sw.log' && grep -q 'TEST: leaving the level at tic 200 for level 2\$' '$d/j/sw.log'" ;;
         esac
         # (a machine can play a tic or two past -testquit before it stops: compare the first $tics)
         local n=$((tics * 17)) hn jn
-        if [ "$name" = exit ]; then n=$(((200 + tics) * 17)); fi
+        case "$name" in exit|l2*) n=$(((200 + tics) * 17)) ;; esac
         hn=$(stat -c %s "$d/h/d.bin" 2>/dev/null || echo 0); jn=$(stat -c %s "$d/j/d.bin" 2>/dev/null || echo 0)
         t_check "$name: both dumps have every tic ($((hn / 17)) and $((jn / 17)) records, want $((n / 17)))" test "$hn" -ge "$n" -a "$jn" -ge "$n"
         t_check "$name: and those records are byte for byte the same" cmp -s -n "$n" "$d/h/d.bin" "$d/j/d.bin"
@@ -133,6 +146,9 @@ game master  relay 400 0 t320 1 "-testaimkey100" "" "-testslope300,0 -teststate3
 game slave   udp   400 1 t320 1 "" "-testaimkey100" "-testslope300,1 -teststate320"
 game held    relay 400 1 t300 1 "" "-testaimheld -testaimkey250,100" "-testslope280,1 -teststate300"
 game exit    relay 300 1 L2.t120 1 "-testaimkey199" "-testaimkey201" "-testexit200 -testslope100,1,2 -teststate120"
+game l2ctl   relay 300 1 L2.t120 0 "" "" "-testexit200 -testslope100,1,2 -teststate120"
+game l2      relay 300 1 L2.t120 1 "" "-testaimkey30,1,2" "-testexit200 -testslope100,1,2 -teststate120"
+game off     relay 400 0 t320 0 "-testaimon -testaimkey100" "" "-testslope300,0 -teststate320"
 game oldjoin relay 400 1 t320 1 "" "-testoldaim -testaimon" "-testslope300,1 -teststate320"
 game oldhost relay 400 1 t320 1 "-testoldaim" "-testaimon" "-testslope300,1 -teststate320"
 t_result
