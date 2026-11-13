@@ -1799,6 +1799,22 @@ void SlipSlope(PLAYERp pp)
     pp->yvect += mulscale(sintable[ang], sector[pp->cursectnum].floorheinum, sectu->speed);
     }
 
+// In a network game a player's mouse aiming comes with their input (SK_MOUSE_AIM,
+// getinput), so that every machine changes PF_MOUSE_AIMING_ON, which
+// PlayerAutoLook() reads, at the same tic. A player whose build does not send it
+// keeps the flag from the options packet, as before.
+VOID
+DoPlayerMouseAimSync(PLAYERp pp)
+    {
+    if (!CommEnabled || !MouseAimInInput[pp->pnum])
+        return;
+
+    if (TEST_SYNC_KEY(pp, SK_MOUSE_AIM))
+        SET(pp->Flags, PF_MOUSE_AIMING_ON);
+    else
+        RESET(pp->Flags, PF_MOUSE_AIMING_ON);
+    }
+
 VOID
 PlayerAutoLook(PLAYERp pp)
     {
@@ -7608,7 +7624,7 @@ VOID ChopsCheck(PLAYERp pp)
 
     if (!UsingMenus && !HelpInputMode && !TEST(pp->Flags, PF_DEAD) && !pp->sop_riding && CommPlayers <= 1)
         {
-        if ((pp->input.bits|pp->input.vel|pp->input.svel|pp->input.angvel|pp->input.aimvel) ||
+        if (((pp->input.bits & ~BIT(SK_MOUSE_AIM))|pp->input.vel|pp->input.svel|pp->input.angvel|pp->input.aimvel) ||
             TEST(pp->Flags, PF_CLIMBING|PF_FALLING|PF_DIVING))
             {
             // Hit a input key or other reason to stop chops
@@ -7883,6 +7899,7 @@ domovethings(VOID)
         {
         pp = Player + i;
         pp->input = pp->inputfifo[movefifoplc & (MOVEFIFOSIZ - 1)];
+        DoPlayerMouseAimSync(pp);
         }
     movefifoplc++;
 

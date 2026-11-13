@@ -131,6 +131,7 @@ DoPrediction(PLAYERp ppp)
         return;
 
     ppp->input = Player[myconnectindex].inputfifo[predictmovefifoplc & (MOVEFIFOSIZ-1)];
+    DoPlayerMouseAimSync(ppp);
 
     // get rid of input bits so it doesn't go into other code branches that would
     // get it out of sync

@@ -282,6 +282,8 @@ extern char MessageOutputString[256];
     #define SK_INV_LEFT   26
     #define SK_INV_RIGHT  27
 
+    #define SK_MOUSE_AIM  28    // network games: this player's mouse aiming is on (state, not a key)
+
     #define SK_INV_USE   29
     #define SK_HIDE_WEAPON  30
     #define SK_SPACE_BAR  31
