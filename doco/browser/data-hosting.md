@@ -28,7 +28,7 @@ window.JFSW_CONFIG = { data: { url: 'swshare.grp', size: 26056769, crc32: '08a7f
 
 The same file has two more fields (brief 05): `relay`, the vnet relay's WebSocket URL for network games (empty: none; see `building.md` §6.6), and `testMode`, which **must stay `false` on a public site**: with `true`, a link with `?test=1` could pass the game test arguments, among them another relay.
 
-`scripts/build-wasm.sh` copies `web/config.js` into `build-wasm/` each time it runs, so edit the copy you deploy, or keep your own `config.js` and copy it after the build.
+`scripts/build-wasm.sh` copies `web/config.js` into `build-wasm/` whenever `web/config.js` is newer than that copy (after a `git pull` that changes it, for example), so an edit in `build-wasm/` can be lost. Keep your own `config.js` outside the build and deploy that one ([`deploy.md`](deploy.md) §2).
 
 **Changing `url`, `size` or `crc32` makes every visitor download the file again on their next visit**, and the browser forgets its copy from the old URL.
 

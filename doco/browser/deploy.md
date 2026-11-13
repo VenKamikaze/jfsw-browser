@@ -285,6 +285,7 @@ sudo /etc/letsencrypt/renewal-hooks/deploy/vnet-relay.sh      # once now, for th
 
 QUIC wants bigger UDP buffers than the default (it works without, with less headroom):
 
+<!-- check-deploy: relay-sysctl -->
 ```bash
 printf 'net.core.rmem_max=7500000\nnet.core.wmem_max=7500000\n' | sudo tee /etc/sysctl.d/90-vnet-relay.conf
 sudo sysctl --system
@@ -499,11 +500,15 @@ The page's messages and the desktop game's (in its console, `sw.log` and a messa
 
 ## What was checked where
 
-This guide was followed end to end in the project's cloud container, which is Ubuntu 24.04 (x86_64), not Arch, by `tests/deploy/check-deploy.sh` (`doco/browser/building.md` §6.7 says how to run it). It takes the configuration blocks of this file as they are (`config.js`, the module lines, `sw.conf`, the certificate hook, the unit's command line) and:
+This guide was followed end to end in the project's cloud container, which is Ubuntu 24.04 (x86_64), not Arch, by `tests/deploy/check-deploy.sh` (`doco/browser/building.md` §6.7 says how to run it). It takes the configuration blocks of this file as they are (`config.js`, the module lines, `sw.conf` and the one without TLS, the certificate hook, the sysctl values, the unit) and:
 
-- runs Ubuntu's Apache 2.4.58 with an Arch-style `httpd.conf` (the module lines above, `Include` of `sw.conf`), a self-signed certificate for `game.example.org` in place of Let's Encrypt's, `game.example.org` mapped to 127.0.0.1 in `/etc/hosts`, and the game in `/srv/http/games/sw`;
-- runs the relay built from `ext/vnet/relay` as the `vnet-relay` user with the unit's flags, by hand (`setpriv`, the capability as the unit gives it): the container has no systemd (`systemd-analyze verify` checked the unit file);
-- makes every `curl` check above and gets the answers given;
-- checks that the deployed page ignores `?test=1`, and plays: two Chromium pages from `https://game.example.org/games/sw/` (the lobby, the invite link) and a desktop `sw` joining by code over UDP 7777; and a co-op game of the same three through a test-mode copy of the site (for the per-tic records only), in which every machine agrees on every tic, with WebTransport on UDP 443 (Chromium trusting the self-signed certificate by its key hash).
+- deploys exactly the files listed in section 1 (and checks that the list and `build-wasm/` agree) into `/srv/http/games/sw`, with the build's `config.js` carrying the settings block of section 2;
+- runs Ubuntu's Apache 2.4.58 with an Arch-style `httpd.conf` of its own (Arch's default modules and `<Directory "/srv/http">`, the module lines above, `Include` of `sw.conf`), a self-signed certificate for `game.example.org` in Let's Encrypt's layout instead of a real one, and `game.example.org` mapped to 127.0.0.1 in `/etc/hosts`; `apachectl configtest` says "Syntax OK";
+- creates the `vnet-relay` user, runs the certificate hook as certbot would, sets the two sysctl values, checks the unit with `systemd-analyze verify`, and runs the relay built from `ext/vnet/relay` as `vnet-relay` with the unit's flags and capability, by hand (`setpriv`): the container has no systemd; it also cross-compiles the aarch64 binary;
+- makes every `curl` check of section 6 and gets the answers given, the 403 and the 503 included, and a few more: the redirect on port 80, the ACME path, a `304` for a revalidated `sw.wasm` (with `DeflateAlterETag NoChange`), no COOP/COEP headers;
+- opens the deployed page with `?test=1&args=...` (no test hooks, no test line, and the game does not see the arguments) and plays: two Chromium pages from `https://game.example.org/games/sw/` (one with `?host=3`, one from its invite link) and a desktop `sw` joining by code over UDP 7777 all start the game, the browsers over WebTransport; then a co-op game of the same three, 1,200 tics, through a test-mode copy of the site that exists only while it runs (for the per-tic records, `-testdump`), in which every machine agrees on every tic;
+- with `--no-tls`, the same over plain HTTP and `ws://`.
 
-Not checked there: certbot and Let's Encrypt (no public host name), the renewal timer and the Apache reload hook, systemd itself (`systemctl`, `journalctl`), `sysctl` (not allowed in the container), `pacman` and Arch's own `httpd.conf` and paths, the aarch64 relay binary (it was cross-compiled, not run), and a real network between the players.
+Chromium reached `game.example.org` through `--host-resolver-rules`, trusted the self-signed certificate by its key hash (`--ignore-certificate-errors-spki-list`), and needed `--webtransport-developer-mode` for WebTransport (without it Chromium refuses, for QUIC, a certificate that has no public root, even one it trusts otherwise). A real certificate needs none of that. The `rsync` line was run into a local directory.
+
+Not checked there: certbot and Let's Encrypt (no public host name), the renewal timer and the Apache reload hook, systemd itself (`systemctl`, `journalctl`), the `sysctl.d` file and `sysctl --system` (the values were set with `sysctl -w` instead), `pacman`, `ssh` to a server, Arch's own `httpd.conf`, paths and package versions, an aarch64 machine (the relay binary was cross-compiled, not run), Firefox, and a real network between the players: in particular WebTransport's slowdown with a browser host and two guests (`bugs.md` L25) was seen only in the container.

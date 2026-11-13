@@ -21,6 +21,7 @@
 #     directory, the distribution's modules) that loads these lines and Includes sw.conf, with a
 #     self-signed certificate for game.example.org in place of Let's Encrypt's;
 #   * relay-cert-hook: run as certbot would (RENEWED_LINEAGE), as root;
+#   * relay-sysctl: its values set with sysctl -w for the run, the old ones put back afterwards;
 #   * relay-unit: `systemd-analyze verify`, then its ExecStart flags, run as the vnet-relay user with
 #     the unit's capability by setpriv (no systemd needed).
 # and it puts the game in /srv/http/games/sw, maps game.example.org to 127.0.0.1 in /etc/hosts, and
@@ -92,7 +93,7 @@ done
 
 w="$(mktemp -d "${TMPDIR:-/tmp}/jfsw-deploy.XXXXXX")" || die "mktemp failed"
 chmod 755 "$w"
-relay_pid=""; made_user=0; made_etc=0; made_srv=0; hosts_added=0
+sysctl_old=(); relay_pid=""; made_user=0; made_etc=0; made_srv=0; hosts_added=0
 cleanup() {
     if [ "$keep" = 1 ]; then
         echo "kept: Apache ($httpd -f $w/httpd/conf/httpd.conf), the relay (pid $relay_pid), $SITE, the $HOST line in /etc/hosts, $w"
@@ -109,6 +110,7 @@ cleanup() {
     rmdir /srv/http/games 2>/dev/null
     [ "$made_srv" = 1 ] && rmdir /srv/http 2>/dev/null
     [ "$hosts_added" = 1 ] && sed -i "/ $HOST # check-deploy\$/d" /etc/hosts
+    local kv; for kv in "${sysctl_old[@]}"; do sysctl -q -w "$kv" >/dev/null 2>&1; done
     [ "$made_etc" = 1 ] && rm -rf /etc/vnet-relay
     [ "$made_user" = 1 ] && userdel vnet-relay 2>/dev/null
     rm -rf "$w"
@@ -125,7 +127,7 @@ block() {
         inside { print }' "$guide"
 }
 [ "$tls" = 0 ] && { sch=http; wsch=ws; site_block=apache-site-notls; }
-for b in site-config httpd-modules "$site_block" relay-cert-hook relay-unit; do
+for b in site-config httpd-modules "$site_block" relay-cert-hook relay-sysctl relay-unit; do
     [ -n "$(block "$b")" ] || die "the guide has no block marked check-deploy: $b"
 done
 
@@ -238,6 +240,11 @@ if RENEWED_LINEAGE="$le" "$w/vnet-relay-hook.sh"; then
         && ok "vnet-relay can read the key copy" || bad "vnet-relay cannot read /etc/vnet-relay/certs/privkey.pem"
 else bad "the certificate hook failed"; fi
 }
+# the UDP buffers for QUIC: the guide's values, set with sysctl -w for the run (the old ones are put back at the end)
+for kv in $(block relay-sysctl | grep -o 'net\.core\.[a-z_]*=[0-9]*'); do
+    old="$(sysctl -n "${kv%%=*}" 2>/dev/null)" && sysctl_old+=("${kv%%=*}=$old")
+    sysctl -q -w "$kv" >/dev/null 2>&1 && [ "$(sysctl -n "${kv%%=*}")" = "${kv#*=}" ] && ok "sysctl $kv (was $old)" || bad "sysctl -w $kv failed"
+done
 unit="$(block relay-unit)"
 printf '%s\n' "$unit" | sed "s|/usr/local/bin/vnet-relay|$w/vnet-relay|" > "$w/vnet-relay.service"
 if command -v systemd-analyze >/dev/null; then
@@ -330,6 +337,9 @@ fi
 w1="$(grep -ciE 'warn|error' "$a/logs/error_log" 2>/dev/null)"
 note "Apache's error log: $w1 warning or error lines$( [ "$w1" -gt 0 ] && echo ": $(grep -iE 'warn|error' "$a/logs/error_log" | cut -c1-160 | sort | uniq -c | head -5 | tr '\n' ';')")"
 note "relay log: $(grep -c . "$w/relay.log") lines; $(grep -c 'created' "$w/relay.log") rooms created"
+if [ "$tls" = 1 ]; then
+    grep -qi 'buffer size' "$w/relay.log" && bad "the relay's QUIC warns about its UDP buffers: $(grep -i 'buffer size' "$w/relay.log" | head -1)" || ok "the relay's QUIC got its UDP buffers (no buffer-size warning in its log)"
+fi
 
 if [ "$fails" = 0 ]; then echo "PASS"; exit 0; fi
 echo "FAILED: $fails check(s)"; exit 1
