@@ -279,7 +279,7 @@ On your own server (Arch, Apache, a real domain), following `deploy.md` from the
 | mutation: the reviewer's broken guide, all at once (`-http :8080 -trust-forwarded-for`, `-stats :8081`, `User=root`, `ProtectSystem=no`, the rsync brace list without `data.js`, `grptable.js` and `sw.wasm`, a sysctl file without `.conf`, and a hook without the lineage `case`), `--quick --wt` | FAILED, 12 checks, at least one for each mistake: the rsync list against the file table and against the build; "the unit's User= is "root""; "ProtectSystem=no, not strict"; "the certificate hook copied another site's certificate"; the sysctl file; the public HTTP listener; the public stats listener; and the missing files' `curl` checks (404) | 6 |
 | `make test GAME_RUNS=1` | 8 PASS, draw 16 passed, 0 failed | 1 to 5 |
 | `netplay.js` full, during the round | 1269 passed, 14 failed (`impaired` 5, `impaired-wt` 3, `compaction` 4, `lag` 2), while another session ran its own full `netplay.js`; those four again: 153 passed, 4 failed. Every game failure is the `-testquit` end (host at 1,200 or more, a guest 8 to 83 tics behind); the `lag` ones are its oscillation bound. | 5 to 12 |
-| `netplay.js` full, final, on a quiet machine | NETPLAY_FINAL | NETPLAY_LOAD |
+| `netplay.js` full, final, on a quiet machine | **1286 passed, 0 failed** (no rerun needed) | 2.9 to 9.0 (its own browsers and games; nothing else ran) |
 
 `smoke.js`, `persist.js`, `data.js`, `grptable.js` and `determinism.js` were not rerun: nothing they use changed since their runs above (the fix round changed documents and `tests/deploy/` only; the merge brought documents only).
 
