@@ -127,9 +127,22 @@ node tests/web/determinism.js               # native against wasm: sync bytes, f
 node tests/web/persist.js                   # settings and saves survive a reload (also one without quitting, and one 500 ms after a save)
 node tests/web/data.js                      # game data: download, cache, errors, picker, quota, config changes (about 2 minutes)
 node tests/web/grptable.js                  # web/grptable.js agrees with src/grpscan.c (no browser)
+node tests/web/focus.js                     # brief 02c: a refused pointer lock or a lost focus does not end the game; a trap still does (about 1 minute)
 ```
 
-They use the preinstalled Chromium through Playwright (`require('playwright')`; never run `playwright install`), serve `build-wasm/` and `testdata/swshare.grp` on 127.0.0.1 ports 48101 and up (data.js: 48201 and 48202), and clean up after themselves. `JFSW_WEB_PORT_OFFSET=<n>` moves every port the browser tests use (these, and `netplay.js`'s 48300 to 48399) up by n, so that two checkouts can run them on one machine at once (F4).
+They use the preinstalled Chromium through Playwright (`require('playwright')`; never run `playwright install`), serve `build-wasm/` and `testdata/swshare.grp` on 127.0.0.1 ports 48101 and up (data.js: 48201 and 48202; focus.js: 48104), and clean up after themselves. `focus.js` uses the full Chromium build in headless mode (`channel: 'chromium'`, the same preinstalled browser) rather than Playwright's default headless shell, which reports no mouse movement under pointer lock and crashes on a wasm trap (`code-facts.md` §20). `FOCUS_SABOTAGE=unhandled node tests/web/focus.js` leaves the lock's promise unhandled, as before the fix: its first part must fail. `JFSW_WEB_PORT_OFFSET=<n>` moves every port the browser tests use (these, `netplay.js`'s 48300 to 48399 and `firefox.js`'s 48400 to 48402) up by n, so that two checkouts can run them on one machine at once (F4).
+
+#### Firefox (brief 02c; optional, not part of the default runs)
+
+```sh
+scripts/setup-firefox.sh                    # a pinned stock Firefox (160.0, SHA-256 checked) and puppeteer-core (25.17.0), in ~/.cache/jfsw-browser
+node tests/web/firefox.js                   # about 1 minute
+FIREFOX=/usr/bin/firefox node tests/web/firefox.js     # another Firefox (Arch: sudo pacman -S firefox); puppeteer-core still from the script
+```
+
+Playwright's Firefox needs Playwright's own patched build, so `firefox.js` drives a stock Firefox headless over WebDriver BiDi with `puppeteer-core`. The repository has no `package.json`: the tests use the globally installed Playwright, and `setup-firefox.sh` installs `puppeteer-core` with `npm ci` into the cache, from `tests/web/firefox-deps/package-lock.json`, which pins it and every dependency (`FIREFOX_CACHE=DIR` moves both; `--no-firefox` installs only `puppeteer-core`; `PUPPETEER_CORE=DIR` points the test at another copy). Headless Firefox never gives the page the focus, so it refuses every pointer-lock request as a desktop Firefox does after Alt+Tab. The test checks a single player game (refusals at start-up and after a click: logged, game running, no overlay), a wasm trap (still fatal, with `?persist=0` and with persistence on), and a network game through a local relay (Chromium hosts by `?host=2`, Firefox joins with persistence on: 400 tics, both end by themselves with "The game has ended." and agree on every tic). Ports 48400 (page), 48401 and 48402 (relay). Without a Firefox or `puppeteer-core` it prints `firefox: NOT RUN` and exits with status 3, which is not a pass; when the cache holds other versions than the test pins (or the pinned Firefox reports another version) it prints `firefox: VERSION MISMATCH` and exits with status 3. `FIREFOX_SABOTAGE=unhandled` leaves the lock's promise unhandled, as before the fix: it must fail.
+
+A real Alt+Tab is not tested (it depends on the window manager and on timing). It was checked by hand under `xvfb-run` with `openbox` and `xdotool` (`apt-get install openbox xdotool`): the Outcome of brief 02c says how.
 
 ### 6.5 Network games in the browser, and their tests (brief 04)
 
@@ -153,7 +166,7 @@ node tests/web/netplay.js ws               # one scenario
 node tests/web/netplay.js                  # all of them but lag-matrix and old-new, about 28 minutes (brief 05); one at a time, the tests are real time
 ```
 
-`tests/web/netplay.js` builds the relay with Go as `tests/net/lib.sh` does (`~/.cache/jfsw-browser/vnet-relay-<rev>`), serves `build-wasm/` (`WASM_DIR=other node tests/web/netplay.js ...` for another build, as the mutation runs do) and uses 127.0.0.1 ports 48300 (page), 48301 (relay UDP), 48302 (relay WebSocket) and 48303 (relay WebTransport, UDP). Native machines run under `scripts/run-headless.sh` in a temporary directory (`JFSW_TEST_KEEP=1` keeps it). Every scenario ends with "no process this test started is left running".
+`tests/web/netplay.js` builds the relay with Go as `tests/net/lib.sh` does (`~/.cache/jfsw-browser/vnet-relay-<rev>`), serves `build-wasm/` (`WASM_DIR=other node tests/web/netplay.js ...` for another build, as the mutation runs do) and uses 127.0.0.1 ports 48300 (page), 48301 (relay UDP), 48302 (relay WebSocket) and 48303 (relay WebTransport, UDP); `NETPLAY_PORT_BASE=N` moves them to N to N+3 (brief 02c), for a run next to another on the same machine. Native machines run under `scripts/run-headless.sh` in a temporary directory (`JFSW_TEST_KEEP=1` keeps it). Every scenario ends with "no process this test started is left running".
 
 Brief 04b added three scenarios. `lag` (about 3 minutes, in the full run) plays three measured games (two browsers; a native host with a browser; two native games with 30 ms each way) and checks the send path: a machine's packets wait under 5 ms in mmulti at the median, the master hands on a complete tic within 2 ms at the median and 8 ms at p95, at most 80 datagrams a second go to each peer, the lag correction does not oscillate, and the native slave with 30 ms each way sees its input in a tic within 85 ms at the median. `tic1` (about 2 minutes) gives the master `-testslowstart3000` in 8 games, so it runs tic 1 after one frame while the slave draws many, and checks that they agree field by field. `lag-matrix` (about 7 minutes, **only by name**) is the report: input-to-tic delay of master and slave for every pairing, unimpaired and with 30 ms each way (`NETPLAY_LAG_ONLY=browsers,natives-30ms` picks games, `NETPLAY_LAG_REPS=3` repeats them). Other knobs: `NETPLAY_SW=/path/to/sw` runs another native build (as `WASM_DIR` does for the page); `NETPLAY_STATE=1` gives every machine `-teststate`, and a dump difference then names the objects and fields that differ (`NETPLAY_STATE=600,1200` adds those tics).
 
@@ -167,7 +180,7 @@ F3 added `level-exit` (about 70 s, in the full run; bugs.md L20): three games (a
 
 **The relay** is the one `web/config.js` names (`relay: 'wss://relay.example.org/vnet'`, or `'ws://127.0.0.1:PORT/vnet'` for a local relay whose `-origins` names the page's host:port). Never from the address, not even on a test page.
 
-**Test mode** (`?test=1` and the test-only parameters at the top of `web/jfsw.js`) needs `testMode: true` in `config.js` as well; the default is `false`, and a public site must keep it so (**brief 06: the deployed `config.js` leaves `testMode: false`**). The browser tests serve a `config.js` with `testMode: true` themselves (`tests/web/server.js`, `configText()`), so nothing needs changing to run them. To use test pages by hand on your own server, set `testMode: true` in `build-wasm/config.js`.
+**Test mode** (`?test=1` and the test-only parameters at the top of `web/jfsw.js`) needs `testMode: true` in `config.js` as well; the default is `false`, and a public site must keep it so (**the deployed `config.js` leaves `testMode: false`**: [`deploy.md`](deploy.md) §2). The browser tests serve a `config.js` with `testMode: true` themselves (`tests/web/server.js`, `configText()`), so nothing needs changing to run them. To use test pages by hand on your own server, set `testMode: true` in `build-wasm/config.js`.
 
 **Page parameters:**
 
@@ -211,6 +224,24 @@ tests/net/test-rejoin.sh                 # natively: a newcomer at a vanished or
 
 Test-only game arguments from brief 05: **`-testswitch<T>`** (all machines: at tic T of the first level every machine operates the level's exit switch, as a player does; unlike `-testexit` the bonus screen follows) and **`-testosd<T>,<command>`** (this machine runs a console command at tic T, e.g. `-testosd60,host 2`). The test-only environment variable `JFSW_TEST_STARTWIN` fills in the startup window (`host=N`, `room=CODE`, `relay=HOST:PORT`, `startnow=K`) and presses Start. `scripts/run-headless.sh --display` keeps `DISPLAY` for it, and the script now passes its standard input to the game (for `start`).
 
+### 6.7 Deploying, and checking a deployment (brief 06)
+
+Putting the game and the relay online (Arch, Apache, TLS, systemd) is [`deploy.md`](deploy.md). `tests/deploy/check-deploy.sh` follows that guide in a container or a spare machine and plays through it; it is **not** part of `make test`, because it needs root and changes the machine while it runs:
+
+```sh
+scripts/build-wasm.sh && make -j4 && scripts/fetch-test-data.sh     # what it deploys
+sudo tests/deploy/check-deploy.sh            # everything, about 2 minutes: the guide's default (WebSocket); ends with PASS or FAILED
+sudo tests/deploy/check-deploy.sh --wt       # with the guide's opt-in WebTransport section (certificate hook, sysctl, drop-in)
+sudo tests/deploy/check-deploy.sh --no-tls   # the guide's "Without TLS" (plain HTTP, ws://)
+sudo tests/deploy/check-deploy.sh --quick    # the set-up and the curl checks only, under a minute
+sudo tests/deploy/check-deploy.sh --guide /path/to/deploy.md   # another copy of the guide (the mutation runs)
+sudo tests/deploy/check-deploy.sh --keep     # leave Apache, the relay, the user, the files and the sysctl values in place (it says how to undo them)
+```
+
+It takes the guide's blocks as they are (each follows a `<!-- check-deploy: NAME -->` comment: `rsync`, `site-config`, `httpd-modules`, `apache-site`, `apache-site-notls`, `relay-build`, `relay-build-server`, `relay-user`, `relay-unit`, `relay-unit-wt`, `relay-cert-hook`, `relay-sysctl`, `curl-checks`, `curl-server`, `desktop-join`), so a change to one of them is checked by the next run: the files deployed are the `rsync` line's (checked against the file table and `build-wasm/`), the relay is built with the guide's own build lines (from the working tree, into the run's directory; nothing is cached, so a changed tree is always what runs), the unit's `User=`, `Group=` and hardening lines are checked and the relay runs as that user with the unit's flags and capabilities, the HTTP and stats listeners must be on 127.0.0.1, the certificate hook must ignore another site's renewal, the sysctl file must be an `/etc/sysctl.d/*.conf`, and the `curl` checks run as written (`CURL_CA_BUNDLE` trusts the test certificate; `tests/deploy/run-block.py` compares the answers with the guide's). It needs Apache 2.4.58+ (`apache2` or `httpd`), openssl, curl, file, python3, setpriv, Go and Playwright's Chromium, and it uses the guide's own ports, which must be free: **TCP 80 and 443, UDP 7777, with `--wt` UDP 443, and 127.0.0.1:8080 and 8081** (no other suite uses them).
+
+While it runs it adds `game.example.org` to `/etc/hosts`, the game to `/srv/http/games/sw` (and a test-mode copy inside it, `check-deploy-test/`, during the game with per-tic records, so that the guide's `<Directory>` settings apply to it too), the system user `vnet-relay`, and with `--wt` `/etc/vnet-relay` and two sysctl values. **It refuses to start if any of these already exists** (a real relay's user or certificate copy is never reused or overwritten), and on every exit it removes what it added, puts the sysctl values and the modes of an existing `/srv/http` and `/srv/http/games` back, and stops Apache and the relay. Apache runs with a small configuration of its own (an Arch-layout `httpd.conf` under a temporary `ServerRoot`), so the distribution's Apache configuration is not touched. Chromium reaches `game.example.org` through `--host-resolver-rules` and trusts the self-signed certificate by its key hash (`--ignore-certificate-errors-spki-list`); with `--wt` it also needs `--webtransport-developer-mode` for WebTransport to accept it (`tests/deploy/play.js`, which stops its native games and the browser on SIGINT or SIGTERM).
+
 ## 7. Layout of what brief 00 added
 
 | Path | What |
@@ -218,6 +249,7 @@ Test-only game arguments from brief 05: **`-testswitch<T>`** (all machines: at t
 | `scripts/setup.sh` | native dependencies (apt, pacman) |
 | `scripts/setup-emsdk.sh` | pinned Emscripten and the ports |
 | `scripts/fetch-test-data.sh` | verified `testdata/swshare.grp` |
+| `scripts/setup-firefox.sh` | a pinned stock Firefox and `puppeteer-core` for `tests/web/firefox.js` (brief 02c) |
 | `scripts/run-headless.sh` | headless, bounded game runs |
 | `tests/fetch-test-data.sh`, `tests/run-headless.sh` | tests for the fetch and run scripts |
 | `ext/vnet` | vnet `v0.4.0` (submodule; built into the engine library, native and browser) |

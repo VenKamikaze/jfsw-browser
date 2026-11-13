@@ -31,7 +31,10 @@ const path = require('path');
 const { serve, configText } = require('./server.js');
 const L = require('./lib.js');
 
-const PORT_WEB = L.port(48300), PORT_UDP = L.port(48301), PORT_HTTP = L.port(48302), PORT_WT = L.port(48303), PORT_NONE = L.port(48392);   // (JFSW_WEB_PORT_OFFSET, lib.js)
+// NETPLAY_PORT_BASE=N (brief 02c): ports N to N+3 instead of 48300 to 48303, for a run next to another one on the same machine.
+// JFSW_WEB_PORT_OFFSET (F4, lib.js) moves the default base, as it moves the other browser tests' ports.
+const PORT_BASE = +(process.env.NETPLAY_PORT_BASE || L.port(48300));
+const PORT_WEB = PORT_BASE, PORT_UDP = PORT_BASE + 1, PORT_HTTP = PORT_BASE + 2, PORT_WT = PORT_BASE + 3, PORT_NONE = PORT_BASE + 92;
 const NOMINAL = 40;                       // game tics a second (120 Hz clock, 3 clock ticks a game tic)
 const REC = 17;                           // bytes per tic in a -testdump file
 const AUTONET = '-autonet 2,0,2,1,0,0,0,0,0,0';

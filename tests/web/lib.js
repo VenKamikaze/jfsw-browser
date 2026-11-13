@@ -110,6 +110,11 @@ async function changedPixels(page, clip, action, waitMs) {
   if (action) { await action(); }
   await page.waitForTimeout(waitMs || 800);
   const b = await page.screenshot({ clip, type: 'png' });
+  return pixelDiff(page, a, b);
+}
+// The same count for two PNG screenshots taken already. The comparison runs in a page of its own, which in a full
+// (not headless-shell) Chromium takes the focus from `page` while it is open (focus.js takes its screenshots first).
+async function pixelDiff(page, a, b) {
   const side = await page.context().newPage();
   try {
     return await side.evaluate(async ({ da, db }) => {
@@ -191,4 +196,4 @@ async function runGame(env, opts) {
   return Object.assign(result, { state, errors, files, seconds, t0 });
 }
 
-module.exports = { port, changedPixels, brightPixels, SLOT1, tap, quitGame, runGame, warpScript, root, BUILD, GRP, check, summary, start, stop, open, waitState, canvasStats, analysePng, notBlank, MIN_COLORS, pct };
+module.exports = { port, changedPixels, pixelDiff, brightPixels, SLOT1, tap, quitGame, runGame, warpScript, root, BUILD, GRP, check, summary, start, stop, open, waitState, canvasStats, analysePng, notBlank, MIN_COLORS, pct };

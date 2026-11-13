@@ -57,7 +57,13 @@ Brief 05 (the relay games, `netlobby.c`, the page overlay), F4 if it has merged 
    - the game's screen, long enough to read: the quotes last about 4.5 s, so use a longer-lived line or repeat it;
    - in the browser, also a notice on the page. Add an `EM_JS` call like `jfsw_page_lobby`, and a `Module.jfswNotice` banner in `jfsw.js` that stays until closed and works with the keyboard. A hidden tab misses the in-game quote.
 4. **When:** at game start and at every level start, where the exchange happens. Not in the lobby, unless it turns out cheap.
-5. **Correct the wrong claim:** `web/jfsw.js` about line 235, and 05's Outcome note N3. Also say in `data-hosting.md` (the file picker and `?data=`) that players with different data can join one game but will probably go out of sync.
+5. **Different builds too** (the user, 13 Nov 2026: "if it's easy, also warn if builds differ"; bugs.md L30 on brief 06's branch).
+   - Every build reports `GameVersion` 13 today, so nothing tells players that their builds differ. Brief 06 found a deliberate simulation difference goes on with only the host's "GAME OUT OF SYNC!", while the build from before brief 05 and the current one agreed on every tic.
+   - Send the build's own version string alongside the data identity, for example `game_version` (`src/version-auto.c`, `git describe`) and any test-version salt.
+   - When it differs, every machine shows a separate, milder line, for example "Player 2 runs a different build (X) from yours (Y): if the game logic differs, the game may go out of sync."
+   - Don't refuse the game, and don't bump `GameVersion`: it is also the saved-game version.
+   - If it turns out not to be easy, for example because the string can't be kept stable across builds whose game logic is the same, say why in the Outcome and leave it out.
+6. **Correct the wrong claim:** `web/jfsw.js` about line 235, and 05's Outcome note N3. Also say in `data-hosting.md` (the file picker and `?data=`) that players with different data can join one game but will probably go out of sync.
 
 ## Out of scope
 
@@ -68,7 +74,7 @@ Brief 05 (the relay games, `netlobby.c`, the page overlay), F4 if it has merged 
 ## Acceptance criteria
 
 1. In a game whose players' data differs, every machine shows the warning naming the differing player(s) and what they have: master and slaves, native and browser. In the browser the page shows it too.
-2. With the same data on every machine, nothing new is shown. Every existing scenario stays quiet.
+2. With the same data on every machine, nothing new is shown, apart from item 5's build line when the builds differ. Every existing scenario stays quiet.
 3. A peer on an older build gets no false warning. Mixed old and new builds behave as before, apart from the new lines on the new ones.
 4. Single player and demos are unchanged (`determinism.js`).
 5. `netplay.js` (all scenarios), `make test GAME_RUNS=1`, `smoke.js`, `persist.js`, `data.js`, `grptable.js` and `determinism.js` pass. The known 100 ms stall check and persist's reload-after-save window under load are excepted: rerun those and report both runs.

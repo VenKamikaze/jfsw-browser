@@ -8,7 +8,7 @@ vnet was built for the same job in [`VenKamikaze/BitRiot`](https://github.com/Ve
 
 ## 0. Where things stand (hand-off; keep this up to date after every merge)
 
-**13 Nov 2026: briefs 00 to 05 and F3 merged into `claude` (02 to 05 and F3: play-test pending). Brief 06 (deployment guide) is written and next. F1 is on hold.**
+**13 Nov 2026: briefs 00 to 05 and F3 merged into `claude` (02 to 05 and F3: play-test pending). Briefs 06 and 02c merged; F4 is in flight, 05b is written (see "In flight" below). F1 is on hold.**
 
 - **Answers** are recorded in [`README.md`](README.md): submodules stay, on the user's forks (Q1 b); shareware data from a verified mirror (Q2); "Start now" is in (Q3); music later (Q4); upstream-friendly where cheap (Q5, default).
 - **Repos:** the work spans four GitHub repos, all attached to the session with push access: `VenKamikaze/jfsw-browser` (this one), and the forks `VenKamikaze/jfbuild`, `VenKamikaze/jfaudiolib` and `VenKamikaze/jfmact`. The forks existed already (this prompt originally said they didn't), and they contain the commits jfsw pins.
@@ -39,7 +39,14 @@ vnet was built for the same job in [`VenKamikaze/BitRiot`](https://github.com/Ve
   - **Test mode** now needs `testMode: true` in `config.js` as well as `?test=1`, so a crafted link can't route visitors through another relay. A deployment must keep it `false` (brief 06).
   - **Numbers:** the jfbuild fork's `claude` is at `5950d14`. `netplay.js` has 1286 checks (about 30 minutes) and `make test-net` has 8 scripts.
   - **Open:** `persist.js`'s "reload 250 ms after a save" check failed once in each of two loaded full runs (02's IndexedDB window; brief 05 doesn't touch saving). Look at it with the smoke flake follow-up. Play-test pending: steps in 05's Outcome.
-- **Next: brief 06**, the deployment guide ([`06-deployment-guide.md`](06-deployment-guide.md), written 13 Nov 2026): `deploy.md` for Apache and the relay on Arch Linux, checked end to end in the container with `tests/deploy/check-deploy.sh`. It also checks the relay's `-client-pps` against an 8-player master's rate, and what happens when the browser and native builds differ. Branch `browser/06-deployment-guide`. After 06 every brief in §5 is done; what is left is the user's play-tests, F1 (on hold) and the later items.
+- **In flight (13 Nov 2026, session ran low on tokens; each branch's Outcome has a "State (in progress)" section written by its agent — read it first):**
+  - **06 deployment guide: landed (13 Nov 2026).** `deploy.md` covers Arch, Apache with TLS, the relay as a hardened systemd unit (WebSocket by default; WebTransport opt-in until vnet brief 15) and desktop players; `tests/deploy/check-deploy.sh` (needs root; not in `make test`) checks the guide's own blocks end to end. Its section "Game data from another server" covers `?data=`. Play-test pending: the user deploys on their own server (steps in 06's Outcome). Open: L30, L31, L32 (06's Outcome, last section).
+  - **02c focus loss: landed (13 Nov 2026), L24 and L33 fixed.** The page catches refused pointer-lock, fullscreen and audio-resume requests (Emscripten drops their promises), so Alt+Tab in Firefox no longer shows the fatal overlay. A trap within 250 ms of an exit replaces "The game has ended.". New tests: `focus.js` (Chromium, in the default runs) and `firefox.js` (stock Firefox through `scripts/setup-firefox.sh`, optional). Play-test pending: steps in 02c's Outcome.
+  - **F4 mouse aiming, L25** (`fix/mouse-aim-sync` from `master`, `browser/F4-mouse-aim-sync`): an original-game desync found while investigating the user's deathmatch desync. Implementation in progress; not reviewed yet. The fix commit carries only the Co-Authored-By trailer (clean for upstream).
+  - **05b data mismatch warning, L26:** written, not started. Start after F4 merges (both touch game.c/net.c). The user's decision: warn every player, don't refuse. The user's deathmatch desync was mixed registered and shareware data. Open question for the user: also warn on different builds (L30)?
+  - **vnet brief 15** (WebTransport drops datagrams sent in a burst, the cause of L31): on vnet `docs/15-wt-datagram-bursts`, for a separate vnet session. When vnet tags the fix: move `ext/vnet`, recheck 3-player browser-hosted WebTransport, and make WebTransport the default again in deploy.md.
+  - **Open for the user:** play-tests of 02-05, F3 and the above; F1 on hold; flaky checks (smoke Escape, persist reload-after-save under load); and offering `?data=` docs ("data from another server": CORS, trusted certificate, no login, Chrome local-network prompt, no file://) in deploy.md.
+  - **Repo notes:** vnet's remote now has a `claude` branch, so this session's vnet branch `claude/keen-hamilton-ede0qw` can't be pushed; ask before using another branch name. The user's real server name appeared in a console log: never put it in the repo.
 ## 1. Set up
 
 1. **Ask the user Q1 to Q5 (§4) first.** Q1 and Q2 block brief 00.
