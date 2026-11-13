@@ -1414,7 +1414,7 @@ static void TestStall(void)
 
 // -testfire[<N>] (test-only, F3): from game tic N of the first level on (from its start without N)
 // and in every later level, this machine's own inputs select the shurikens and hold the fire key:
-// its player throws them as fast as the game lets it, one every six or seven tics, until they run
+// its player throws them as fast as the game lets it, about one every 8 tics, until they run
 // out (30 at the start of a game), and each throw costs one, so the ammo count changes every few
 // tics and is carried into the next level in co-op. The inputs go over the network as any other,
 // so every machine plays the same throws. Inert without the argument.

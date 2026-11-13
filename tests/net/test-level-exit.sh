@@ -68,7 +68,7 @@ for run in $(seq 1 "$runs"); do
         t_check "run $run: $w logged no desync" bash -c "! grep -q 'OUT OF SYNC' '$d/$w/sw.log'"
     done
     t_check "run $run: the host stalled in the exit tic" grep -q "TEST: stalling for 1500 ms at tic $exit_tic\$" "$d/h/sw.log"
-    # (before the fix the host ran those tics, since it they stay in its fifo: either way it had them)
+    # (before the fix the host ran those tics, since then they stay in its fifo: either way it had them)
     upto="$(sed -n 's/^TEST: left the level after tic \([0-9]*\), with the inputs of \(-\?[0-9]*\) more tics here/\1 + \2/p' "$d/h/sw.log" | head -1)"
     upto=$((${upto:-0}))
     t_check "run $run: the host had every player's inputs up to tic $upto when it left the first level (beyond $((exit_tic + 1)): the case the old code got wrong)" test "$upto" -ge $((exit_tic + 2))
