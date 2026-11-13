@@ -64,7 +64,7 @@ The site needs exactly these files, and nothing else from `build-wasm/`:
 | `grptable.js`, `data.js` | the game data download, check and cache |
 | `jfsw.js` | the page's glue: start-up, the lobby, messages |
 | `sw.js` | Emscripten's loader |
-| `sw.wasm` | the game, about 2.6 MB (about 0.9 MB with gzip) |
+| `sw.wasm` | the game, about 2.6 MB (0.8 MB with gzip) |
 | `swshare.grp` | the shareware game data, 26,056,769 bytes (11.6 MB with gzip); from `testdata/`, see [The game data](#the-game-data) |
 
 None of them is test-only. The browser tests' hooks are in `jfsw.js`, but they work only when `config.js` has `testMode: true`, which a public site never has.
@@ -153,6 +153,8 @@ and add `Include conf/extra/sw.conf` at the end. Then create `/etc/httpd/conf/ex
 <!-- check-deploy: apache-site -->
 ```apache
 Listen 443
+# TLS session resumption (what Arch's httpd-ssl.conf sets; leave it out if you include that file)
+SSLSessionCache "shmcb:/var/run/httpd/ssl_scache(512000)"
 
 <VirtualHost *:80>
     ServerName game.example.org
@@ -290,6 +292,8 @@ sudo sysctl --system
 
 Skip this section, and the `-wt` flags below, to run without WebTransport.
 
+**A known problem (`bugs.md` L25):** in the container, a game hosted by a browser with two or more guests over WebTransport ran at about 25 of its 40 tics a second (the host's page drops datagrams it cannot hand to the browser fast enough, and the game resends them); the same games over WebSocket, and two-player games over WebTransport, ran at full speed. It has not been checked on a real network. Until it is fixed, run without WebTransport if browsers will host games of three or more: everything else in this guide is the same, and browsers use the WebSocket.
+
 ### The service
 
 `/etc/systemd/system/vnet-relay.service`:
@@ -347,11 +351,11 @@ What the flags do here:
 | Players | Host sends, datagrams a second (per other player) | Host sends, bytes a second (relay frames, UDP) |
 |---|---|---|
 | 2 | 68 (68) | 5,250 |
-| 3 | 130 (65) | 9,660 |
+| 3 | 130 (65) | 10,900 |
 | 4, the most the shareware data allows | 188 (63) | 15,800 |
-| 8, registered data: computed, not measured | about 440 (63); at most 560 (80) | about 50,000; under 160,000 |
+| 8, registered data: computed, not measured | about 440 (63); at most 560 (80) | about 50,000 to 70,000 |
 
-A guest sends to the host only, about 67 a second. The per-player rate cannot exceed about 80 a second (one datagram per input, 40 a second, plus at most one paced datagram per 25 ms; brief 04b), which gives the bound for 8 players. So **the defaults are enough**: with the shareware data the host uses a third of `-client-pps` and 3 % of `-client-bps`. For 8-player games with registered data the measured rate fits, but the bound is close to 600, so a server for such games should raise the packet rate: `-client-pps 1000`. Nothing else needs raising.
+A guest sends to the host only, about 67 a second. A browser host sends fewer, larger datagrams (in the check below, a browser hosting a browser and a desktop game over WebSocket: 98 a second, 49 to each, 93 bytes each, 10,000 bytes a second). The per-player rate cannot exceed about 80 a second (one datagram per input, 40 a second, plus at most one paced datagram per 25 ms; brief 04b), which gives the bound for 8 players; the bytes for 8 assume datagrams of 90 to 125 bytes (52 to 59 bytes of game data were measured with 2 to 4 players, whether they stood still or fired every few tics, 93 from a browser host), and `-client-bps` would need datagrams of over 1,000 bytes. So **the defaults are enough**: with the shareware data the host uses a third of `-client-pps` and 3 % of `-client-bps`. For 8-player games with registered data the measured rate fits, but the bound is close to 600, so a server for such games should raise the packet rate: `-client-pps 1000`. Nothing else needs raising.
 
 **Time-outs.** The relay drops a member that has been silent for 15 s (`-session-timeout`), and the game ends a network game when the host, or a guest, has sent nothing for 15 s (with "the host left the game" or "player P left the game"). The two are meant to be equal: a player who vanishes ends the game after 15 s, and the relay frees their place at the same time; a newcomer who then gets the same virtual address is still refused ("the game has already started"), because the game matches places by session, not by address. **Leave `-session-timeout` (15 s) and `-keepalive` (5 s) alone.** A shorter session time-out drops desktop players who stall for a few seconds (the relay sees silence; the game would have waited); a longer one keeps vanished players' places in the relay longer and changes nothing in the game. `-room-idle` (30 min) closes a room that carried no data that long: a host waiting alone in the lobby for half an hour loses the room.
 
