@@ -333,12 +333,16 @@
   }
   // A trap or an error inside the game's frame reaches Module.onExit first: Emscripten's callUserCallback() ends the
   // runtime (exit with the last status, usually 0) on its way out, and the error itself comes after, as an 'error'
-  // event or an unhandled rejection (the order of the two is the browser's). So an error from the game shortly after
-  // an exit is still the game's, and its message replaces "The game has ended." (brief 02c).
+  // event or an unhandled rejection (the order of the two is the browser's). So such an error shortly after an exit is
+  // still the game's, and its message replaces "The game has ended." (brief 02c). Not a DOMException: that is a browser
+  // API refusing something, not the game failing; for example, when the game closes its audio on the way out, Firefox
+  // rejects every AudioContext.resume() still pending with "Closed before resume completed".
   var exitedAt = 0;
   function gameError(err, file) {
-    var justExited = !running && exitedAt && performance.now() - exitedAt < 2000;
-    return (running || justExited) && fromGame(err, file);
+    if (!fromGame(err, file)) { return false; }
+    if (running) { return true; }
+    var refusal = typeof DOMException !== 'undefined' && err instanceof DOMException;
+    return !refusal && exitedAt > 0 && performance.now() - exitedAt < 2000;
   }
   window.addEventListener('error', function (e) {
     if (gameError(e.error, e.filename)) { finish('Something went wrong: ' + sentence(describe(e)) + ' Reload the page to try again.', true, true); }
@@ -701,14 +705,16 @@
   // pointerlockchange came), and SDL asks again on the next click on the canvas, or on the next focus.
   // The canvas is the only element Emscripten asks for the lock (SDL's "#canvas", and Module.canvas). Its fullscreen
   // calls drop their promises the same way, on the canvas and on the document; the game never asks for fullscreen
-  // (sdlayer2.c keeps the canvas a window), but they are handled alike in case it ever does.
+  // (sdlayer2.c keeps the canvas a window), but they are handled alike in case it ever does. So does SDL's audio with
+  // AudioContext.resume() (it asks on every audio callback while the context is suspended): when the game closes its
+  // audio device (on exit, or to reopen it after a sound setting changed) every pending resume() is rejected.
   // Test hook: window.jfswTest.unhandledPointerLock = true leaves the lock's promise unhandled, as before the fix.
   function quietRefusal(obj, name, what) {
     var real = obj[name];
     if (typeof real !== 'function') { return; }
     obj[name] = function () {
       var r;
-      try { r = real.apply(obj, arguments); } catch (e) { console.warn(what + ' refused:', describe(e)); return undefined; }
+      try { r = real.apply(this, arguments); } catch (e) { console.warn(what + ' refused:', describe(e)); return undefined; }
       if (TEST && name === 'requestPointerLock' && window.jfswTest && window.jfswTest.unhandledPointerLock) { return r; }
       if (r && typeof r.then === 'function') { r.then(null, function (e) { console.warn(what + ' refused:', describe(e)); }); }
       return r;
@@ -717,6 +723,7 @@
   quietRefusal(canvas, 'requestPointerLock', 'pointer lock');
   quietRefusal(canvas, 'requestFullscreen', 'fullscreen');
   quietRefusal(document, 'exitFullscreen', 'leaving fullscreen');
+  if (window.AudioContext) { quietRefusal(window.AudioContext.prototype, 'resume', 'audio resume'); }
 
   window.addEventListener('keydown', function (e) { if (e.code === 'Escape') { lastEscape = performance.now(); } }, true);
   document.addEventListener('pointerlockchange', function () {

@@ -157,7 +157,7 @@ async function fatal(env, how) {
       get() {
         if (armed) {
           armed = false;
-          if (how === 'trap') { Module._free(0xFFFFFFF0); } else { throw new Error('test: an error in the game\'s script'); }
+          if (how === 'trap') { Module._free(HEAPU8.length + 4096); } else { throw new Error('test: an error in the game\'s script'); }
         }
         return n;
       },
