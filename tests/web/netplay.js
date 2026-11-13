@@ -911,6 +911,93 @@ SCENARIOS['hidden-level'] = {
   },
 };
 
+// ---- the tics of a level that ends (F3, bugs.md L20) ---------------------------------------------------
+// After the tic that ends a level, the original MoveLoop went on running every further tic whose inputs were already in, so a
+// machine played 0, 1 or more extra tics of the old level, depending on timing, and in co-op it carried what they changed
+// (health, ammo, weapons) into the next level. Since F3 every machine stops at the exit tic. Here the level ends at tic LE_EXIT
+// through -testexit (as an exit switch: ExitLevel is set inside the tic; nothing else stops MoveLoop since F3), and the
+// master is made to hold the inputs of many tics after it: every slave's datagrams are 200 ms late (latency impairment), so
+// a slave has made its inputs up to about 8 tics ahead of the tics it runs, and the master stops for 1.5 s inside the exit
+// tic (-teststall), during which they all arrive. Before the fix the master then ran those tics and the slaves did not (they
+// get the master's complete tics only as it runs them, and leave at the exit tic). Every player throws shurikens from tic
+// LE_FIRE on (-testfire), about one every 8 tics, so the master's extra tics cost it ammo the slaves still count: at the next
+// level the master runs out of shurikens first and the game goes out of sync. Checked: every machine played exactly LE_EXIT
+// tics of the first level, record for record the same; the second level agrees record for record and field by field at its
+// start, at tics 1 to 3 and at its last tic; the master had the inputs of more tics than it ran (so the old code would have
+// run them); the players threw shurikens (their count fell before the exit and again in the second level). There is no state
+// dump at the exit tic: writing one takes a browser a second or two, which would stall it there too.
+const LE_EXIT = 200, LE_FIRE = 150, LE_TICS = 300, LE_STALL = 1500, LE_LAT = 200;
+// The records of a -testdump file, split into the levels played (the tic count starts again at 1 in each level).
+function dumpLevels(buf) {
+  const levels = [];
+  let last = Infinity;
+  for (let i = 0; buf && i + REC <= buf.length; i += REC) {
+    const t = buf.readUInt32LE(i);
+    if (t <= last) { levels.push([]); }
+    levels[levels.length - 1].push(buf.subarray(i, i + REC));
+    last = t;
+  }
+  return levels;
+}
+async function levelExitGame(kinds) {
+  const relay = await startRelay();
+  try {
+    console.log('  ' + kinds.join(' + ') + ': the level ends at tic ' + LE_EXIT + ', the master stops for ' + LE_STALL + ' ms in that tic, the slaves\' datagrams are ' + LE_LAT + ' ms late (' + LOAD() + ')');
+    const ms = await room(relay, kinds, { tics: LE_TICS, state: true,
+      extra: (i) => ['-testexit' + LE_EXIT, '-testfire' + LE_FIRE, '-teststate' + LE_TICS].concat(i === 0 ? ['-teststall' + LE_EXIT + ',' + LE_STALL] : []),
+      impair: (i) => (i === 0 ? null : 'lat=' + LE_LAT + ',seed=' + (301 + i)) });
+    const limit = (LE_EXIT + LE_TICS) / NOMINAL * 1000 * 3 + LE_STALL + 120000;
+    for (const m of ms) { await m.waitEnd(limit - (now() - ms[0].started)); }
+    console.log('  the game took ' + ((now() - ms[0].started) / 1000).toFixed(1) + ' s');
+    const dumps = await checkGame(ms, LE_TICS);
+    const outs = [];
+    for (const m of ms) { outs.push(await m.out()); }
+    ms.forEach((m, i) => check(new RegExp('TEST: leaving the level at tic ' + LE_EXIT + ' for level 2\\b').test(outs[i]), m.name + ' left the first level at tic ' + LE_EXIT + ' for level 2'));
+    check(new RegExp('TEST: stalling for ' + LE_STALL + ' ms at tic ' + LE_EXIT + '\\b').test(outs[0]), ms[0].name + ' (master) stopped for ' + LE_STALL + ' ms in the exit tic');
+    // how many tics each machine played of the first level, and how many more tics' inputs it had (TestLevelEnd, sync.c)
+    const ends = outs.map((o) => /TEST: left the level after tic (\d+), with the inputs of (-?\d+) more tics here/.exec(o));
+    console.log('  first level: ' + ms.map((m, i) => m.name + ' left after tic ' + (ends[i] ? ends[i][1] : '?') + ' with the inputs of ' + (ends[i] ? ends[i][2] : '?') + ' more tics').join(', '));
+    // (before the fix the master ran them, after it they are still in its fifo: either way it had them)
+    check(!!ends[0] && +ends[0][1] + +ends[0][2] >= LE_EXIT + 2, ms[0].name + ' (master) had every player\'s inputs up to tic ' + (ends[0] ? +ends[0][1] + +ends[0][2] : '?') + ' when it left the first level (at least ' + (LE_EXIT + 2) + ': the test makes the case the original game got wrong)');
+    const lv = dumps.map(dumpLevels);
+    check(lv.every((l) => l.length === 2), 'every machine\'s dump has two levels (' + lv.map((l) => l.length).join(', ') + ')');
+    if (!lv.every((l) => l.length === 2)) { return; }
+    check(lv.every((l) => l[0].length === LE_EXIT), 'every machine played exactly ' + LE_EXIT + ' tics of the first level (' + lv.map((l) => l[0].length).join(', ') + ')');
+    for (const k of [0, 1]) {
+      const n = Math.min(...lv.map((l) => l[k].length));
+      let first = -1, against = 0;
+      for (let r = 0; r < n && first < 0; r++) { for (let i = 1; i < lv.length; i++) { if (!lv[i][k][r].equals(lv[0][k][r])) { first = r; against = i; break; } } }
+      check(first < 0, 'level ' + (k + 1) + ': every machine\'s records agree (' + n + ' compared)', first >= 0 ? 'first difference at its tic ' + lv[0][k][first].readUInt32LE(0) + ': ' + ms[0].name + ' against ' + ms[against].name : '');
+    }
+    const st = [];
+    for (const m of ms) { const b = await m.readFile('d.bin.state'); st.push(b ? parseState(b.toString()) : null); }
+    check(st.every(Boolean), 'every machine wrote its state dump');
+    if (!st.every(Boolean)) { return; }
+    const whens = ['L2.start', 'L2.t1', 'L2.t2', 'L2.t3', 'L2.t' + LE_TICS];
+    for (let k = 1; k < ms.length; k++) {
+      for (const w of whens) {
+        if (!st[0].has(w + ' global') || !st[k].has(w + ' global')) { check(false, ms[0].name + ' and ' + ms[k].name + ' have the state dump ' + w); continue; }
+        const d = stateDifferences(st[0], st[k], w, ms[0].kind !== ms[k].kind);
+        check(d.length === 0, ms[0].name + ' and ' + ms[k].name + ' agree field by field at ' + w, d.slice(0, 10).join('; '));
+      }
+    }
+    // the control: shurikens were thrown before the exit and after it, so the extra tics would have changed the carried ammo
+    const ammo = (w, p) => { const f = st[0].get(w + ' player ' + p); return f ? +f.get('WpnAmmo1') : NaN; };
+    for (let p = 0; p < ms.length; p++) {
+      const a = [ammo('start', p), ammo('L2.start', p), ammo('L2.t' + LE_TICS, p)];
+      check(a[0] === 30 && a[1] > 0 && a[1] < a[0] && a[2] < a[1], 'player ' + p + ' threw shurikens before the exit and after it (count at the start, at the next level\'s start, at its tic ' + LE_TICS + ': ' + a.join(', ') + ')');
+    }
+  } finally { await cleanup(relay); }
+}
+SCENARIOS['level-exit'] = {
+  what: 'a level exit while the master holds the inputs of later tics (bugs.md L20): every machine plays exactly the exit tic\'s tics and carries the same ammo into the next level (native host and browser, two browsers, browser host and native)',
+  run: async () => {
+    await levelExitGame(['native', 'browser']);
+    await levelExitGame(['browser', 'browser']);
+    await levelExitGame(['browser', 'native']);
+  },
+};
+
 // A visible game is unchanged by brief 04c (only by name: it needs the build from before it). NETPLAY_OLD_SW (a native
 // binary) and NETPLAY_OLD_WASM (a build of the page) are the old build; a machine of the old build and one of the new play in
 // one room, both visible. The old build's drawing clears the override sectors' parallax bit in its first frame, the new one

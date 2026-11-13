@@ -172,8 +172,11 @@ void TestSlowStartArg(int ms);  // -testslowstart<ms>: wait that long before the
 void TestSlowStart(void);       // from RunLevel, after TestStateStart
 extern int TestExitTic;         // -testexit<T>,<L>: 0 = off (sync.c)
 extern int TestExitLevel;       // L, 0 = the next level
-extern int TestExitReached;     // set at that tic; MoveLoop runs no further tic of the level
 void TestExitArg(const char *arg);
+void TestStallArg(const char *arg);   // -teststall<T>,<ms>: this machine stops <ms> ms at the start of tic T (sync.c)
+void TestFireArg(int tic);      // -testfire[<N>]: this machine's player throws shurikens from tic N on (sync.c)
+void TestInputHook(SW_PACKET *loc);   // from faketimerhandler, after getinput
+void TestLevelEnd(void);        // from RunLevel when it leaves a level
 extern int TestDrawCheck;       // -testdrawcheck[2]: DrawSetupLevelStats against the first frame (sync.c)
 void TestDrawCheckArg(int mode);
 int TestDrawCheckLevel(void);   // from InitLevel: 1 = it took the place of DrawSetupLevelStats

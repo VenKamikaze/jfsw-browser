@@ -691,6 +691,8 @@ static unsigned int TestStateHash(void)
     return h;
     }
 
+static int TestStateLevels;    // levels started (RunLevel), counted by TestStateStart
+
 // -teststate[<T>] (test-only, brief 04b; with -testdump<name>): this machine also writes <name>.state,
 // a field by field text dump of the simulation state, for finding which field two machines disagree
 // about. One line per object, "<when> <kind> <index> field=value ...", so that a plain diff of two
@@ -870,8 +872,8 @@ static void TestStateFull(const char *when)
 
 // Called when RunLevel starts (game.c), after InitRunLevel: the state before the first input.
 // The dumps of the first level played are labelled start, t1, t2, ...; those of later levels (brief
-// 04c, -testexit) get the number of the level played in front: L2.start, L2.t1, ...
-static int TestStateLevels;
+// 04c, -testexit) get the number of the level played in front: L2.start, L2.t1, ... (TestStateLevels,
+// the number of levels started, is defined further up: -testfire uses it too.)
 
 static void TestStateWhen(char *buf, const char *what)
     {
@@ -1354,12 +1356,12 @@ void TestDrawCheckFrame(void)
 // -testexit<T>,<L> (test-only, brief 04c): at the start of game tic T of the first level, every
 // machine leaves the level for level L (the next one without ",<L>"), as a level exit switch does
 // (sector.c), but without the co-op bonus screen, which waits for a key (FinishedLevel is not set).
-// It happens in domovethings, at the same tic on every machine; MoveLoop then runs no further tic of
-// that level (TestExitReached), so every machine has run exactly T tics of it, whatever inputs it
-// had buffered. For testing what a machine has at the start of the next level (a hidden browser
-// tab: bugs.md L19). Inert without the argument.
+// It happens in domovethings, at the same tic on every machine. Since F3 (bugs.md L20) MoveLoop
+// runs no further tic of a level once a tic has set ExitLevel, so every machine has run exactly T
+// tics of it, whatever inputs it had buffered; brief 04c had a break of its own for this hook
+// (TestExitReached), which F3 removed: the exit now goes the way of every other exit, so the tests
+// that use it (hidden-level, level-exit) check the game's own stop. Inert without the argument.
 int TestExitTic;
-int TestExitReached;
 int TestExitLevel;
 static int TestExitDone;
 
@@ -1369,6 +1371,83 @@ void TestExitArg(const char *arg)
 
     TestExitTic = atoi(arg);
     TestExitLevel = c ? atoi(c + 1) : 0;
+    }
+
+// -teststall<T>,<ms> (test-only, F3): at the start of game tic T of the first level, after -testexit
+// (when it is the same tic), this machine stops for <ms> milliseconds with its clock running, then
+// goes on with the tic. Meanwhile the other machines go on making their inputs, and they arrive
+// here: after the stop this machine has the inputs of more tics than the others, and its own are
+// made in a burst (faketimerhandler catches up with the clock). It is how a machine gets many
+// tics' inputs in its fifo at a level exit (bugs.md L20): the master, given this at the exit tic,
+// would run the tics after the exit that the others never run. In the browser it waits by
+// yielding (ASYNCIFY), so that network events are taken in meanwhile and the other pages of a test
+// are not held up; natively by a busy wait (the datagrams wait in the socket). Changes nothing
+// in the simulation; per machine (not in the version salt). Inert without the argument.
+static int TestStallTic, TestStallMs, TestStallDone;
+
+void TestStallArg(const char *arg)
+    {
+    const char *c = strchr(arg, ',');
+
+    TestStallTic = atoi(arg);
+    TestStallMs = c ? atoi(c + 1) : 1000;
+    }
+
+static void TestStall(void)
+    {
+#ifndef __EMSCRIPTEN__
+    unsigned int t0;
+#endif
+
+    buildprintf("TEST: stalling for %d ms at tic %u\n", TestStallMs, MoveThingsCount);
+#ifdef __EMSCRIPTEN__
+    emscripten_sleep(TestStallMs);
+#else
+    t0 = getticks();
+    while ((int)(getticks() - t0) < TestStallMs)
+        ;
+#endif
+    // the clock as a timer interrupt would have kept it (the DOS game's): the FAKETIMERHANDLER()
+    // calls in the rest of this tic then take in what arrived and make the inputs that fell due
+    sampletimer();
+    }
+
+// -testfire[<N>] (test-only, F3): from game tic N of the first level on (from its start without N)
+// and in every later level, this machine's own inputs select the shurikens and hold the fire key:
+// its player throws them as fast as the game lets it, about one every 8 tics, until they run
+// out (30 at the start of a game), and each throw costs one, so the ammo count changes every few
+// tics and is carried into the next level in co-op. The inputs go over the network as any other,
+// so every machine plays the same throws. Inert without the argument.
+static int TestFireOn, TestFireFrom;
+
+void TestFireArg(int tic)
+    {
+    TestFireOn = 1;
+    TestFireFrom = tic;
+    }
+
+void TestInputHook(SW_PACKET *loc)
+    {
+    // the input being made is fifo index movefifoend, which game tic movefifoend + 1 of this level runs
+    if (!TestFireOn || (TestStateLevels <= 1 && Player[myconnectindex].movefifoend + 1 < TestFireFrom))
+        return;
+    loc->bits = (loc->bits & ~SK_WEAPON_MASK) | (WPN_STAR + 1) | BIT(SK_SHOOT);
+    }
+
+// When RunLevel leaves a level, in a test that ends it (-testexit) or stalls (-teststall): how many
+// tics this machine played of it and how many more tics' inputs it had from every player by then
+// (the ones MoveLoop would have run before F3, at most; bugs.md L20). A slave counts the tics the
+// master has sent it complete.
+void TestLevelEnd(void)
+    {
+    extern unsigned int MoveThingsCount;
+    int i, more = MOVEFIFOSIZ;
+
+    if (TestExitTic <= 0 && TestStallTic <= 0)
+        return;
+    TRAVERSE_CONNECT(i)
+        more = min(more, Player[i].movefifoend - movefifoplc);
+    buildprintf("TEST: left the level after tic %u, with the inputs of %d more tics here\n", MoveThingsCount, more);
     }
 
 void TestTicHook(void)
@@ -1381,10 +1460,15 @@ void TestTicHook(void)
     if (TestExitTic > 0 && !TestExitDone && (int)MoveThingsCount == TestExitTic)
         {
         TestExitDone = 1;
-        TestExitReached = 1;
         Level = TestExitLevel > 0 ? TestExitLevel : Level + 1;
         ExitLevel = TRUE;
         buildprintf("TEST: leaving the level at tic %d for level %d\n", TestExitTic, Level);
+        }
+
+    if (TestStallTic > 0 && !TestStallDone && (int)MoveThingsCount == TestStallTic)
+        {
+        TestStallDone = 1;
+        TestStall();
         }
 
     if (TestNudgeTic >= 0 && (int)MoveThingsCount == TestNudgeTic)
