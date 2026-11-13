@@ -442,7 +442,33 @@ Then play:
 
 ## Without TLS
 
-Plain HTTP works on a LAN, but browsers allow WebTransport only on HTTPS pages, so it is WebSocket only. Serve the page on port 80 (no redirect), put the `<Directory>` block and the three proxy lines into the port-80 virtual host, and set `relay: 'ws://game.example.org/vnet'` in `config.js`. Run the relay without the `-wt` flags. Desktop players are not affected: they use UDP 7777 either way.
+Plain HTTP works on a LAN, but browsers allow WebTransport only on HTTPS pages, so it is WebSocket only. Use this `/etc/httpd/conf/extra/sw.conf` instead of the one in section 3 (the port-80 virtual host serves the game and the proxy; no redirect, no certificate):
+
+<!-- check-deploy: apache-site-notls -->
+```apache
+<VirtualHost *:80>
+    ServerName game.example.org
+    DocumentRoot "/srv/http"
+    DeflateAlterETag NoChange
+
+    <Directory "/srv/http/games/sw">
+        Require all granted
+        AddType application/wasm .wasm
+        AddType application/octet-stream .grp
+        AddOutputFilterByType DEFLATE text/html text/css text/javascript application/javascript application/wasm application/octet-stream
+        Header set Cache-Control "no-cache"
+        <Files "swshare.grp">
+            Header set Cache-Control "public, max-age=86400"
+        </Files>
+    </Directory>
+
+    ProxyRequests off
+    ProxyPass        /vnet http://127.0.0.1:8080/vnet upgrade=websocket
+    ProxyPassReverse /vnet http://127.0.0.1:8080/vnet
+</VirtualHost>
+```
+
+Set `relay: 'ws://game.example.org/vnet'` in `config.js`, and run the relay without the `-wt` line (and without the two `Capabilit...` lines: it then binds no privileged port). The page is at `http://game.example.org/games/sw/`, and the `curl` checks are the same with `http://` (the WebSocket one with `Origin: http://game.example.org`). Desktop players are not affected: they use UDP 7777 either way.
 
 ## Updating
 

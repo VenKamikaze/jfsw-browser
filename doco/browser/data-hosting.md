@@ -1,6 +1,6 @@
 # Hosting the game data
 
-The browser build does not contain the game. The page (`web/data.js`) downloads one file, the Shadow Warrior shareware data, from a URL you choose, checks it, and keeps it in the visitor's browser. This page says what to put on the server. Brief 06 (deployment) builds on it.
+The browser build does not contain the game. The page (`web/data.js`) downloads one file, the Shadow Warrior shareware data, from a URL you choose, checks it, and keeps it in the visitor's browser. This page says what to put on the server. The whole deployment (the page, Apache with TLS, the relay, desktop players) is in [`deploy.md`](deploy.md), which includes these settings.
 
 Only the **shareware** GRP may be offered for public download by default (decision D11). Someone who owns the registered game can pick their own `sw.grp` in the page; it stays on their machine.
 
@@ -80,7 +80,7 @@ A browser reports a blocked cross-origin request exactly like a network failure,
 
 ## Example: Apache
 
-Placeholders only (`game.example.org`, `data.example.org`, `/srv/http/games/sw`). Checked with Apache 2.4.58 (Ubuntu): `apache2 -t` says "Syntax OK" for the files below (with the `Listen`, `LoadModule` and `TypesConfig` lines a distribution supplies), and `curl` against it showed gzip (26,056,769 bytes sent as 11,621,419), an `ETag`, a `304` for a conditional request, and the CORS headers on both `GET` and the `OPTIONS` preflight. Other Apache versions were not tried.
+Placeholders only (`game.example.org`, `data.example.org`, `/srv/http/games/sw`). Checked with Apache 2.4.58 (Ubuntu): `apache2 -t` says "Syntax OK" for the files below (with the `Listen`, `LoadModule` and `TypesConfig` lines a distribution supplies), and `curl` against it showed gzip (26,056,769 bytes sent as 11,621,419), an `ETag`, a `304` for a conditional request, and the CORS headers on both `GET` and the `OPTIONS` preflight. Other Apache versions were not tried. Brief 06 moved `.wasm` from the GRP's `max-age=86400` to `no-cache` (a redeploy must reach every browser on its next load) and checked the changed block again on the same Apache: `sw.wasm` and `sw.js` answer `no-cache`, the GRP `public, max-age=86400`, all gzip.
 
 Modules: `mod_mime`, `mod_filter` (needed for `AddOutputFilterByType` in 2.4), `mod_deflate`, `mod_headers`, and `mod_rewrite` for the preflight (`a2enmod filter deflate headers rewrite`, or `LoadModule` lines on Arch).
 
@@ -105,12 +105,13 @@ Modules: `mod_mime`, `mod_filter` (needed for `AddOutputFilterByType` in 2.4), `
         AddType application/wasm .wasm
         AddOutputFilterByType DEFLATE application/octet-stream application/wasm text/html text/css text/javascript application/javascript
 
-        # The page keeps its own copy of the GRP, so this matters for other clients and for the wasm.
-        <FilesMatch "\.(grp|wasm)$">
+        # The page keeps its own copy of the GRP, so this matters for other clients only.
+        <FilesMatch "\.grp$">
             Header set Cache-Control "public, max-age=86400"
         </FilesMatch>
-        # Pages and scripts change with each deployment: always ask.
-        <FilesMatch "\.(html|js|css)$">
+        # The page, its scripts and the wasm change with each deployment and must be of one build: always ask
+        # (brief 06: a cached old sw.wasm next to a new sw.js does not start; deploy.md, "Builds must match").
+        <FilesMatch "\.(html|js|css|wasm)$">
             Header set Cache-Control "no-cache"
         </FilesMatch>
     </Directory>

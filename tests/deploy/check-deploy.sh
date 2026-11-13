@@ -8,6 +8,7 @@
 #   sudo tests/deploy/check-deploy.sh --quick         # the set-up and the curl checks, no browsers
 #   sudo tests/deploy/check-deploy.sh --guide FILE    # take the configuration from another copy of the guide
 #   sudo tests/deploy/check-deploy.sh --keep          # leave Apache, the relay and the files in place
+#   sudo tests/deploy/check-deploy.sh --no-tls        # the guide's "Without TLS": plain HTTP, ws://, no WebTransport
 #
 # It needs root, Apache 2.4.47+ (Ubuntu's apache2 or Arch's httpd), openssl, curl, Go, node with
 # Playwright and its Chromium (never `playwright install`), setpriv, and from the repository:
@@ -38,17 +39,19 @@ set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 guide="$root/doco/browser/deploy.md"
-quick=0; keep=0
+quick=0; keep=0; tls=1
 while [ $# -gt 0 ]; do
     case "$1" in
         --guide) guide="$(readlink -f "$2")"; shift 2 ;;
         --quick) quick=1; shift ;;
         --keep) keep=1; shift ;;
+        --no-tls) tls=0; shift ;;
         *) echo "unknown option $1" >&2; exit 2 ;;
     esac
 done
 
 HOST=game.example.org
+sch=https; wsch=wss; site_block=apache-site
 SITE=/srv/http/games/sw
 TESTSITE=/srv/http/games/sw-test
 fails=0
@@ -121,7 +124,8 @@ block() {
         want && /^```/ { if (inside) exit; inside = 1; next }
         inside { print }' "$guide"
 }
-for b in site-config httpd-modules apache-site relay-cert-hook relay-unit; do
+[ "$tls" = 0 ] && { sch=http; wsch=ws; site_block=apache-site-notls; }
+for b in site-config httpd-modules "$site_block" relay-cert-hook relay-unit; do
     [ -n "$(block "$b")" ] || die "the guide has no block marked check-deploy: $b"
 done
 
@@ -135,6 +139,8 @@ for f in "${files[@]}"; do cp "$root/build-wasm/$f" "$SITE/"; done
 cp "$root/testdata/swshare.grp" "$SITE/"
 # the build's config.js with its settings (from "window.JFSW_CONFIG = {" to the end) replaced by the guide's
 { sed '/^window\.JFSW_CONFIG = {/,$d' "$root/build-wasm/config.js"; block site-config; } > "$SITE/config.js"
+# without TLS the guide says: relay: 'ws://game.example.org/vnet'
+[ "$tls" = 0 ] && sed -i "s|^\( *relay: \)'wss://$HOST/vnet',|\1'ws://$HOST/vnet',|" "$SITE/config.js"
 chmod a+rx /srv/http /srv/http/games; chmod -R a+rX "$SITE"
 node -e 'global.window = {}; require(process.argv[1]); const c = window.JFSW_CONFIG; if (!c || !c.data) process.exit(1)' "$SITE/config.js" \
     && ok "the deployed config.js loads and sets window.JFSW_CONFIG" || bad "the deployed config.js does not load"
@@ -196,7 +202,7 @@ loadmod() { printf '%s\n' "$builtin" | grep -q "mod_$2.c" || echo "LoadModule $1
     echo "DirectoryIndex index.html"
     echo "Include conf/extra/sw.conf"
 } > "$a/conf/httpd.conf"
-block apache-site | sed "s|/etc/letsencrypt/live/$HOST/|$le/|g; s|/var/run/httpd/|$a/run/|g" > "$a/conf/extra/sw.conf"
+block "$site_block" | sed "s|/etc/letsencrypt/live/$HOST/|$le/|g; s|/var/run/httpd/|$a/run/|g" > "$a/conf/extra/sw.conf"
 t="$("$httpd" -f "$a/conf/httpd.conf" -t 2>&1)"
 expect "apachectl configtest: the guide's modules and sw.conf load" "$t" "Syntax OK"
 "$httpd" -f "$a/conf/httpd.conf" -k start || die "Apache did not start: $(tail -5 "$a/logs/error_log" 2>/dev/null)"
@@ -223,6 +229,7 @@ if ! id vnet-relay >/dev/null 2>&1; then
     useradd --system --no-create-home --shell "$nologin" vnet-relay && made_user=1 || die "useradd failed"
 fi
 [ -e /etc/vnet-relay ] || made_etc=1
+[ "$tls" = 1 ] && {
 block relay-cert-hook > "$w/vnet-relay-hook.sh"; chmod +x "$w/vnet-relay-hook.sh"
 if RENEWED_LINEAGE="$le" "$w/vnet-relay-hook.sh"; then
     st="$(stat -c '%a %U:%G' /etc/vnet-relay/certs /etc/vnet-relay/certs/fullchain.pem /etc/vnet-relay/certs/privkey.pem 2>&1 | tr '\n' ' ')"
@@ -230,6 +237,7 @@ if RENEWED_LINEAGE="$le" "$w/vnet-relay-hook.sh"; then
     setpriv --reuid vnet-relay --regid vnet-relay --init-groups cat /etc/vnet-relay/certs/privkey.pem >/dev/null 2>&1 \
         && ok "vnet-relay can read the key copy" || bad "vnet-relay cannot read /etc/vnet-relay/certs/privkey.pem"
 else bad "the certificate hook failed"; fi
+}
 unit="$(block relay-unit)"
 printf '%s\n' "$unit" | sed "s|/usr/local/bin/vnet-relay|$w/vnet-relay|" > "$w/vnet-relay.service"
 if command -v systemd-analyze >/dev/null; then
@@ -240,10 +248,16 @@ else note "no systemd-analyze: the unit file is not verified"; fi
 # ExecStart's flags (the continuation lines joined)
 flags="$(printf '%s\n' "$unit" | awk '/^ExecStart=/ {on = 1} on { line = line " " $0; if ($0 !~ /\\$/) exit } END { print line }' \
     | sed 's/\\//g; s/^ *ExecStart=[^ ]*//')"
-read -r -a flagv <<< "$flags"
+read -r -a flagv0 <<< "$flags"
+flagv=()   # without TLS, "the relay without the -wt flags"
+for ((i = 0; i < ${#flagv0[@]}; i++)); do
+    case "${flagv0[$i]}" in -wt|-wt-cert|-wt-key) [ "$tls" = 0 ] && { i=$((i + 1)); continue; } ;; esac
+    flagv+=("${flagv0[$i]}")
+done
+flags=" ${flagv[*]}"
 note "vnet-relay${flags}"
 caps=()
-printf '%s\n' "$unit" | grep -q '^AmbientCapabilities=CAP_NET_BIND_SERVICE' && caps=(--inh-caps +net_bind_service --ambient-caps +net_bind_service)
+[ "$tls" = 1 ] && printf '%s\n' "$unit" | grep -q '^AmbientCapabilities=CAP_NET_BIND_SERVICE' && caps=(--inh-caps +net_bind_service --ambient-caps +net_bind_service)
 nnp=(); printf '%s\n' "$unit" | grep -q '^NoNewPrivileges=yes' && nnp=(--no-new-privs)
 setpriv --reuid vnet-relay --regid vnet-relay --init-groups "${caps[@]}" "${nnp[@]}" -- \
     "$w/vnet-relay" "${flagv[@]}" > "$w/relay.log" 2>&1 &
@@ -255,27 +269,29 @@ grep -q '^LISTEN' "$w/relay.log" && ok "the relay runs as vnet-relay: $(grep '^L
 
 # ---- the guide's curl checks -------------------------------------------------------------------------
 note "the curl checks of the guide (section 6), with --cacert for the self-signed certificate"
-base="https://$HOST/games/sw"
+base="$sch://$HOST/games/sw"
 r="$(curl -sI "${cacert[@]}" -H 'Accept-Encoding: gzip' "$base/sw.wasm" | grep -iE '^HTTP|^cache-control|^content-type|^content-encoding')"
 expect "sw.wasm: 200, no-cache, application/wasm, gzip" "$r" '^HTTP/1.1 200' '^Cache-Control: no-cache' '^Content-Type: application/wasm' '^Content-Encoding: gzip'
 r="$(curl -sI "${cacert[@]}" -H 'Accept-Encoding: gzip' "$base/swshare.grp" | grep -iE '^HTTP|^etag|^cache-control|^content-type|^content-encoding')"
 expect "swshare.grp: 200, an ETag, max-age=86400, application/octet-stream, gzip" "$r" '^HTTP/1.1 200' '^ETag: (W/)?"' '^Cache-Control: public, max-age=86400' '^Content-Type: application/octet-stream' '^Content-Encoding: gzip'
 r="$(curl -s "${cacert[@]}" "$base/config.js" | grep -E '^ *(testMode|relay):')"
-expect "config.js: testMode false and the relay wss://$HOST/vnet" "$r" "^ *testMode: false,$" "^ *relay: 'wss://$HOST/vnet',$"
+expect "config.js: testMode false and the relay $wsch://$HOST/vnet" "$r" "^ *testMode: false,$" "^ *relay: '$wsch://$HOST/vnet',$"
 ws() {  # ws ORIGIN: the first line of the answer to a WebSocket upgrade through Apache's /vnet
-    curl -si --http1.1 -N --max-time 3 "${cacert[@]}" "https://$HOST/vnet" \
+    curl -si --http1.1 -N --max-time 3 "${cacert[@]}" "$sch://$HOST/vnet" \
         -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
         -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H "Origin: $1" | head -1
 }
-expect "the WebSocket upgrade through /vnet from the site's Origin: 101" "$(ws "https://$HOST")" '^HTTP/1.1 101 Switching Protocols'
-expect "the same from another Origin: 403 (as the guide explains)" "$(ws https://other.example.org)" '^HTTP/1.1 403'
+expect "the WebSocket upgrade through /vnet from the site's Origin: 101" "$(ws "$sch://$HOST")" '^HTTP/1.1 101 Switching Protocols'
+expect "the same from another Origin: 403 (as the guide explains)" "$(ws $sch://other.example.org)" '^HTTP/1.1 403'
 expect "healthz answers ok" "$(curl -s 127.0.0.1:8080/healthz)" '^ok'
 expect "stats answers JSON" "$(curl -s 127.0.0.1:8081/stats)" '"webtransports":'
 # further checks of what the guide's configuration says it does
-r="$(curl -sI "http://$HOST/games/sw/?join=ABC234" | grep -iE '^HTTP|^location')"
-expect "port 80 redirects to https, address kept" "$r" '^HTTP/1.1 301' "^Location: https://$HOST/games/sw/\?join=ABC234"
-r="$(curl -sI "http://$HOST/.well-known/acme-challenge/x" | head -1)"
-expect "port 80 serves the ACME challenge path itself (no redirect)" "$r" '^HTTP/1.1 404'
+if [ "$tls" = 1 ]; then
+    r="$(curl -sI "http://$HOST/games/sw/?join=ABC234" | grep -iE '^HTTP|^location')"
+    expect "port 80 redirects to https, address kept" "$r" '^HTTP/1.1 301' "^Location: https://$HOST/games/sw/\?join=ABC234"
+    r="$(curl -sI "http://$HOST/.well-known/acme-challenge/x" | head -1)"
+    expect "port 80 serves the ACME challenge path itself (no redirect)" "$r" '^HTTP/1.1 404'
+fi
 etag="$(curl -sI "${cacert[@]}" -H 'Accept-Encoding: gzip' "$base/sw.wasm" | sed -n 's/^ETag: //Ip' | tr -d '\r')"
 r="$(curl -sI "${cacert[@]}" -H 'Accept-Encoding: gzip' -H "If-None-Match: $etag" "$base/sw.wasm" | head -1)"
 expect "a browser revalidating sw.wasm (gzip, If-None-Match $etag) gets 304" "$r" '^HTTP/1.1 304'
@@ -299,7 +315,7 @@ if [ "$quick" = 0 ]; then
     for f in "${files[@]}" swshare.grp; do ln "$SITE/$f" "$TESTSITE/$f" 2>/dev/null || cp "$SITE/$f" "$TESTSITE/"; done
     sed 's/^\( *\)testMode: false,/\1testMode: true,/' "$SITE/config.js" > "$TESTSITE/config.js"
     chmod -R a+rX "$TESTSITE"
-    DEPLOY_SPKI="$spki" DEPLOY_BASE="$base/" DEPLOY_TEST_BASE="https://$HOST/games/sw-test/" DEPLOY_RELAY_UDP="$HOST:7777" \
+    DEPLOY_SPKI="$spki" DEPLOY_BASE="$base/" DEPLOY_TEST_BASE="$sch://$HOST/games/sw-test/" DEPLOY_TRANSPORT="$([ "$tls" = 1 ] && echo relay-wt || echo relay-ws)" DEPLOY_RELAY_UDP="$HOST:7777" \
         DEPLOY_STATS="http://127.0.0.1:8081/stats" DEPLOY_WORK="$w/play" node "$root/tests/deploy/play.js"
     pst=$?
     rm -rf "$TESTSITE"
@@ -309,7 +325,7 @@ fi
 # ---- the relay stopped: what Apache answers ------------------------------------------------------------
 if [ "$keep" = 0 ]; then
     kill "$relay_pid" 2>/dev/null; wait "$relay_pid" 2>/dev/null; relay_pid=""
-    expect "with the relay stopped, the WebSocket upgrade gets 503 (as the guide explains)" "$(ws "https://$HOST")" '^HTTP/1.1 503'
+    expect "with the relay stopped, the WebSocket upgrade gets 503 (as the guide explains)" "$(ws "$sch://$HOST")" '^HTTP/1.1 503'
 fi
 w1="$(grep -ciE 'warn|error' "$a/logs/error_log" 2>/dev/null)"
 note "Apache's error log: $w1 warning or error lines$( [ "$w1" -gt 0 ] && echo ": $(grep -iE 'warn|error' "$a/logs/error_log" | cut -c1-160 | sort | uniq -c | head -5 | tr '\n' ';')")"

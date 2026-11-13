@@ -29,6 +29,7 @@ const RELAY_UDP = process.env.DEPLOY_RELAY_UDP, STATS = process.env.DEPLOY_STATS
 if (!BASE || !TBASE || !SPKI || !RELAY_UDP || !STATS || !WORK) { console.error('play.js: run tests/deploy/check-deploy.sh'); process.exit(125); }
 const HOSTNAME = new URL(BASE).hostname;
 const TICS = 1200, REC = 17;
+const WANT = process.env.DEPLOY_TRANSPORT || 'relay-wt';     // relay-ws for the guide's "Without TLS" (--no-tls)
 const AUTONET = ['-autonet', '2,0,2,1,0,0,0,0,0,0'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = () => Date.now();
@@ -137,9 +138,9 @@ async function deployedLobby() {
     'with 3 players: A is player 1, B 2, the desktop game 3 (' + JSON.stringify([sa, sb, sc]) + ')');
   check(/relay-udp/.test(c.out()) && new RegExp('joined room ' + l.code).test(c.out()), 'the desktop game joined over UDP (' + RELAY_UDP + ')');
   const ta = transport(await a.out()), tb = transport(await b.out());
-  check(ta === 'relay-wt' && tb === 'relay-wt', 'both browsers use WebTransport (A ' + ta + ', B ' + tb + ')');
-  const st = await stats();
-  check(st && st.webtransports === 2 && st.sessions === 3, 'the relay counts 3 sessions, 2 of them WebTransport (' + (st ? 'sessions ' + st.sessions + ', webtransports ' + st.webtransports + ', websockets ' + st.websockets : 'no stats') + ')');
+  check(ta === WANT && tb === WANT, 'both browsers use ' + WANT + ' (A ' + ta + ', B ' + tb + ')');
+  const st = await stats(), nwt = WANT === 'relay-wt' ? 2 : 0;
+  check(st && st.webtransports === nwt && st.websockets === 2 - nwt && st.sessions === 3, 'the relay counts 3 sessions, ' + nwt + ' of them WebTransport (' + (st ? 'sessions ' + st.sessions + ', webtransports ' + st.webtransports + ', websockets ' + st.websockets : 'no stats') + ')');
   check(a.errors.length === 0 && b.errors.length === 0, 'no page errors', a.errors.concat(b.errors).join('; '));
   await a.stop(); await b.stop(); await c.stop();
 }
@@ -181,7 +182,7 @@ async function dumpGame() {
     const line = /TEST: quitting after (\d+) game tics: (\d+) sync checks, (\d+) mismatches, (\d+) sync bytes, player (\d+) of (\d+)/.exec(out);
     check(!!line && +line[1] >= TICS && +line[6] === 3, m.name + ': ' + (line ? line[0] : 'no TEST line'));
     check(!/OUT OF SYNC|CheckVersion\(\)/.test(out), m.name + ' logged no desync and no version mismatch');
-    check(transport(out) === 'relay-wt', m.name + ' played over WebTransport (' + transport(out) + ')');
+    check(transport(out) === WANT, m.name + ' played over ' + WANT + ' (' + transport(out) + ')');
     check(m.errors.length === 0, m.name + ': no page errors', m.errors.join('; '));
     dumps.push(await m.readFile('d.bin'));
   }

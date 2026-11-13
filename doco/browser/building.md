@@ -165,7 +165,7 @@ F3 added `level-exit` (about 70 s, in the full run; bugs.md L20): three games (a
 
 **The relay** is the one `web/config.js` names (`relay: 'wss://relay.example.org/vnet'`, or `'ws://127.0.0.1:PORT/vnet'` for a local relay whose `-origins` names the page's host:port). Never from the address, not even on a test page.
 
-**Test mode** (`?test=1` and the test-only parameters at the top of `web/jfsw.js`) needs `testMode: true` in `config.js` as well; the default is `false`, and a public site must keep it so (**brief 06: the deployed `config.js` leaves `testMode: false`**). The browser tests serve a `config.js` with `testMode: true` themselves (`tests/web/server.js`, `configText()`), so nothing needs changing to run them. To use test pages by hand on your own server, set `testMode: true` in `build-wasm/config.js`.
+**Test mode** (`?test=1` and the test-only parameters at the top of `web/jfsw.js`) needs `testMode: true` in `config.js` as well; the default is `false`, and a public site must keep it so (**the deployed `config.js` leaves `testMode: false`**: [`deploy.md`](deploy.md) §2). The browser tests serve a `config.js` with `testMode: true` themselves (`tests/web/server.js`, `configText()`), so nothing needs changing to run them. To use test pages by hand on your own server, set `testMode: true` in `build-wasm/config.js`.
 
 **Page parameters:**
 
@@ -208,6 +208,21 @@ tests/net/test-rejoin.sh                 # natively: a newcomer at a vanished or
 ```
 
 Test-only game arguments from brief 05: **`-testswitch<T>`** (all machines: at tic T of the first level every machine operates the level's exit switch, as a player does; unlike `-testexit` the bonus screen follows) and **`-testosd<T>,<command>`** (this machine runs a console command at tic T, e.g. `-testosd60,host 2`). The test-only environment variable `JFSW_TEST_STARTWIN` fills in the startup window (`host=N`, `room=CODE`, `relay=HOST:PORT`, `startnow=K`) and presses Start. `scripts/run-headless.sh --display` keeps `DISPLAY` for it, and the script now passes its standard input to the game (for `start`).
+
+### 6.7 Deploying, and checking a deployment (brief 06)
+
+Putting the game and the relay online (Arch, Apache, TLS, systemd) is [`deploy.md`](deploy.md). `tests/deploy/check-deploy.sh` follows that guide in a container or a spare machine and plays through it; it is **not** part of `make test`, because it needs root and changes the machine while it runs:
+
+```sh
+scripts/build-wasm.sh && make -j4 && scripts/fetch-test-data.sh     # what it deploys
+sudo tests/deploy/check-deploy.sh            # everything, about 3 minutes; ends with PASS or FAILED
+sudo tests/deploy/check-deploy.sh --quick    # the set-up and the curl checks only, about 20 s
+sudo tests/deploy/check-deploy.sh --no-tls   # the guide's "Without TLS" (plain HTTP, ws://, no WebTransport)
+sudo tests/deploy/check-deploy.sh --guide /path/to/deploy.md   # another copy of the guide (the mutation runs)
+sudo tests/deploy/check-deploy.sh --keep     # leave Apache, the relay and the files running/in place (it says how to stop them)
+```
+
+It takes the guide's configuration blocks as they are (each follows a `<!-- check-deploy: NAME -->` comment: `site-config`, `httpd-modules`, `apache-site`, `apache-site-notls`, `relay-cert-hook`, `relay-unit`), so a change to one of them is checked by the next run. It needs Apache 2.4.47+ (`apache2` or `httpd`), openssl, curl, setpriv, Go and Playwright's Chromium, and it uses the guide's own ports, which must be free: **TCP 80 and 443, UDP 443 and 7777, 127.0.0.1:8080 and 8081** (no other suite uses them). While it runs it adds `game.example.org` to `/etc/hosts`, the game to `/srv/http/games/sw` (and a test-mode copy to `/srv/http/games/sw-test` during the game with per-tic records), the system user `vnet-relay` and `/etc/vnet-relay`; it removes what it added and stops Apache and the relay at the end, and refuses to start if any of them already exists. Apache runs with a configuration of its own (an Arch-style `httpd.conf` under a temporary `ServerRoot`), so the distribution's Apache configuration is not touched. Chromium reaches `game.example.org` through `--host-resolver-rules`, trusts the self-signed certificate by its key hash (`--ignore-certificate-errors-spki-list`) and needs `--webtransport-developer-mode` for WebTransport to accept it (`tests/deploy/play.js`).
 
 ## 7. Layout of what brief 00 added
 
