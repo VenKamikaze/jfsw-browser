@@ -1774,7 +1774,7 @@ async function levelEndGame(kinds, hiddenIdx) {
         check(d.length === 0, ms[0].name + ' and ' + ms[k].name + ' agree field by field at ' + w, d.slice(0, 10).join('; '));
       }
     }
-    const ns = st.map((a) => +a.get('L2.start global').get('numsectors'));
+    const ns = st.map((a) => (a.get('L2.start global') ? +a.get('L2.start global').get('numsectors') : NaN));
     check(ns.every((n) => n === ns[0]) && ns[0] !== 486, 'the next level is another map than E1L1 (' + ns.join(', ') + ' sectors)');
   } finally { await cleanup(relay); }
 }
