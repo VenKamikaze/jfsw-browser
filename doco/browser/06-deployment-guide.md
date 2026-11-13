@@ -152,7 +152,7 @@ Keep them small and say why. Don't change the game's simulation or the netcode.
 
 ## Outcome
 
-**Status: review.** Implemented 13 Nov 2026 on `browser/06-deployment-guide` (jfsw-browser only; no submodule moved, no game or netcode change). Commits: `cef0ee9` (the draft guide), `613c891` (the check script and `play.js`, bugs.md L24 and L25), `73e1bd8` (`--no-tls`, data-hosting.md's wasm header, building.md §6.7, links), `6e00ee1` (the sysctl step, the "checked where" section), and the Outcome commit. A container restart in the middle lost nothing that was committed or built; every test below was run after it.
+**Status: review.** Implemented 13 Nov 2026 on `browser/06-deployment-guide` (jfsw-browser only; no submodule moved, no game or netcode change). Commits: `cef0ee9` (the draft guide), `613c891` (the check script and `play.js`, bugs.md L24 and L25), `73e1bd8` (`--no-tls`, data-hosting.md's wasm header, building.md §6.7, links), `6e00ee1` (the sysctl step, the "checked where" section), `d4bca92` and `fb34db3` (the Outcome, L25 under load, a load-aware warning in `play.js`), and this Outcome's last commit. A container restart in the middle lost nothing that was committed or built; every test below was run after it.
 
 ### What was done
 
