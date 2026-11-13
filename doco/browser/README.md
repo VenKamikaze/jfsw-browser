@@ -22,7 +22,7 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 | 04b | [Netcode lag cuts](04b-lag-cuts.md) | jfsw-browser, jfbuild | 04 | done (play-test pending) |
 | 04c | [A tab hidden before the level's first frame (L19)](04c-hidden-first-frame.md) | jfsw-browser | 04b | done (play-test pending) |
 | 05 | [Host and join from the game](05-host-and-join.md) | jfsw-browser, jfbuild | 03, 04 | done (play-test pending) |
-| 06 | [Deployment guide](06-deployment-guide.md): [`deploy.md`](deploy.md) | jfsw-browser | 05 | review |
+| 06 | [Deployment guide](06-deployment-guide.md): [`deploy.md`](deploy.md) | jfsw-browser | 05 | done (play-test pending) |
 | 02c | [A refused pointer lock shows the fatal overlay (L24)](02c-focus-loss.md) | jfsw-browser | 02 | written (found by the user's Firefox play-test, 13 Nov 2026) |
 | 05b | [Warn every player when the players' game data differs (L26)](05b-data-mismatch-warning.md) | jfsw-browser | 05 | written (the user, 13 Nov 2026: warn, don't refuse) |
 

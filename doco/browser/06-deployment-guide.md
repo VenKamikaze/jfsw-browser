@@ -286,3 +286,15 @@ On your own server (Arch, Apache, a real domain), following `deploy.md` from the
 **Game data from another server** (the user's request, after the review): a new section of `deploy.md` §2 (CORS, a trusted certificate, no login, private addresses and Chrome's local-network-access prompt, `https://` cannot fetch `http://`, no `file://` and the picker instead, invite links carry `?data=`, the same data for every player, `config.js` with `size` and `crc32` as the safer choice). Checked with Chromium on a `testMode: false` page: `?data=` on another origin with `Access-Control-Allow-Origin` loads the data, and its request carried no cookie although the browser held one for that host; without the header, and with `file://`, the page says it could not download the data and offers the picker. The `file://` message gives the CORS explanation, which does not apply: `bugs.md` **L32** (lesser). The certificate, private-address and mixed-content points are browser behaviour, not checked; the picker being remembered and the invite link keeping `?data=` are briefs 03's and 05's tested behaviour.
 
 **Left:** nothing of the review. Open for the coordinator: L30 (no build check), L31 (vnet brief 15), L32 (the `file://` message), and whether `TestQuitFinish()`'s 1.5 s grace should wait for the slowest guest (the loaded-machine failures above). The merge commit `fc41b54` has git's "# Conflicts:" lines after its trailers.
+
+### Coordinator verification and merge (13 Nov 2026)
+
+- **Read:** the fix-round diff, mostly `tests/deploy/check-deploy.sh`'s refusals and cleanup. It refuses to start over an existing `vnet-relay` user, `/etc/vnet-relay`, a `game.example.org` line in `/etc/hosts`, the site directory or a used port. It removes only what it made, and runs its cleanup on exit, INT and TERM. The branch changes no game, page, build or submodule file (`git diff origin/claude origin/browser/06-deployment-guide -- src web jfbuild Makefile scripts` is empty). So brief 05's verification of the game suites (`netplay.js` 1286/0 and the rest) still stands, and the implementer's final `netplay.js` on a quiet machine was 1286/0 as well.
+- **`check-deploy.sh` (default, WebSocket) rerun by the coordinator on the final guide** (`5287175`, load 1.3 to 4.8): PASS. Highlights: a 40-tic browser game; the browser host sent 99.2 datagrams a second (about 50 to each guest); `rate_limited` 0; with the relay stopped, the WebSocket upgrade gets 503. Apache's log had 3 expected lines: the directory listing refused by `Options -Indexes`, and the two from the relay being stopped on purpose.
+- **Merged** `browser/06-deployment-guide` into `claude` with `--no-ff`.
+- **Open items** (bugs.md):
+  - **L30** (no build check between machines): brief 05b now also warns about different builds.
+  - **L31:** vnet brief 15, on vnet's `docs/15-wt-datagram-bursts`.
+  - **L32:** the `file://` message gives the CORS explanation.
+  - **The test host's 1.5 s grace after `-testquit`** (`TestQuitFinish()`) can leave a guest that is behind under load to give up with "the host left". It is a test artifact; a fix would make the test host wait for the slowest guest. Not briefed.
+
