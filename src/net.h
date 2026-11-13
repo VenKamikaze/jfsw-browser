@@ -182,6 +182,11 @@ void TestOsdArg(const char *arg);   // -testosd<T>,<command>: this machine runs 
 void TestStallArg(const char *arg);   // -teststall<T>,<ms>: this machine stops <ms> ms at the start of tic T (sync.c)
 void TestFireArg(int tic);      // -testfire[<N>]: this machine's player throws shurikens from tic N on (sync.c)
 void TestInputHook(SW_PACKET *loc);   // from faketimerhandler, after getinput
+void TestAimKeyArg(const char *arg);  // -testaimkey<T>[,<N>[,<L>]]: this machine's Mouse_Aiming key is down at tics T..T+N-1 (sync.c)
+void TestAimHeldArg(void);      // -testaimheld: mouse aiming in held mode on this machine (sync.c)
+int TestAimKeyDown(void);       // from getinput: the test's key is down for the input being made
+int TestAimKeyPressed(void);    // from getinput: ... and was not for the one before
+void TestSlopeArg(const char *arg);   // -testslope<T>,<P>[,<L>]: every machine puts player P on a slope at tic T (sync.c)
 void TestLevelEnd(void);        // from RunLevel when it leaves a level
 extern int TestDrawCheck;       // -testdrawcheck[2]: DrawSetupLevelStats against the first frame (sync.c)
 void TestDrawCheckArg(int mode);

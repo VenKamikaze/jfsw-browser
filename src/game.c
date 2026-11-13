@@ -3874,6 +3874,21 @@ int app_main(int argc, char const * const argv[])
             TestStallArg(arg+9);    // test-only: this machine stops for a while at tic T of the first level
             }
         else
+        if (Bstrncasecmp(arg, "testaimkey", 10) == 0)
+            {
+            TestAimKeyArg(arg+10);      // test-only: this machine's Mouse_Aiming key is down at tics T..T+N-1
+            }
+        else
+        if (Bstrncasecmp(arg, "testaimheld", 11) == 0)
+            {
+            TestAimHeldArg();           // test-only: mouse aiming in held mode on this machine
+            }
+        else
+        if (Bstrncasecmp(arg, "testslope", 9) == 0)
+            {
+            TestSlopeArg(arg+9);        // test-only: every machine puts player P on a sloped floor at tic T
+            }
+        else
         if (Bstrncasecmp(arg, "testfire", 8) == 0)
             {
             TestFireArg(atoi(arg+8));   // test-only: this machine's player throws shurikens from tic N on
@@ -5252,7 +5267,7 @@ getinput(SW_PACKET *loc)
 
     if (gs.MouseAimingType == 1) // while held
         {
-        if (BUTTON(gamefunc_Mouse_Aiming))
+        if (BUTTON(gamefunc_Mouse_Aiming) || TestAimKeyDown())     // (test-only: -testaimkey, sync.c)
             {
             aiming = TRUE;
             gs.MouseAimingOn = TRUE;
@@ -5270,7 +5285,7 @@ getinput(SW_PACKET *loc)
     else
     if (gs.MouseAimingType == 0) // togglable button
         {
-        if (BUTTON(gamefunc_Mouse_Aiming) && !BUTTONHELD(gamefunc_Mouse_Aiming))
+        if ((BUTTON(gamefunc_Mouse_Aiming) && !BUTTONHELD(gamefunc_Mouse_Aiming)) || TestAimKeyPressed())   // (test-only: -testaimkey)
             {
             aiming = !aiming;
             gs.MouseAimingOn = !gs.MouseAimingOn;

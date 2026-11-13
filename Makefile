@@ -306,7 +306,8 @@ test-mmulti: engine-current
 	tests/net/test-mmulti-vnet.sh --runs $(MMULTI_RUNS)
 
 # three game processes (relay and plain UDP), plain UDP against the old build, errors,
-# (F3) a level exit while the host holds the inputs of later tics, and (brief 05) the
+# (F3) a level exit while the host holds the inputs of later tics, (F4) mouse aiming
+# toggled mid-level and then a slope, and (brief 05) the
 # GTK startup window's online host and join under xvfb-run (skipped without it)
 test-net: engine-current
 	for i in $$(seq $(GAME_RUNS)); do tests/net/test-three-games.sh --relay || exit 1; done
@@ -314,6 +315,7 @@ test-net: engine-current
 	tests/net/test-udp-unchanged.sh --base-sw "$$(tests/net/build-baseline.sh)"
 	tests/net/test-errors.sh
 	tests/net/test-level-exit.sh --runs $(GAME_RUNS)
+	tests/net/test-mouse-aim.sh --runs $(GAME_RUNS)
 	tests/net/test-startwin.sh
 	tests/net/test-rejoin.sh
 
