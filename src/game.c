@@ -2972,6 +2972,14 @@ void MoveLoop(void)
 
         domovethings();
 
+        // The tic that ends the level (an exit switch, a kill or time limit,
+        // FinishTimer) is its last tic on every machine. Further tics whose
+        // inputs happen to be here already must not run: how many there are
+        // depends on timing, and in co-op what they change (health, ammo,
+        // weapons, inventory) is carried into the next level.
+        if (ExitLevel)
+            break;
+
         #if DEBUG
         //if (DemoSyncRecord)
         //    demosync_record();
