@@ -130,7 +130,6 @@ typedef struct PACKED
 
 extern BYTE syncstat[MAXSYNCBYTES];
 extern BOOL MouseAimInInput[MAX_SW_PLAYERS_REG];
-VOID DoPlayerMouseAimSync(PLAYERp pp);
 extern BOOL PredictionOn;
 extern PLAYER PredictPlayer;
 extern PLAYERp ppp;
