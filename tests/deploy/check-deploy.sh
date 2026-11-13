@@ -98,8 +98,9 @@ grep -q "$HOST" /etc/hosts && die "/etc/hosts already names $HOST; remove that l
 id vnet-relay >/dev/null 2>&1 && die "a user vnet-relay exists (a real relay set-up?): this check makes and removes its own; run it on a machine without one"
 [ -e /etc/vnet-relay ] && die "/etc/vnet-relay exists (a real relay's certificate copy?): this check makes and removes its own; run it on a machine without one"
 inuse() {  # inuse tcp|udp HEXPORT [loopback]: is something listening there
-    local f=/proc/net/$1 f6=/proc/net/${1}6
-    awk -v p="$2" -v k="$1" 'NR>1 && (k=="udp" || $4=="0A") && substr($2, index($2, ":")+1)==p {f=1} END {exit !f}' "$f" "$f6" 2>/dev/null
+    local f files=()
+    for f in /proc/net/$1 /proc/net/${1}6; do [ -r "$f" ] && files+=("$f"); done
+    awk -v p="$2" -v k="$1" 'FNR>1 && (k=="udp" || $4=="0A") && substr($2, index($2, ":")+1)==p {f=1} END {exit !f}' "${files[@]}"
 }
 for p in 0050 01BB 1F90 1F91; do inuse tcp "$p" && die "TCP port $((16#$p)) is in use"; done
 for p in 1E61 $([ "$wt" = 1 ] && echo 01BB); do inuse udp "$p" && die "UDP port $((16#$p)) is in use"; done
