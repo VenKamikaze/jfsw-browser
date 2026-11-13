@@ -207,7 +207,7 @@ async function dumpGame() {
   }
   {
     // How fast the game ran on the host: -testlag's records (36 bytes: tic, made, ready, ran, ...; microseconds). Not a check:
-    // it depends on the machine's load, and a browser host with two guests over WebTransport runs slow (bugs.md L25: the
+    // it depends on the machine's load, and a browser host with two guests over WebTransport runs slow (bugs.md L31: the
     // pages drop datagrams), which this brief records and does not fix (vnet's send queue).
     const lag = await a.readFile('lag.bin');
     const load = fs.readFileSync('/proc/loadavg', 'utf8').split(' ').slice(0, 3).join(' ');
@@ -215,7 +215,7 @@ async function dumpGame() {
     if (lag && lag.length >= 36 * 400) {
       const n = Math.floor(lag.length / 36), ran = (i) => lag.readUInt32LE(i * 36 + 12);
       const tps = (n - 101) / ((ran(n - 1) - ran(100)) / 1e6);
-      const why = WANT === 'relay-wt' && drops > 0 ? ' (the browsers dropped WebTransport datagrams: bugs.md L25)' : ' (a busy machine?)';
+      const why = WANT === 'relay-wt' && drops > 0 ? ' (the browsers dropped WebTransport datagrams: bugs.md L31)' : ' (a busy machine?)';
       console.log((tps < 36 ? 'WARNING: ' : 'note: ') + 'the host ran tics 100 to ' + (n - 1) + ' at ' + tps.toFixed(1) + ' tics a second (nominal 40; load average ' + load + ')' +
         (tps < 36 ? ': slower than it should be' + why : ''));
     }

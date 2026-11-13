@@ -293,7 +293,7 @@ sudo sysctl --system
 
 Skip this section, and the `-wt` flags below, to run without WebTransport.
 
-**A known problem (`bugs.md` L25):** in the container, a game hosted by a browser with two or more guests over WebTransport ran at about 25 of its 40 tics a second (the host's page drops datagrams it cannot hand to the browser fast enough, and the game resends them); the same games over WebSocket, and two-player games over WebTransport, ran at full speed. It has not been checked on a real network. Until it is fixed, run without WebTransport if browsers will host games of three or more: everything else in this guide is the same, and browsers use the WebSocket.
+**A known problem (`bugs.md` L31):** in the container, a game hosted by a browser with two or more guests over WebTransport ran at about 25 of its 40 tics a second (the host's page drops datagrams it cannot hand to the browser fast enough, and the game resends them); the same games over WebSocket, and two-player games over WebTransport, ran at full speed. It has not been checked on a real network. Until it is fixed, run without WebTransport if browsers will host games of three or more: everything else in this guide is the same, and browsers use the WebSocket.
 
 ### The service
 
@@ -393,7 +393,7 @@ Or start `./sw`, open the console (Num Lock), and type `relay game.example.org:7
 
 A browser player and a desktop player can only play together on the **same build** of the game. Nothing checks it: every build of this project announces the same game version, so the room accepts any of them, and what happens depends on what changed between the two builds:
 
-- **The game's simulation differs** (a fix that changes what happens in the game): the game starts and the machines drift apart. Only the host notices: its screen shows "GAME OUT OF SYNC! Restart the game." and its log says `GAME OUT OF SYNC: tic T, ...`, and the game goes on, with each player seeing a different game. (Found with a deliberate difference, `-testnudge`; `bugs.md` L24.)
+- **The game's simulation differs** (a fix that changes what happens in the game): the game starts and the machines drift apart. Only the host notices: its screen shows "GAME OUT OF SYNC! Restart the game." and its log says `GAME OUT OF SYNC: tic T, ...`, and the game goes on, with each player seeing a different game. (Found with a deliberate difference, `-testnudge`; `bugs.md` L30.)
 - **Only the lobby or network code differs**: it may still work. A build from before brief 05 (no session ids in the lobby) and the current one played together and agreed on every tic, either way round.
 - **In one browser, a page and a wasm of different builds** (an old `sw.wasm` kept by a cache, or a half-finished copy): the game does not start. The page says "The game could not start: ..." or "The game crashed: LinkError: WebAssembly.instantiate(): ...". A reload fixes it once the browser has both files of one build, which the `no-cache` headers above make sure of.
 
@@ -511,4 +511,4 @@ This guide was followed end to end in the project's cloud container, which is Ub
 
 Chromium reached `game.example.org` through `--host-resolver-rules`, trusted the self-signed certificate by its key hash (`--ignore-certificate-errors-spki-list`), and needed `--webtransport-developer-mode` for WebTransport (without it Chromium refuses, for QUIC, a certificate that has no public root, even one it trusts otherwise). A real certificate needs none of that. The `rsync` line was run into a local directory.
 
-Not checked there: certbot and Let's Encrypt (no public host name), the renewal timer and the Apache reload hook, systemd itself (`systemctl`, `journalctl`), the `sysctl.d` file and `sysctl --system` (the values were set with `sysctl -w` instead), `pacman`, `ssh` to a server, Arch's own `httpd.conf`, paths and package versions, an aarch64 machine (the relay binary was cross-compiled, not run), Firefox, and a real network between the players: in particular WebTransport's slowdown with a browser host and two guests (`bugs.md` L25) was seen only in the container.
+Not checked there: certbot and Let's Encrypt (no public host name), the renewal timer and the Apache reload hook, systemd itself (`systemctl`, `journalctl`), the `sysctl.d` file and `sysctl --system` (the values were set with `sysctl -w` instead), `pacman`, `ssh` to a server, Arch's own `httpd.conf`, paths and package versions, an aarch64 machine (the relay binary was cross-compiled, not run), Firefox, and a real network between the players: in particular WebTransport's slowdown with a browser host and two guests (`bugs.md` L31) was seen only in the container.
