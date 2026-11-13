@@ -134,6 +134,22 @@ After you update the repository, compare your copy with the new `web/config.js` 
 
 Set `relay: 'wss://relay.example.org/vnet'`. The game derives WebTransport at `https://relay.example.org/vnet` (UDP 443 on that machine; used only if you opt in to WebTransport). See [The relay on a different machine](#the-relay-on-a-different-machine).
 
+### Game data from another server
+
+`config.js`'s `data.url`, or `?data=<url>` on the page's address (which overrides it, on any page), can point to a GRP on another HTTPS server, an internal one for example. What that needs:
+
+- **CORS.** Unless the file is on the page's own origin (scheme, host and port), its server must send `Access-Control-Allow-Origin` with the page's origin (`https://game.example.org`) or `*`. Without it the page says the data "could not be downloaded" and names the missing header (data-hosting.md has the Apache lines).
+- **A certificate the visitor's browser trusts.** For an internal server with its own CA, that CA must be installed on each visitor's machine; otherwise the browser refuses the connection, and the page can only report a failed download.
+- **No login.** The page's request carries no cookies and no HTTP authentication to another origin, so the file must be readable without them.
+- **Private addresses.** A page on a public site that fetches from a private address (`10.x`, `192.168.x`, an internal name) may get Chrome's local-network-access prompt, or be blocked. Serving the page itself from the internal network avoids that.
+- **The same scheme.** An `https://` page cannot fetch an `http://` URL (mixed content): the GRP's server needs HTTPS too.
+- **Not a local file.** A `file://` URL does not work (the page says the download failed; the message's CORS hint does not apply there, `bugs.md` L32). For a GRP on the visitor's own disk, use "Use your own copy of the game data...": the picked file is kept in the browser and used again next time.
+- **Invite links carry `?data=`**, so every guest needs the same access to that server (its certificate, its network, its CORS answer for their page).
+- **The same data for every player.** Every player of a game needs the same GRP; brief 05b will warn when it differs.
+- **The safer choice** for a permanent set-up is `config.js`: put the URL there with its `size` and `crc32`, so that a wrong or cut-off file is refused before anything else (with `?data=` they are not checked, only that the file is a GRP the game knows).
+
+Checked with Chromium on a page with `testMode: false` (as a site has it): `?data=` with another origin that sends `Access-Control-Allow-Origin` loads the data (and the request had no cookie, although the browser held one for that host); without the header, and with a `file://` URL, the page says it could not download the data and offers the picker; an invite link keeps `?data=` (brief 05's tests). The certificate, private-address, mixed-content and file-picker-is-remembered points are browser behaviour (the last one is brief 03's tested behaviour), not checked here.
+
 ## 3. Apache
 
 Arch's `apache` package, 2.4.58 or later (the WebSocket proxying below needs 2.4.47, `DeflateAlterETag` 2.4.58; Arch has a current 2.4). In `/etc/httpd/conf/httpd.conf`, make sure these modules are loaded (uncomment the lines; some are loaded already):
