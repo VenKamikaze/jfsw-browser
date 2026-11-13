@@ -433,6 +433,26 @@ static void on_startbutton_clicked(GtkButton *button, gpointer user_data)
         settings->numplayers = 1;
     } else if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(controls.onlinecheck))) {
         // brief 05: through the relay; NetStartwinArgs() (netlobby.c) makes the -net arguments
+        const char *why = NULL;
+        const char *code = gtk_entry_get_text(GTK_ENTRY(controls.hostfield));
+        int joining = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(controls.joinmultibutton));
+        if (!gtk_entry_get_text(GTK_ENTRY(controls.relayfield))[0]) {
+            why = "An online game needs the relay's address (HOST:PORT, for example relay.example.org:7777).";
+        } else if (joining && !NetIsRoomCode(code, NULL)) {
+            why = code[0] ? "That is not a room code: a room code is 6 letters and digits (no 0, 1, I or O), as the host's lobby shows it."
+                          : "Type the room code of the game to join (6 letters and digits, from the host).";
+        }
+        if (why) {
+            // say so and stay in the window, rather than start something else
+            GtkWidget *dialog = gtk_message_dialog_new(startwin, GTK_DIALOG_DESTROY_WITH_PARENT,
+                GTK_MESSAGE_ERROR, GTK_BUTTONS_CLOSE, "%s", why);
+            buildprintf("Startup window: %s\n", why);
+            fflush(stdout);
+            if (!getenv("JFSW_TEST_STARTWIN")) gtk_dialog_run(GTK_DIALOG(dialog));
+            gtk_widget_destroy(dialog);
+            settings->numplayers = 0;
+            return;
+        }
         snprintf(NetRelay, sizeof(NetRelay), "%s", gtk_entry_get_text(GTK_ENTRY(controls.relayfield)));
         if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(controls.joinmultibutton))) {
             settings->joinroom = strdup(gtk_entry_get_text(GTK_ENTRY(controls.hostfield)));

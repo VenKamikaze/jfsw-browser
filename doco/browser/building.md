@@ -163,7 +163,9 @@ F3 added `level-exit` (about 70 s, in the full run; bugs.md L20): three games (a
 
 ### 6.6 Hosting and joining (brief 05)
 
-**The relay** is the one `web/config.js` names (`relay: 'wss://relay.example.org/vnet'`, or `'ws://127.0.0.1:PORT/vnet'` for a local relay whose `-origins` names the page's host:port). Never from the address: only a `?test=1` page may override it with `?relay=<url>`.
+**The relay** is the one `web/config.js` names (`relay: 'wss://relay.example.org/vnet'`, or `'ws://127.0.0.1:PORT/vnet'` for a local relay whose `-origins` names the page's host:port). Never from the address, not even on a test page.
+
+**Test mode** (`?test=1` and the test-only parameters at the top of `web/jfsw.js`) needs `testMode: true` in `config.js` as well; the default is `false`, and a public site must keep it so (**brief 06: the deployed `config.js` leaves `testMode: false`**). The browser tests serve a `config.js` with `testMode: true` themselves (`tests/web/server.js`, `configText()`), so nothing needs changing to run them. To use test pages by hand on your own server, set `testMode: true` in `build-wasm/config.js`.
 
 **Page parameters:**
 
@@ -173,7 +175,7 @@ F3 added `level-exit` (about 70 s, in the full run; bugs.md L20): three games (a
 | `?join=CODE` | "Click to join room CODE": `-net -relay <relay> -room CODE --`; the same lobby without Start now. CODE is 6 letters and digits, any case, no 0, 1, I or O. The invite link is `?join=CODE` on the page's own address. |
 | a bad N or CODE, both, or no relay in `config.js` | The page says why and offers "Go to the start page"; no game starts. |
 
-The lobby works with the keyboard alone (Tab, Enter, Space; the game does not see the keys while it is up) and reads at phone width. Cancel leaves the room (the others are told at once) and goes back to the page without `?host=`/`?join=`; so does the button on the end-of-game overlay of a network game. Other parameters (`?data=`, and on a test page `?test=1`, `?args=`, ...) are kept.
+The lobby works with the keyboard alone (Tab, Enter, Space; the game does not see the keys while it is up) and reads at phone width. Cancel leaves the room (the others are told at once) and goes back to the page without `?host=`/`?join=`; so does the button on the end-of-game overlay of a network game. Other parameters (`?data=`, and on a test page `?test=1`, `?args=`, ...) are kept. The invite link is `?join=CODE`, plus `&data=...` when the host's page has `?data=` (every player needs the same game data). Start now with fewer than 2 players in is not offered; once pressed, it shows "Starting..." until every player in the room has answered, and is offered again if they leave.
 
 **In the game** (browser and desktop):
 - Console (**Num Lock** opens it; the key is "Show Console" in Options, Input, Keys Setup): `host [players]` (default: the most the data allows), `join <code>`, and on the desktop `relay [HOST:PORT]` (show or set the relay for host and join; kept in `sw.cfg` as `[Comm Setup] Relay = "HOST:PORT"`).
@@ -198,7 +200,11 @@ node tests/web/netplay.js lobby          # the lobby on ordinary pages (relay in
 node tests/web/netplay.js host-join      # console and menus, browser and native (re-launch); every game agrees on every tic (about 3 minutes)
 node tests/web/netplay.js lobby-errors   # every refusal and end of section E, browser and native (about 4 minutes)
 node tests/web/netplay.js level-end      # a hidden guest or host at the bonus screen after the real exit switch (about 1.5 minutes)
-tests/net/test-startwin.sh               # the GTK window's online host and join under xvfb-run (in make test-net; about 30 s)
+node tests/web/netplay.js level-end-dm   # the same at the deathmatch stats table (about 1 minute)
+node tests/web/netplay.js rejoin-vanish rejoin-quit   # a newcomer at a departed guest's relay address is refused (about 1.5 minutes)
+node tests/web/netplay.js compaction     # a game after the lobby renumbered its players (about 1 minute)
+tests/net/test-startwin.sh               # the GTK window's online host and join under xvfb-run, and its message for a missing code (in make test-net; about 40 s)
+tests/net/test-rejoin.sh                 # natively: a newcomer at a vanished or quit guest's address is refused (in make test-net; about 1 minute)
 ```
 
 Test-only game arguments from brief 05: **`-testswitch<T>`** (all machines: at tic T of the first level every machine operates the level's exit switch, as a player does; unlike `-testexit` the bonus screen follows) and **`-testosd<T>,<command>`** (this machine runs a console command at tic T, e.g. `-testosd60,host 2`). The test-only environment variable `JFSW_TEST_STARTWIN` fills in the startup window (`host=N`, `room=CODE`, `relay=HOST:PORT`, `startnow=K`) and presses Start. `scripts/run-headless.sh --display` keeps `DISPLAY` for it, and the script now passes its standard input to the game (for `start`).

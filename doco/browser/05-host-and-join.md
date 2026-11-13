@@ -153,7 +153,7 @@ After this brief, a person who opens the page can play online with a friend usin
 
 ### What the coordinator found, checked
 
-1. True: only `?test=1&args=...` could start a network game, and `config.js`'s `relay` was unused. Now `?host=N` and `?join=CODE` do it on any page, with the relay from `config.js` only (`?relay=` is a `?test=1` knob; `lobby-errors` checks that an ordinary page ignores it).
+1. True: only `?test=1&args=...` could start a network game, and `config.js`'s `relay` was unused. Now `?host=N` and `?join=CODE` do it on any page, with the relay from `config.js` only (the fix round removed the test knob `?relay=` and made test mode a `config.js` setting; `lobby-errors` checks both).
 2. True: the relay says nothing about members. Who is in comes from mmulti's own start-up exchange: the master counts its places and sends the count to the slaves in a fifth byte of its answer to their pings.
 3. True: `-host-room N` waited for N. "Start now" makes the master's `numplayers` the number of players in; the go-ahead and the count travel in the same answer, so no slave can start with another count (the mutation that sends the old count hangs every game). Late joiners are told "the game has already started" (they used to get no answer and fail after 15 s). Plain UDP is unchanged: every new path is behind `mmulti_vnet_active()`; `test-udp-unchanged.sh` passes with old and new binaries mixed.
 4. True, and also for the deathmatch table: both screens wait for a key on every machine. A hidden tab in a network game now leaves them at once.

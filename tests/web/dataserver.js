@@ -66,6 +66,13 @@ function serve(root, routes, port) {
     res.on('finish', () => { rec.status = rec.status || res.statusCode; });
     const handler = server.routes[url];
     if (handler) { handler(req, res, server); return; }
+    if (url === '/config.js') {
+      // the build's config.js with test mode on (server.js configText; the page needs it besides ?test=1)
+      const body = require('./server.js').configText(root);
+      res.writeHead(200, { 'Content-Type': TYPES['.js'], 'Content-Length': Buffer.byteLength(body), 'Cache-Control': 'no-store' });
+      res.end(body);
+      return;
+    }
     const rel = path.normalize(url === '/' ? '/index.html' : url);
     const file = path.join(root, rel);
     if (!file.startsWith(root + path.sep)) { res.writeHead(403); res.end(); return; }

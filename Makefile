@@ -315,6 +315,7 @@ test-net: engine-current
 	tests/net/test-errors.sh
 	tests/net/test-level-exit.sh --runs $(GAME_RUNS)
 	tests/net/test-startwin.sh
+	tests/net/test-rejoin.sh
 
 # brief 04c: DrawSetupLevelStats() against a drawn frame on every shareware level (needs the GRP)
 test-draw: sw$(EXESUFFIX)

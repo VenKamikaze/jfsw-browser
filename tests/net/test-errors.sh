@@ -11,8 +11,8 @@
 # word of each check line). Run with --sw pointing at a build from before the
 # relay existed (tests/net/build-baseline.sh) to see that these checks bite
 # (tried with --only 'badcode-format|room-no-relay|no-such-room': all fail).
-# Cases with a waiting time check a lower bound as well (host-leaves at least
-# 9 s), so that shortening the start-up limits in mmulti_vnet.c is noticed.
+# Cases with a waiting time check a lower bound as well (host-silent at least
+# 14 s, host-leaves at least 9 s), so that shortening the start-up limits in mmulti_vnet.c is noticed.
 #
 # What happens today with plain -net (for comparison): a -net that cannot be
 # set up (bad arguments, an unresolvable host) prints "mmulti error: ..." and
@@ -27,7 +27,8 @@
 #   - the host has all its players: at once, "the game has already started"
 #     (brief 05; before it the newcomer got no answer and gave up 15 s after
 #     the join with "the host did not answer");
-#   - the host never answers: 15 s after the join;
+#   - the host never answers (host-silent: its game is stopped): 15 s after
+#     the join, "the host did not answer";
 #   - the host leaves while the others are waiting for players: 10 s after the
 #     last answer.
 # Host loss during the game itself behaves as with -net (the lockstep waits).
@@ -121,6 +122,20 @@ expect_fail guestC-room-full 12 'the room is full' -net -relay "127.0.0.1:$rport
 for p in "$fillbpid" "$fillapid" "$hostfpid"; do
     kill -TERM "$p" 2>/dev/null; t_wait_pid "$p" 15
 done
+fi
+
+if want 'host-silent'; then
+t_note "the host never answers (its game is stopped): the joiner gives up after the game's own limit, 15 s"
+t_game hostS "$t_tmp/hostS" --sw "$sw" --timeout 80 -- -net -relay "127.0.0.1:$((rport + 1))" -host-room 2 -- $auto
+hostspid=$game_pid
+t_wait_for "$t_tmp/hostS/sw.log" 'room code [A-Z0-9]{6}' 20 || t_bad "the silent host printed no room code"
+codes="$(grep -o 'room code [A-Z0-9]*' "$t_tmp/hostS/sw.log" | head -1 | awk '{print $3}')"
+gamepid="$(pgrep -P "$hostspid" -x sw | head -1)"
+if [ -n "$gamepid" ]; then kill -STOP "$gamepid"; else t_bad "could not find the silent host's game process"; fi
+minsec=14
+expect_fail host-silent 25 'the host did not answer' -net -relay "127.0.0.1:$((rport + 1))" -room "$codes" -- $auto
+[ -n "$gamepid" ] && kill -CONT "$gamepid"
+kill -TERM "$hostspid" 2>/dev/null; t_wait_pid "$hostspid" 15
 fi
 
 if want 'host-leaves'; then

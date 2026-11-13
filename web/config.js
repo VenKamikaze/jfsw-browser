@@ -29,7 +29,14 @@
 //        never from the address (a crafted link must not send visitors through another relay).
 //        WebTransport is tried first and derived from a wss:// URL; a ws:// URL uses WebSocket only.
 //        The relay's -origins must name this page's host:port exactly (doco/browser/building.md).
+//
+// testMode: false (the default, and what a public site must keep). true lets a page address with ?test=1
+//        use the test hooks and test-only parameters (?args=, ?files=, ?persist=, the relay knobs, ...;
+//        see the top of jfsw.js). The browser tests serve a config.js with testMode: true. It is a setting
+//        and not a link parameter so that a crafted link cannot give a visitor's game test arguments, which
+//        can name another relay or change how it runs (brief 05 review). Deployment (brief 06): leave false.
 window.JFSW_CONFIG = {
+  testMode: false,
   relay: '',
   data: {
     url: 'swshare.grp',

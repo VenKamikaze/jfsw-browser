@@ -16,7 +16,8 @@
 # joiner's window joined it by its room code (typed in lower case); the host
 # pressed Start now with 2 of 3 in; both games started with 2 players, played
 # 300 tics, wrote byte-for-byte equal dumps and exit 0; the relay typed into
-# the window is kept in sw.cfg. About 30 s. Skipped (exit 0, "SKIP") without
+# the window is kept in sw.cfg; and Online with Join and no code shows a
+# message and starts nothing. About 40 s. Skipped (exit 0, "SKIP") without
 # xvfb-run or a GTK build.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -68,4 +69,17 @@ for n in h j; do
 done
 t_check "both dumps have $tics records and are the same" bash -c "[ \$(stat -c %s '$t_tmp/h/d.bin') -ge $((tics * 17)) ] && cmp -s '$t_tmp/h/d.bin' '$t_tmp/j/d.bin'"
 t_check "the relay typed into the window is kept in sw.cfg" grep -q "^Relay = \"127.0.0.1:$rport\"" "$t_tmp/j/sw.cfg"
+
+t_note "Online and Join with no room code: the window says so and stays (it used to start a single player game)"
+startwin_game e "room= relay=127.0.0.1:$rport"
+ep=$game_pid
+t_wait_for "$t_tmp/e.out" 'Startup window: Type the room code' 30
+t_check "the window asked for the room code" grep -q "Startup window: Type the room code of the game to join" "$t_tmp/e.out"
+sleep 3
+t_check "and started nothing: no single player game, the window is still up" bash -c "kill -0 $ep 2>/dev/null && ! grep -q 'Loading sound and graphics' '$t_tmp/e.out'"
+# (the window ignores SIGTERM while it waits for a choice: end the game itself, then its wrappers end)
+for p in /proc/[0-9]*; do
+    [ "$(readlink "$p/cwd" 2>/dev/null)" = "$t_tmp/e" ] && [ "$(cat "$p/comm" 2>/dev/null)" = sw ] && kill -KILL "${p#/proc/}"
+done
+t_wait_pid "$ep" 20
 t_result

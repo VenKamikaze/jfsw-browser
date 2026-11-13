@@ -10,8 +10,10 @@
 // HOST:PORT on the command line is remembered here. The browser uses its page's config.js.
 extern char NetRelay[128];
 
-// app_main: the command line, for a re-launch.
+// app_main, first thing (before it changes directory): the command line, for a re-launch.
 void NetSetArgs(int argc, char const * const argv[]);
+// app_main, once the log is open: a re-launched game says so in its new log.
+void NetLogRelaunch(void);
 // app_main, after a successful -net: remember a -relay HOST:PORT among those arguments.
 void NetNoteRelayArg(int argc, char const * const argv[]);
 

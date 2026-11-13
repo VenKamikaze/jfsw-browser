@@ -28,7 +28,7 @@ const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { serve } = require('./server.js');
+const { serve, configText } = require('./server.js');
 const L = require('./lib.js');
 
 const PORT_WEB = 48300, PORT_UDP = 48301, PORT_HTTP = 48302, PORT_WT = 48303;
@@ -86,19 +86,19 @@ async function startRelay(extra) {
 // waitEnd(ms), exitCode(), stop().
 
 let browserEnv = null;      // { server, browser }
-// Brief 05: the config.js the page is served with. CONFIG_RELAY set: a copy of web/config.js whose relay field is that URL
-// (what a site with a relay has); null: the build's own (no relay). Set it before the first machine of a scenario.
-let CONFIG_RELAY = null;
+// Brief 05: the config.js the page is served with (server.js configText): the build's, with the relay field CONFIG_RELAY
+// (null: the test relay's WebSocket URL; '': none, as a site without a relay) and testMode CONFIG_TEST (true: ?test=1
+// pages have their test hooks; false: as a public site, where ?test=1 does nothing). Set them before the first machine of a
+// scenario; closeEnv() resets them.
+let CONFIG_RELAY = null, CONFIG_TEST = true;
 async function env() {
   if (!browserEnv) {
     if (!fs.existsSync(path.join(L.BUILD, 'sw.wasm'))) { throw new Error(L.BUILD + '/sw.wasm not found: run scripts/build-wasm.sh'); }
     if (!fs.existsSync(L.GRP)) { throw new Error(L.GRP + ' not found: run scripts/fetch-test-data.sh'); }
     const mounts = { '/swshare.grp': L.GRP };
-    if (CONFIG_RELAY !== null) {
-      const cfg = fs.readFileSync(path.join(L.BUILD, 'config.js'), 'utf8');
-      const out = path.join(tmp(), 'config-relay.js');
-      fs.writeFileSync(out, cfg.replace(/relay: '[^']*'/, 'relay: ' + JSON.stringify(CONFIG_RELAY)));
-      if (!/relay: "/.test(fs.readFileSync(out, 'utf8'))) { throw new Error('could not set the relay in config.js'); }
+    {
+      const out = path.join(tmp(), 'config-served.js');
+      fs.writeFileSync(out, configText(L.BUILD, { testMode: CONFIG_TEST, relay: CONFIG_RELAY === null ? 'ws://127.0.0.1:' + PORT_HTTP + '/vnet' : CONFIG_RELAY }));
       mounts['/config.js'] = out;
     }
     // NETPLAY_OLD_WASM=<dir>: another build of the page, served under /old/ (the old-new scenario, brief 04c)
@@ -119,6 +119,7 @@ async function closeEnv() {
   await new Promise((r) => browserEnv.server.close(r));
   browserEnv = null;
   CONFIG_RELAY = null;
+  CONFIG_TEST = true;
 }
 
 const machines = [];
@@ -1336,8 +1337,8 @@ SCENARIOS['relay-lost'] = {
 };
 
 // ---- brief 05: host and join from the game -------------------------------------------------------------
-// A network game started the way a player starts one: the page's ?host=N / ?join=CODE (the relay from config.js, or on a
-// ?test=1 page from ?relay=), the lobby overlay (room code, invite link, who is in, Start now, Cancel), the console's and the
+// A network game started the way a player starts one: the page's ?host=N / ?join=CODE (the relay from the served config.js,
+// as on a site), the lobby overlay (room code, invite link, who is in, Start now, Cancel), the console's and the
 // menus' host and join (which restart into the game: the page reloads, a native game re-launches itself), the native host's
 // "start" on its standard input, and every way a network game fails or ends.
 
@@ -1354,8 +1355,9 @@ async function outHas(m, re, ms) { return waitFor(async () => re.test(await m.ou
 // The game's test arguments (as gameArgs() makes them) without -net ... --: the page or the host/join command adds those.
 function testArgs(o) { const a = gameArgs(Object.assign({ net: [] }, o)); return a.slice(2); }
 // A browser page that starts a network game from its address (q: '&host=3', '&join=ABC234'); args are the test arguments.
+// The relay is the served config.js's (CONFIG_RELAY).
 async function netPage(name, q, args, o) {
-  return browserMachine(name, [], Object.assign({ raw: '?test=1&persist=0&relay=' + encodeURIComponent(WSRELAY) + q + '&args=' + encodeURIComponent(args.join(' ')), dump: 'd.bin' }, o || {}));
+  return browserMachine(name, [], Object.assign({ raw: '?test=1&persist=0' + q + '&args=' + encodeURIComponent(args.join(' ')), dump: 'd.bin' }, o || {}));
 }
 // Presses a key the way a person does: down, held for a game tic or two, up (the menus look at the keys' state: bugs.md L14).
 async function key(page, k, held) { await page.keyboard.down(k); await sleep(held || 150); await page.keyboard.up(k); await sleep(120); }
@@ -1382,8 +1384,17 @@ async function lobbyGame(relay, kinds, o) {
     await m.start();
     if (o.onStart) { await o.onStart(i, m); }
     if (i === 0) { code = await waitRoomCode(m); console.log('  room ' + code + ' (' + kinds[0] + ' host, ' + slots + ' places)'); }
+    if (i === 0 && o.earlyStart && m.kind === 'native') {
+      // (brief 05 review N1) "start" with only the host in is refused and not remembered
+      m.type('start');
+      check(!!(await outHas(m, /Lobby: starting needs at least 2 players/, 10000)), m.name + ': "start" alone in the room is refused (needs 2 players)');
+    }
     // the next joiner waits until this one is in (the place a joiner gets is the order its first ping reaches the host)
     check(!!(await outHas(m, new RegExp('Lobby: ' + (i + 1) + ' of ' + slots + ' players are in'), 40000)), m.name + ' sees ' + (i + 1) + ' of ' + slots + ' players in the room');
+  }
+  if (o.earlyStart) {
+    await sleep(3000);
+    check(!(await startedWith(ms[0])), ms[0].name + ': the refused early "start" was not remembered: the game did not start when the second player came in');
   }
   if (kinds.length < slots) {
     const h = ms[0];
@@ -1454,7 +1465,7 @@ SCENARIOS['start-now'] = {
   what: 'Start now (Q3): 2 of 3 (two browsers), 2 of 4 (native host by "start" on its input, browser guest), 2 of 4 (browser host, native guest): every machine starts with 2 and agrees on every tic; late joiners are refused',
   run: async () => {
     await lobbyRun(['browser', 'browser'], { slots: 3 });
-    await lobbyRun(['native', 'browser'], { slots: 4, late: (relay, code) => lateJoiner(relay, code, 'browser', 25) });
+    await lobbyRun(['native', 'browser'], { slots: 4, earlyStart: true, late: (relay, code) => lateJoiner(relay, code, 'browser', 25) });
     await lobbyRun(['browser', 'native'], { slots: 4, late: (relay, code) => lateJoiner(relay, code, 'native', 25) });
   },
 };
@@ -1687,11 +1698,14 @@ SCENARIOS['lobby-errors'] = {
   run: async () => {
     let relay = null;
     try {
-      // the address: checked before anything is started
+      // the address: checked before anything is started. First a site with no relay in config.js.
+      CONFIG_RELAY = '';
       await pageRefusal('no-relay-host', '?host=2', /no relay is set up/);
       await pageRefusal('no-relay-join', '?join=ABC234', /no relay is set up/);
-      relay = await startRelay(['-max-members', '2']);
+      // there is no ?relay= any more (brief 05 review): a link cannot supply a relay, not even on a test page
+      await pageRefusal('relay-param-ignored', '?test=1&persist=0&relay=' + encodeURIComponent('ws://127.0.0.1:' + PORT_HTTP + '/vnet') + '&host=2', /no relay is set up/);
       await closeEnv();
+      relay = await startRelay(['-max-members', '2']);
       CONFIG_RELAY = relay.ws;        // from here on the page's config.js has the relay
       await pageRefusal('host-9', '?host=9', /"9" is not a number of players.*2 to 8/);
       await pageRefusal('host-1', '?host=1', /"1" is not a number of players/);
@@ -1700,12 +1714,8 @@ SCENARIOS['lobby-errors'] = {
       await pageRefusal('join-short', '?join=ABC', /"ABC" is not a room code/);
       await pageRefusal('join-01', '?join=AB01CD', /"AB01CD" is not a room code/);
       await pageRefusal('host-and-join', '?host=2&join=ABC234', /to host and to join/);
-      await closeEnv();
-      // ?relay= is a test knob: on an ordinary page with no relay in config.js it does not supply one
-      await pageRefusal('relay-knob-ignored', '?relay=' + encodeURIComponent(relay.ws) + '&host=2', /no relay is set up/);
       // the relay: unreachable, an unknown room, a full room (this relay takes 2 per room)
-      await pageRefusal('relay-unreachable', '?test=1&persist=0&relay=' + encodeURIComponent('ws://127.0.0.1:48392/vnet') + '&host=2', /Network game failed.*could not be reached/, { start: true, ready: ['ready'] });
-      await pageRefusal('unknown-room', '?test=1&persist=0&relay=' + encodeURIComponent(relay.ws) + '&join=ZZZZZZ', /Network game failed.*no room with that code/, { start: true, ready: ['ready'] });
+      await pageRefusal('unknown-room', '?test=1&persist=0&join=ZZZZZZ', /Network game failed.*no room with that code/, { start: true, ready: ['ready'] });
       {
         const h = await netPage('full-h', '&host=2', ['-autonet', '2,0,2,1,0,0,0,0,0,0']);
         await h.start();
@@ -1713,8 +1723,23 @@ SCENARIOS['lobby-errors'] = {
         const j = await netPage('full-j', '&join=' + code, ['-autonet', '2,0,2,1,0,0,0,0,0,0']);
         await j.start();
         await outHas(j, /Lobby: the game starts/, 30000);
-        await pageRefusal('relay-room-full', '?test=1&persist=0&relay=' + encodeURIComponent(relay.ws) + '&join=' + code, /Network game failed.*room is full/, { start: true, ready: ['ready'] });
+        await pageRefusal('relay-room-full', '?test=1&persist=0&join=' + code, /Network game failed.*room is full/, { start: true, ready: ['ready'] });
         for (const m of [h, j]) { await m.stop(); machines.splice(machines.indexOf(m), 1); }
+      }
+      await closeEnv();
+      CONFIG_RELAY = 'ws://127.0.0.1:48392/vnet';     // nothing listens there
+      await pageRefusal('relay-unreachable', '?test=1&persist=0&host=2', /Network game failed.*could not be reached/, { start: true, ready: ['ready'] });
+      await closeEnv();
+      // test mode needs testMode: true in config.js: on a site that leaves it false, ?test=1 in a link does nothing
+      CONFIG_TEST = false;
+      {
+        const m = await browserMachine('no-testmode', [], { raw: '?test=1&persist=0&args=' + encodeURIComponent('-net -relay ws://127.0.0.1:1/vnet -host-room 2 --') });
+        const r = await m.page.evaluate(() => ({ hooks: typeof window.jfswTest, info: document.getElementById('testinfo').hidden }));
+        check(r.hooks === 'undefined' && r.info, 'with testMode false in config.js, ?test=1 gives no test hooks (' + JSON.stringify(r) + ')');
+        await m.start();
+        await sleep(3000);
+        check(!/mmulti/.test(await m.out()) && (await m.state()) === 'running', 'and ?args= is not used: a single player game, no network game was tried');
+        await m.stop(); machines.splice(machines.indexOf(m), 1);
       }
     } finally { await cleanup(relay); }
     // the game in progress: the host goes, a guest goes; browsers and native games
@@ -1783,6 +1808,134 @@ SCENARIOS['level-end'] = {
   run: async () => {
     await levelEndGame(['browser', 'browser'], 1);
     await levelEndGame(['browser', 'browser'], 0);
+  },
+};
+
+
+// Brief 05 review (B1): the relay gives a departed member's address to the next joiner. A newcomer at the address of a player
+// who is in the running game must be refused, and must not keep that player's place alive. `rejoin-vanish`: the guest's tab
+// closes mid-game (the relay frees its address at once) and the invite link is opened again: the newcomer gets 10.0.0.2 and is
+// told the game has already started; the host ends its game with "player 2 left" once the real guest has been silent 15 s.
+// `rejoin-quit`: the guest quits properly (the console's quit), then a newcomer opens the link: refused at once, and the host
+// plays on alone to its last tic.
+async function newcomerRefused(code, label) {
+  const t0 = now();
+  const n = await netPage('newcomer', '&join=' + code, ['-autonet', '2,0,2,1,0,0,0,0,0,0', '-testdumpd.bin']);
+  await n.start();
+  const st = await n.waitEnd(30000);
+  const took = (now() - t0) / 1000, out = await n.out(), text = await n.status();
+  console.log('  ' + label + ': the newcomer ended after ' + took.toFixed(1) + ' s: ' + text);
+  check(/joined room [A-Z2-9]{6} as 10\.0\.0\.2 /.test(out), label + ': the newcomer got the departed guest\'s address 10.0.0.2 (the case under test)', (out.match(/joined room[^\n]*/) || [''])[0]);
+  check(st === 'error' && /Network game failed: the game has already started/.test(text), label + ': the newcomer is told the game has already started', text);
+  check(took < 15, label + ': within 15 s (' + took.toFixed(1) + ')');
+  check(!/Lobby: the game starts/.test(out) && !(await n.dumpSize()), label + ': the newcomer never entered the game');
+  await n.stop(); machines.splice(machines.indexOf(n), 1);
+}
+SCENARIOS['rejoin-vanish'] = {
+  what: 'a guest\'s tab closes mid-game and the invite link is opened again: the newcomer (at the guest\'s old relay address) is refused; the host ends with "player 2 left"',
+  run: async () => {
+    const relay = await startRelay();
+    try {
+      console.log('  browser host, browser guest (' + LOAD() + ')');
+      const { ms, code } = await lobbyGame(relay, ['browser', 'browser'], { tics: 4000 });
+      await waitFor(async () => (await ms[0].dumpSize()) >= 150 * REC, 90000);
+      await ms[1].stop();
+      const t0 = now();
+      console.log('  the guest\'s tab closed at tic ' + Math.floor((await ms[0].dumpSize()) / REC) + ' of the host');
+      await newcomerRefused(code, 'rejoin-vanish');
+      const st = await ms[0].waitEnd(60000);
+      const took = (now() - t0) / 1000, text = await ms[0].status();
+      console.log('  the host ended ' + took.toFixed(1) + ' s after the tab closed: ' + text);
+      check(st === 'error' && /Network game failed: player 2 \(.*\) left the game/.test(text), 'rejoin-vanish: the host ends with "player 2 left the game"', text);
+      check(took >= NET_GONE_S - 1 && took < NET_GONE_S + 15, 'rejoin-vanish: after about ' + NET_GONE_S + ' s (' + took.toFixed(1) + '): the newcomer\'s pings did not count as the guest\'s');
+    } finally { await cleanup(relay); }
+  },
+};
+SCENARIOS['rejoin-quit'] = {
+  what: 'a guest quits properly, then a newcomer opens the invite link: refused at once; the host plays on alone (native host, browser guest and newcomer)',
+  run: async () => {
+    const relay = await startRelay();
+    try {
+      console.log('  native host, browser guest that quits at tic 200 (' + LOAD() + ')');
+      const { ms, code } = await lobbyGame(relay, ['native', 'browser'], { tics: 1200, extra: (i) => (i === 1 ? ['-testosd200,quit'] : []) });
+      const g = ms[1];
+      check(!!(await outHas(g, /console command at tic 200: quit/, 90000)), 'the guest quit at tic 200 (the console\'s quit)');
+      await g.waitEnd(30000);
+      await sleep(1000);
+      await newcomerRefused(code, 'rejoin-quit');
+      const st = await ms[0].waitEnd(90000);
+      const out = await ms[0].out();
+      check(st === 'ended' && /TEST: quitting after 1[0-9]{3} game tics/.test(out), 'rejoin-quit: the host played on alone to tic 1200 and ended with status 0 (' + st + ')');
+    } finally { await cleanup(relay); }
+  },
+};
+
+// Brief 05 review (S3): a game after the lobby renumbered its players. ?host=4 (the shareware limit); A and B join (players 2
+// and 3); A presses Cancel, so B moves down to player 2; C joins as player 3; the host starts now with 3. B must be player 2
+// and C player 3 on every machine, and every machine must agree on every tic.
+SCENARIOS.compaction = {
+  what: 'a game after a lobby renumbering: ?host=4, A and B join, A cancels (B moves down a place), C joins, Start now with 3: B is player 2, C player 3, every machine agrees on every tic',
+  run: async () => {
+    const relay = await startRelay();
+    try {
+      console.log('  browser host, browser A, native B, browser C (' + LOAD() + ')');
+      const targs = testArgs({ tics: LOBBY_TICS, dump: 'd.bin' });
+      const h = await netPage('host', '&host=4', targs);
+      await h.start();
+      const code = await waitRoomCode(h);
+      const a = await netPage('A', '&join=' + code, targs);
+      await a.start();
+      check(!!(await lobbyWhen(h, (x) => x.info && x.info.joined === 2, 30000)), 'A is in: 2 of 4');
+      const b = nativeMachine('B', ['-net', '-relay', relay.udp, '-room', code, '--'].concat(targs), { dump: 'd.bin' });
+      await b.start();
+      check(!!(await lobbyWhen(h, (x) => x.info && x.info.joined === 3, 30000)), 'B is in: 3 of 4');
+      await a.page.click('#lobbycancel');
+      check(!!(await lobbyWhen(h, (x) => x.info && x.info.joined === 2, 20000)), 'A cancelled: 2 of 4');
+      check(!!(await outHas(h, /mmulti: a player left the room \(place 1\)/, 10000)), 'the host freed place 1 (A\'s), so B moves down from place 2');
+      const c = await netPage('C', '&join=' + code, targs);
+      await c.start();
+      check(!!(await lobbyWhen(h, (x) => x.info && x.info.joined === 3 && !x.startDisabled, 30000)), 'C is in: 3 of 4, Start now offered');
+      await h.page.click('#lobbystart');
+      const ms = [h, b, c];
+      for (const m of ms) { await m.waitEnd(LOBBY_TICS / NOMINAL * 1000 * 3 + 90000); }
+      await checkLobbyGame(ms, 3, LOBBY_TICS);
+      await a.stop(); machines.splice(machines.indexOf(a), 1);
+    } finally { await cleanup(relay); }
+  },
+};
+
+
+// The deathmatch table at a level end (StatScreen's "press space" table, brief 05 review N7): a hidden guest leaves it by itself
+// too. Deathmatch test games do not end by -testquit (bugs.md L16), so this one is stopped once both machines have played 150
+// tics of the next level, and the records are compared over what both played.
+SCENARIOS['level-end-dm'] = {
+  what: 'deathmatch: a hidden guest at the stats table after the real exit switch leaves it by itself; the next level agrees on every tic both machines played',
+  run: async () => {
+    const relay = await startRelay();
+    try {
+      console.log('  browser host, hidden browser guest, deathmatch; the exit switch at tic ' + LV_SWITCH + ' (' + LOAD() + ')');
+      const { ms } = await lobbyGame(relay, ['browser', 'browser'], { tics: 100000, autonet: '-autonet 0,0,2,1,0,0,0,0,0,0', extra: () => ['-testswitch' + LV_SWITCH],
+        onStart: async (i, m) => { if (i === 1) { await hideFromStart(m); } } });
+      const h = ms[0], g = ms[1];
+      const ok = await waitFor(async () => {
+        if (/TEST: operating the exit switch/.test(await h.out())) { await key(h.page, 'Space', 120); }
+        const d = await Promise.all(ms.map((m) => m.readDump().catch(() => null)));
+        return d.every((x) => x && dumpLevels(x).length >= 2 && dumpLevels(x)[1].length >= 150) ? d : null;
+      }, 180000);
+      check(/TEST: operating the exit switch \(sprite \d+\) at tic 200\b/.test(await h.out()), 'the exit switch was operated at tic ' + LV_SWITCH);
+      check(/leaves the stats screen by itself/.test(await g.out()), 'the hidden guest left the deathmatch stats table by itself');
+      check(!!ok, 'both machines played 150 tics of the next level (the room did not stall)');
+      if (ok) {
+        const lv = ok.map(dumpLevels);
+        for (const k of [0, 1]) {
+          const n = Math.min(lv[0][k].length, lv[1][k].length);
+          let first = -1;
+          for (let r = 0; r < n && first < 0; r++) { if (!lv[0][k][r].equals(lv[1][k][r])) { first = r; } }
+          check(first < 0, 'level ' + (k + 1) + ': both machines\' records agree (' + n + ' compared)', first >= 0 ? 'first difference at its tic ' + lv[0][k][first].readUInt32LE(0) : '');
+        }
+      }
+      check(!/OUT OF SYNC/.test(await h.out()), 'the host logged no desync');
+    } finally { await cleanup(relay); }
   },
 };
 

@@ -3491,6 +3491,8 @@ int app_main(int argc, char const * const argv[])
     (void)configloaded;
 #endif
 
+    NetSetArgs(argc, argv);     // for host and join (netlobby.c), before any change of directory
+
 #if defined(DATADIR)
     {
         const char *datadir = DATADIR;
@@ -3556,6 +3558,7 @@ int app_main(int argc, char const * const argv[])
     }
 
     buildsetlogfile("sw.log");
+    NetLogRelaunch();           // netlobby.c
 
     OSD_SetFunctions(
         NULL, NULL, NULL, NULL, NULL,
@@ -3626,8 +3629,6 @@ int app_main(int argc, char const * const argv[])
 
     ScanGroups();
     gamegrp = IdentifyGroup(grpfile);
-
-    NetSetArgs(argc, argv);     // for host and join (netlobby.c)
 
     if (netparam) { // -net parameter on command line.
         netsuccess = initmultiplayersparms(endnetparam - netparam, &argv[netparam]);

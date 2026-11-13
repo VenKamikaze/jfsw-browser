@@ -21,6 +21,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // See netlobby.h. Nothing here runs in a plain UDP game or a single player game, except the
 // host/join commands, which only start a relay game.
 
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+# define _DEFAULT_SOURCE    // realpath, setenv (the game is built with -std=c99)
+#endif
+
 #include "build.h"
 #include "baselayer.h"
 #include "osd.h"
@@ -48,11 +52,38 @@ char NetRelay[128] = "";
 
 static int savedargc;
 static char const * const *savedargv;
+#ifndef __EMSCRIPTEN__
+static char savedexe[BMAX_PATH+1];     // argv[0] made absolute before the game changes directory
+#endif
 
 void NetSetArgs(int argc, char const * const argv[])
 {
     savedargc = argc;
     savedargv = argv;
+#if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
+    // The game changes into ~/.jfsw early on (app_main), so a relative argv[0] ("./sw") would name
+    // the wrong file by the time of a re-launch. Linux uses /proc/self/exe anyway (NetRelaunch).
+    if (argc > 0 && strchr(argv[0], '/') && argv[0][0] != '/')
+        {
+        char *abs = realpath(argv[0], NULL);
+        if (abs && strlen(abs) < sizeof(savedexe)) strcpy(savedexe, abs);
+        free(abs);
+        }
+#elif defined(_WIN32)
+    if (argc > 0 && !_fullpath(savedexe, argv[0], sizeof(savedexe)))
+        savedexe[0] = 0;
+#endif
+}
+
+// The new process of a re-launch says so first thing in its log, which it starts afresh
+// (JFSW_RELAUNCHED in the environment, set by NetRelaunch).
+void NetLogRelaunch(void)
+{
+#ifndef __EMSCRIPTEN__
+    const char *r = getenv("JFSW_RELAUNCHED");
+    if (r && *r)
+        buildprintf("Re-launched by host/join from a running game:%s\n", r);
+#endif
 }
 
 void NetNoteRelayArg(int argc, char const * const argv[])
@@ -96,9 +127,9 @@ int NetIsRoomCode(const char *code, char *out)
 #ifdef __EMSCRIPTEN__
 // The page's lobby overlay (web/jfsw.js, Module.jfswLobby): what the wait looks like, and what
 // the player asked for since the last call (1 start now, 2 cancel).
-EM_JS(int, jfsw_page_lobby, (int state, const char *code, int joined, int slots, int host, int started), {
+EM_JS(int, jfsw_page_lobby, (int state, const char *code, int joined, int slots, int host, int started, int pending), {
     if (!Module.jfswLobby) return 0;
-    return Module.jfswLobby({ state: state, code: UTF8ToString(code), joined: joined, slots: slots, host: !!host, started: !!started }) | 0;
+    return Module.jfswLobby({ state: state, code: UTF8ToString(code), joined: joined, slots: slots, host: !!host, started: !!started, pending: !!pending }) | 0;
 });
 // The page restarts itself into a network game (?host=N or ?join=CODE). 1: it is reloading;
 // 0: no relay is configured for the page.
@@ -174,7 +205,7 @@ int NetLobbyWait(void)
         if (st != state || j != joined || s != slots || getticks() - lastpage >= 100)
             {
             lastpage = getticks();
-            req = jfsw_page_lobby(st, mmulti_vnet_roomcode(), j, s, host, 0);
+            req = jfsw_page_lobby(st, mmulti_vnet_roomcode(), j, s, host, 0, mmulti_vnet_startpending());
             }
 #else
         (void)lastpage; (void)state;
@@ -226,7 +257,7 @@ int NetLobbyWait(void)
         buildprintf("Lobby: the game starts with %d players; you are player %d.\n", numplayers, myconnectindex + 1);
         fflush(stdout);
 #ifdef __EMSCRIPTEN__
-        jfsw_page_lobby(mmulti_vnet_state(), mmulti_vnet_roomcode(), numplayers, numplayers, mmulti_vnet_hostplayers() > 0, 1);
+        jfsw_page_lobby(mmulti_vnet_state(), mmulti_vnet_roomcode(), numplayers, numplayers, mmulti_vnet_hostplayers() > 0, 1, 0);
 #endif
 #ifdef NETLOBBY_GTK
         startwin_netlobby(0, 0, 0);
@@ -311,7 +342,7 @@ int NetRestart(int players, const char *code)
     relaunchargv[relaunchargc++] = "--";
     for (i = 1; i < savedargc && relaunchargc < (int)SIZ(relaunchargv) - 1; i++)
         {
-        if (!Bstrcasecmp(savedargv[i], "-net"))
+        if (!Bstrcasecmp(savedargv[i], "-net") || !Bstrcasecmp(savedargv[i], "/net"))
             {
             for (i++; i < savedargc && strcmp(savedargv[i], "--"); i++) ;
             continue;
@@ -341,15 +372,29 @@ void NetRelaunch(void)
 #ifndef __EMSCRIPTEN__
     extern void uninitsystem(void);
     char exe[BMAX_PATH+1];
-    const char *path = relaunchargv[0];
+    static char line[2048];
+    const char *path = savedexe[0] ? savedexe : relaunchargv[0];
     int i;
 
     if (!relaunchargc) return;
 
-    buildprintf("Re-launching:");
-    for (i = 0; i < relaunchargc; i++) buildprintf(" %s", relaunchargv[i]);
-    buildprintf("\n");
+    line[0] = 0;
+    for (i = 0; i < relaunchargc; i++)
+        {
+        strncat(line, " ", sizeof(line) - strlen(line) - 1);
+        strncat(line, relaunchargv[i], sizeof(line) - strlen(line) - 1);
+        }
+    buildprintf("Re-launching:%s\n", line);
     fflush(stdout);
+# ifdef _WIN32
+    {
+    static char env[sizeof(line) + 20];
+    snprintf(env, sizeof(env), "JFSW_RELAUNCHED=%s", line);
+    _putenv(env);
+    }
+# else
+    setenv("JFSW_RELAUNCHED", line, 1);
+# endif
 
 # if defined(__linux__)
     {
@@ -361,7 +406,35 @@ void NetRelaunch(void)
 # endif
     uninitsystem();
 # ifdef _WIN32
-    _execv(path, (char * const *)relaunchargv);
+    {
+    // _execv joins the arguments into one command line without quoting them (an argument with a
+    // space would be split): quote each one as the C runtime parses them. Not built or run in
+    // this project (no Windows build): brief 05's Outcome.
+    static char quoted[64][BMAX_PATH*2];
+    static const char *qargv[65];
+    int n, j, q, bs;
+    for (n = 0; n < relaunchargc && n < 64; n++)
+        {
+        const char *a = relaunchargv[n];
+        char *o = quoted[n];
+        int len = 0, need = !*a || strpbrk(a, " \t\"") != NULL;
+        if (!need) { qargv[n] = a; continue; }
+        o[len++] = '"';
+        for (j = 0; a[j] && len < (int)sizeof(quoted[n]) - 4; j++)
+            {
+            for (bs = 0; a[j] == '\\'; j++) bs++;
+            if (!a[j]) { for (q = 0; q < bs * 2; q++) o[len++] = '\\'; break; }
+            if (a[j] == '"') { for (q = 0; q < bs * 2 + 1; q++) o[len++] = '\\'; }
+            else { for (q = 0; q < bs; q++) o[len++] = '\\'; }
+            o[len++] = a[j];
+            }
+        o[len++] = '"';
+        o[len] = 0;
+        qargv[n] = o;
+        }
+    qargv[n] = NULL;
+    _execv(path, (char * const *)qargv);
+    }
 # else
     if (strchr(path, '/')) execv(path, (char * const *)relaunchargv);
     else execvp(path, (char * const *)relaunchargv);

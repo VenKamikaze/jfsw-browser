@@ -14,8 +14,8 @@
 //   ?join=CODE    join the room CODE (6 letters and digits, any case) the same way. The invite link is ?join=CODE.
 //                 The relay comes only from config.js (a crafted link must not route a visitor through another
 //                 relay); a bad N or CODE, or no relay configured, is said on the page and starts no game.
-//   ?test=1       test hooks (below). Nothing else here reads the other options.
-//   ?relay=<url>  the relay for ?host= and ?join= instead of config.js's (test only).
+//   ?test=1       test hooks (below), only when config.js has testMode: true (a link alone cannot turn them on).
+//                 Nothing else here reads the other options.
 //   ?args=...     game arguments, space separated (test only), e.g. "-level1 -dpdemo1".
 //   ?files=a,b    URLs of files to put in the game's directory before main (test only).
 //   ?persist=0    keep the game's directory in memory only (test only).
@@ -43,7 +43,10 @@
   'use strict';
 
   var params = new URLSearchParams(location.search);
-  var TEST = params.get('test') === '1';
+  // Test mode needs both ?test=1 and testMode: true in config.js (brief 05 review): a link alone cannot turn it
+  // on, so a crafted link cannot hand a visitor's game test arguments (?args=, which can name another relay).
+  // The tests serve a config.js with testMode: true; a site leaves it false (data-hosting.md, brief 06).
+  var TEST = params.get('test') === '1' && !!(window.JFSW_CONFIG && window.JFSW_CONFIG.testMode === true);
   var PERSIST = !(TEST && params.get('persist') === '0');
   if (TEST && params.get('idb') === 'off') {
     // Test hook: what an old Firefox private window did: opening a database fails (for the game's IDBFS and the data cache).
@@ -61,8 +64,8 @@
   var CFG = (window.JFSW_CONFIG && window.JFSW_CONFIG.data) || {};
 
   // ---- A network game from the page address (brief 05) -------------------------------------------
-  // The relay is config.js's, never the address's (only a ?test=1 page may override it).
-  var RELAY = (TEST && params.get('relay')) || (window.JFSW_CONFIG && window.JFSW_CONFIG.relay) || '';
+  // The relay is config.js's, never the address's.
+  var RELAY = (window.JFSW_CONFIG && window.JFSW_CONFIG.relay) || '';
   var ROOM_RE = /^[A-HJ-NP-Z2-9]{6}$/;        // the relay's alphabet: A-Z without I and O, 2-9
   var NET = parseNet();                        // null, { host: N }, { join: CODE } or { error: text }
   function parseNet() {
@@ -87,7 +90,7 @@
     if (o.host) { p.set('host', String(o.host)); }
     if (o.join) { p.set('join', o.join); }
     var q = p.toString();
-    return location.pathname + (q ? '?' + q : '');
+    return location.origin + location.pathname + (q ? '?' + q : '');     // never a path the address could make protocol-relative
   }
   function goStartPage() { location.replace(netUrl({})); }
   var DATA_OVERRIDE = params.get('data');
@@ -224,13 +227,16 @@
   var lobbyCancelBtn = document.getElementById('lobbycancel');
   var lobbyReq = 0;
   var lobbyCancel = false;
+  var startAsked = false;     // Start now pressed, and the game has not had the request yet
   var lobbyShown = '';
   window.jfswLobby = null;        // the game's last report (also without ?test=1: the tests read it)
 
-  function inviteLink(code) { return location.origin + location.pathname + '?join=' + code; }
+  // The invite link keeps ?data=: every player of a game must have the same game data, so a host who plays with
+  // other data than config.js's sends the guests to it too (the game would refuse mismatched data anyway).
+  function inviteLink(code) { return location.origin + location.pathname + '?join=' + code + (DATA_OVERRIDE ? '&data=' + encodeURIComponent(DATA_OVERRIDE) : ''); }
   function hideLobby() { lobbyEl.hidden = true; }
   function showLobby(info) {
-    var key = [info.state, info.code, info.joined, info.slots, info.host, lobbyCancel].join(',');
+    var key = [info.state, info.code, info.joined, info.slots, info.host, lobbyCancel, info.pending, startAsked].join(',');
     if (key === lobbyShown) { return; }
     var first = lobbyEl.hidden;
     lobbyShown = key;
@@ -242,6 +248,7 @@
       lobbyStateEl.textContent = 'Connecting to the relay...';
     } else {
       lobbyStateEl.textContent = info.host ? 'The room is open. Send the other players the code or the invite link.' : 'You are in the room.';
+      if (info.host && info.pending) { lobbyStateEl.textContent = 'Starting as soon as every player in the room has answered...'; }
     }
     lobbyRoomEl.hidden = info.state !== 2 || !info.code;
     if (info.code && lobbyCodeEl.textContent !== info.code) {
@@ -256,8 +263,10 @@
       lobbyPlayersEl.textContent = info.state === 2 ? 'Waiting for the host to answer...' : '';
     }
     lobbyStartBtn.hidden = !info.host;
-    lobbyStartBtn.disabled = !(info.host && info.state === 2 && info.joined >= 2 && !lobbyCancel);
-    lobbyStartBtn.textContent = info.joined >= 2 ? 'Start now with ' + info.joined + ' players' : 'Start now (needs 2 players)';
+    // a request the game has taken shows as pending; one it could not take (fewer than 2 in, or they left) is dropped
+    // by the game, and the button is offered again
+    lobbyStartBtn.disabled = !(info.host && info.state === 2 && info.joined >= 2 && !lobbyCancel && !info.pending && !startAsked);
+    lobbyStartBtn.textContent = (info.pending || startAsked) ? 'Starting...' : (info.joined >= 2 ? 'Start now with ' + info.joined + ' players' : 'Start now (needs 2 players)');
     // keyboard users start on the useful button: the host on Copy once there is a link, a guest on Cancel
     if (first && !info.host) { lobbyCancelBtn.focus(); }
     if (info.host && info.state === 2 && (first || document.activeElement === document.body || document.activeElement === canvas)) { lobbyCopyBtn.focus(); }
@@ -268,9 +277,10 @@
     showLobby(info);
     var r = lobbyReq;
     lobbyReq = 0;
+    startAsked = false;       // the next report says whether the game kept the request (info.pending)
     return r;
   };
-  lobbyStartBtn.addEventListener('click', function () { lobbyReq |= 1; lobbyStartBtn.disabled = true; lobbyStateEl.textContent = 'Starting...'; });
+  lobbyStartBtn.addEventListener('click', function () { lobbyReq |= 1; startAsked = true; lobbyShown = ''; lobbyStartBtn.disabled = true; lobbyStartBtn.textContent = 'Starting...'; });
   lobbyCancelBtn.addEventListener('click', function () {
     if (lobbyCancel) { return; }
     lobbyCancel = true;
