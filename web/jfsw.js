@@ -334,7 +334,7 @@
   // A trap or an error inside the game's frame reaches Module.onExit first: Emscripten's callUserCallback() ends the
   // runtime (exit with the last status, usually 0) on its way out, and the error itself comes after, as an 'error'
   // event or an unhandled rejection (the order of the two is the browser's). So such an error shortly after an exit is
-  // still the game's, and its message replaces "The game has ended." (brief 02c, bugs.md L32). The error comes within
+  // still the game's, and its message replaces "The game has ended." (brief 02c, bugs.md L33). The error comes within
   // a few ms; the window is 250 ms. Not a DOMException once the game has exited, whether or not the exit's save is still
   // running (`running` is true until then): that is a browser API refusing something, not the game failing; for
   // example, when the game closes its audio on the way out, Firefox rejects every AudioContext.resume() still pending

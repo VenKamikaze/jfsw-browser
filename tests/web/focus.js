@@ -149,7 +149,7 @@ async function refused(env) {
 // A failure inside the game's frame: sdlayer2.c reads and increments Module.jfswShowframes for every picture it presents
 // (an EM_JS function in sw.js). `how` is 'trap' (wasm: free() of an address beyond memory) or 'throw' (an Error from the script).
 // `persist`: with the game's folder kept in IndexedDB, as on every real page (the exit's save then delays "The game has
-// ended."), or not (?persist=0, as in the other tests: the exit's message came at once, bugs.md L32).
+// ended."), or not (?persist=0, as in the other tests: the exit's message came at once, bugs.md L33).
 async function fatal(env, how, persist) {
   console.log('  ' + how + (persist ? ', persistence on' : ', ?persist=0'));
   const r = await openPage(env, persist ? '?test=1' : '?test=1&persist=0');

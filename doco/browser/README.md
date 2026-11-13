@@ -6,6 +6,8 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 
 **Starting a fresh session on this work?** Point it at [`PROMPT.md`](PROMPT.md). Its §0 is the hand-off.
 
+**Putting the game online:** [`deploy.md`](deploy.md) (Arch, Apache with TLS, the relay under systemd, desktop players).
+
 **Reading order:** this file, then the brief, then [`code-facts.md`](code-facts.md) (what the code actually does, with file:line refs), then the **Outcome** sections of every brief yours depends on: they record what actually landed.
 
 ## Status
@@ -20,8 +22,9 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 | 04b | [Netcode lag cuts](04b-lag-cuts.md) | jfsw-browser, jfbuild | 04 | done (play-test pending) |
 | 04c | [A tab hidden before the level's first frame (L19)](04c-hidden-first-frame.md) | jfsw-browser | 04b | done (play-test pending) |
 | 05 | [Host and join from the game](05-host-and-join.md) | jfsw-browser, jfbuild | 03, 04 | done (play-test pending) |
-| 06 | [Deployment guide](06-deployment-guide.md) | jfsw-browser | 05 | written |
+| 06 | [Deployment guide](06-deployment-guide.md): [`deploy.md`](deploy.md) | jfsw-browser | 05 | done (play-test pending) |
 | 02c | [A refused pointer lock shows the fatal overlay (L24)](02c-focus-loss.md) | jfsw-browser | 02 | review |
+| 05b | [Warn every player when the players' game data differs (L26)](05b-data-mismatch-warning.md) | jfsw-browser | 05 | written (the user, 13 Nov 2026: warn, don't refuse) |
 
 01 and 02 can run in parallel, as can 03 and 04.
 
@@ -32,6 +35,7 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 | F1 | [Co-op game freezes at tic 1522](F1-coop-freeze.md) | `fix/coop-freeze` | 01 (for the regression test) | on hold (the user, 6 Nov 2026) |
 | F2 | [Native crash in the ALSA MIDI music driver](F2-alsa-midi-lock.md) | `fix/alsa-midi-lock` (jfaudiolib fork, from `68be97f`) | 00 | done (verified by the user on Arch, 7 Nov 2026) |
 | F3 | [Machines play different numbers of tics after a level exit (L20)](F3-level-exit-tics.md) | `fix/level-exit-tics` (from `master`), integrated on `browser/F3-level-exit-tics` | 04c (for the tests) | done (play-test pending) |
+| F4 | [Toggling mouse aiming mid-level desyncs the game (L25)](F4-mouse-aim-sync.md) | `fix/mouse-aim-sync` (from `master`), integrated on `browser/F4-mouse-aim-sync` | F3 (for the tests) | written |
 
 Later, not briefed: music (Q4), WebGL rendering through the GLES2 path, touch controls, the Wanton Destruction and Twin Dragon add-ons in the browser, mouse turns drawn between tics (view angle only), smoothing prediction corrections.
 
