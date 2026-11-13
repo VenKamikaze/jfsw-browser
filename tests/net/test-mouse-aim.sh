@@ -22,6 +22,12 @@
 #            the key at tic 199 and the joiner at tic 201 (an input of the
 #            first level that is never played); the joiner is put on a slope at
 #            tic 100 of E1L2.
+#   oldjoin  the joiner stands in for a build without the fix (-testoldaim:
+#            no SK_MOUSE_AIM, the short options packet) and starts with mouse
+#            aiming on (-testaimon); it is put on the slope at tic 300. The new
+#            host must keep that player's flag from the options packet;
+#   oldhost  the same the other way round: the host is the stand-in, the
+#            joiner (new) starts with mouse aiming on and goes on the slope.
 #
 #   tests/net/test-mouse-aim.sh [--sw FILE] [--runs N] [--only NAME]
 #
@@ -127,4 +133,6 @@ game master  relay 400 0 t320 1 "-testaimkey100" "" "-testslope300,0 -teststate3
 game slave   udp   400 1 t320 1 "" "-testaimkey100" "-testslope300,1 -teststate320"
 game held    relay 400 1 t300 1 "" "-testaimheld -testaimkey250,100" "-testslope280,1 -teststate300"
 game exit    relay 300 1 L2.t120 1 "-testaimkey199" "-testaimkey201" "-testexit200 -testslope100,1,2 -teststate120"
+game oldjoin relay 400 1 t320 1 "" "-testoldaim -testaimon" "-testslope300,1 -teststate320"
+game oldhost relay 400 1 t320 1 "-testoldaim" "-testaimon" "-testslope300,1 -teststate320"
 t_result

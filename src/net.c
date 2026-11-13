@@ -427,7 +427,8 @@ InitNetPlayerOptions(VOID)
         p.MouseAimInInput = 1;
         MouseAimInInput[myconnectindex] = TRUE;
 
-        netbroadcastpacket((BYTEp)(&p), sizeof(p));
+        // (test-only, -testoldaim: the packet of a build without the field, sync.c)
+        netbroadcastpacket((BYTEp)(&p), sizeof(p) - (TestOldAim ? sizeof(p.MouseAimInInput) : 0));
         }
     }
 

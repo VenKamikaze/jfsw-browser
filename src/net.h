@@ -186,6 +186,8 @@ void TestAimKeyArg(const char *arg);  // -testaimkey<T>[,<N>[,<L>]]: this machin
 void TestAimHeldArg(void);      // -testaimheld: mouse aiming in held mode on this machine (sync.c)
 int TestAimKeyDown(void);       // from getinput: the test's key is down for the input being made
 int TestAimKeyPressed(void);    // from getinput: ... and was not for the one before
+extern int TestOldAim;          // -testoldaim: this machine handles mouse aiming as a build without F4's fix (sync.c)
+void TestAimOnArg(void);        // -testaimon: mouse aiming is on when the game starts (sync.c)
 void TestSlopeArg(const char *arg);   // -testslope<T>,<P>[,<L>]: every machine puts player P on a slope at tic T (sync.c)
 void TestLevelEnd(void);        // from RunLevel when it leaves a level
 extern int TestDrawCheck;       // -testdrawcheck[2]: DrawSetupLevelStats against the first frame (sync.c)

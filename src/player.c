@@ -1806,7 +1806,7 @@ void SlipSlope(PLAYERp pp)
 VOID
 DoPlayerMouseAimSync(PLAYERp pp)
     {
-    if (!CommEnabled || !MouseAimInInput[pp->pnum])
+    if (!CommEnabled || !MouseAimInInput[pp->pnum] || TestOldAim)     // (TestOldAim: test-only, sync.c)
         return;
 
     if (TEST_SYNC_KEY(pp, SK_MOUSE_AIM))

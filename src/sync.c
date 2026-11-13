@@ -1489,6 +1489,18 @@ void TestAimKeyArg(const char *arg)
     if (TestAimKeyLen < 1) TestAimKeyLen = 1;
     }
 
+// -testaimon (test-only, F4): this machine starts with mouse aiming on (gs.MouseAimingOn, which the game
+// then also saves in its sw.cfg). -testoldaim: this machine handles mouse aiming as a build without
+// F4's fix does: getinput() sets the player's flag on this machine only, the input carries no
+// SK_MOUSE_AIM, the options packet has no MouseAimInInput byte, and no player's flag is taken from
+// the input here; the stand-in for an older build in a game with newer ones.
+int TestOldAim;
+
+void TestAimOnArg(void)
+    {
+    gs.MouseAimingOn = TRUE;
+    }
+
 void TestAimHeldArg(void)
     {
     gs.MouseAimingType = 1;

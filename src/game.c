@@ -3879,6 +3879,16 @@ int app_main(int argc, char const * const argv[])
             TestAimKeyArg(arg+10);      // test-only: this machine's Mouse_Aiming key is down at tics T..T+N-1
             }
         else
+        if (Bstrncasecmp(arg, "testaimon", 9) == 0)
+            {
+            TestAimOnArg();             // test-only: mouse aiming on from the start
+            }
+        else
+        if (Bstrncasecmp(arg, "testoldaim", 10) == 0)
+            {
+            TestOldAim = 1;             // test-only: mouse aiming as a build without F4's fix
+            }
+        else
         if (Bstrncasecmp(arg, "testaimheld", 11) == 0)
             {
             TestAimHeldArg();           // test-only: mouse aiming in held mode on this machine
@@ -5263,7 +5273,7 @@ getinput(SW_PACKET *loc)
     // machine's own state (gs.MouseAimingOn) changes, it goes out with the input
     // (SK_MOUSE_AIM) and DoPlayerMouseAimSync() sets the flag in the tic that
     // input is played. Single player sets the flag here, as it always did.
-    aiming = CommEnabled ? gs.MouseAimingOn : !!TEST(pp->Flags, PF_MOUSE_AIMING_ON);
+    aiming = (CommEnabled && !TestOldAim) ? gs.MouseAimingOn : !!TEST(pp->Flags, PF_MOUSE_AIMING_ON);    // (TestOldAim: test-only, sync.c)
 
     if (gs.MouseAimingType == 1) // while held
         {
@@ -5301,7 +5311,7 @@ getinput(SW_PACKET *loc)
             }
         }
 
-    if (CommEnabled)
+    if (CommEnabled && !TestOldAim)
         SET_LOC_KEY(loc->bits, SK_MOUSE_AIM, aiming);
     else if (aiming)
         SET(pp->Flags, PF_MOUSE_AIMING_ON);
