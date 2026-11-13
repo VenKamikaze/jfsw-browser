@@ -37,7 +37,8 @@
 //
 // Test hooks, with ?test=1: window.jfswTest = { FS, readFile(name), writeFile(name, bytes),
 // listFiles(), start(), passUnlockedMouse (set it true to let mouse motion reach the game while the pointer
-// is not locked, as before the fix; for the smoke test's sabotage run) }; Module.jfswFrameLog (see sdlayer2.c) is an array of frame times;
+// is not locked, as before the fix; for the smoke test's sabotage run), unhandledPointerLock (set it true to leave the
+// promise of a pointer-lock request unhandled, as before brief 02c; for tests/web/focus.js's sabotage run) }; Module.jfswFrameLog (see sdlayer2.c) is an array of frame times;
 // window.jfswOut holds every line the game printed; window.jfswExit is set when it ends.
 (function () {
   'use strict';
@@ -131,9 +132,10 @@
     statusEl.classList.toggle('error', !!isError);
   }
 
-  // Something went wrong or the game is over: say so on the page, over the last picture.
-  function finish(message, isError) {
-    if (ended) { return; }
+  // Something went wrong or the game is over: say so on the page, over the last picture. `replace`: an error that
+  // replaces an "ended" message already shown (see gameError()).
+  function finish(message, isError, replace) {
+    if (ended && !(replace && window.jfswState === 'ended')) { return; }
     ended = true;
     running = false;
     hideLobby();
@@ -154,6 +156,12 @@
 
   function describe(e) {
     return (e && (e.message || e.reason && (e.reason.message || e.reason))) || String(e);
+  }
+  // A description as a sentence of its own: exactly one full stop at the end, whether or not the browser's
+  // message has one ("The document is not focused." would otherwise become "focused.. Reload ...").
+  function sentence(text) {
+    text = String(text).trim();
+    return /[.!?]$/.test(text) ? text : text + '.';
   }
 
   // An array that keeps at most `max` of the newest entries (the game pushes about 60 a second).
@@ -184,6 +192,7 @@
     // exit() was called somewhere in the game, or main returned.
     onExit: function (code) {
       window.jfswExit = { code: code };
+      exitedAt = performance.now();
       stopSyncing();
       if (lobbyCancel) {
         // Cancel in the lobby: the game has told the others and left the room; back to the normal page.
@@ -197,7 +206,7 @@
                      function () { finish(msg + ' (Saving to the browser failed.)' + again, code !== 0); });
     },
     onAbort: function (what) {
-      finish('The game crashed: ' + what + '. Reload the page to try again.', true);
+      finish('The game crashed: ' + sentence(what) + ' Reload the page to try again.', true);
     }
   };
   window.Module = Module;
@@ -322,12 +331,21 @@
     var where = (file || '') + ' ' + ((err && err.stack) || '');
     return /(^|\/)(sw|jfsw)\.(js|wasm)/.test(where) || /sw\.wasm/.test(where);
   }
+  // A trap or an error inside the game's frame reaches Module.onExit first: Emscripten's callUserCallback() ends the
+  // runtime (exit with the last status, usually 0) on its way out, and the error itself comes after, as an 'error'
+  // event or an unhandled rejection (the order of the two is the browser's). So an error from the game shortly after
+  // an exit is still the game's, and its message replaces "The game has ended." (brief 02c).
+  var exitedAt = 0;
+  function gameError(err, file) {
+    var justExited = !running && exitedAt && performance.now() - exitedAt < 2000;
+    return (running || justExited) && fromGame(err, file);
+  }
   window.addEventListener('error', function (e) {
-    if (running && fromGame(e.error, e.filename)) { finish('Something went wrong: ' + describe(e) + '. Reload the page to try again.', true); }
+    if (gameError(e.error, e.filename)) { finish('Something went wrong: ' + sentence(describe(e)) + ' Reload the page to try again.', true, true); }
     else { console.warn('page error (not from the game):', describe(e)); }
   });
   window.addEventListener('unhandledrejection', function (e) {
-    if (running && fromGame(e.reason)) { finish('Something went wrong: ' + describe(e) + '. Reload the page to try again.', true); }
+    if (gameError(e.reason)) { finish('Something went wrong: ' + sentence(describe(e)) + ' Reload the page to try again.', true, true); }
     else { console.warn('unhandled rejection (not from the game):', describe(e)); }
   });
 
@@ -672,6 +690,34 @@
     var realExit = document.exitPointerLock.bind(document);
     document.exitPointerLock = function () { gameReleasedLock = true; return realExit(); };
   }
+
+  // A refused pointer lock is normal, not a crash (bugs.md L24, brief 02c). The browser refuses a request while the
+  // document does not have the focus, and SDL asks at such moments: when the game handles a focus event after the
+  // window has lost the focus again (Alt+Tab can send blur, focus, blur within a few ms; jfbuild/src/sdlayer2.c, the
+  // SDL_WINDOWEVENT branch) and at start-up (grabmouse(1)) when the page is not focused. Emscripten's helpers in sw.js
+  // call canvas.requestPointerLock() and drop the promise it returns, so a refusal became an unhandled rejection;
+  // Firefox gives the DOMException a stack through sw.js, and the 'unhandledrejection' handler above took it for the
+  // game crashing. Nothing is lost by a refusal: SDL and this page both still see the pointer as free (no
+  // pointerlockchange came), and SDL asks again on the next click on the canvas, or on the next focus.
+  // The canvas is the only element Emscripten asks for the lock (SDL's "#canvas", and Module.canvas). Its fullscreen
+  // calls drop their promises the same way, on the canvas and on the document; the game never asks for fullscreen
+  // (sdlayer2.c keeps the canvas a window), but they are handled alike in case it ever does.
+  // Test hook: window.jfswTest.unhandledPointerLock = true leaves the lock's promise unhandled, as before the fix.
+  function quietRefusal(obj, name, what) {
+    var real = obj[name];
+    if (typeof real !== 'function') { return; }
+    obj[name] = function () {
+      var r;
+      try { r = real.apply(obj, arguments); } catch (e) { console.warn(what + ' refused:', describe(e)); return undefined; }
+      if (TEST && name === 'requestPointerLock' && window.jfswTest && window.jfswTest.unhandledPointerLock) { return r; }
+      if (r && typeof r.then === 'function') { r.then(null, function (e) { console.warn(what + ' refused:', describe(e)); }); }
+      return r;
+    };
+  }
+  quietRefusal(canvas, 'requestPointerLock', 'pointer lock');
+  quietRefusal(canvas, 'requestFullscreen', 'fullscreen');
+  quietRefusal(document, 'exitFullscreen', 'leaving fullscreen');
+
   window.addEventListener('keydown', function (e) { if (e.code === 'Escape') { lastEscape = performance.now(); } }, true);
   document.addEventListener('pointerlockchange', function () {
     if (document.pointerLockElement) { gameReleasedLock = false; return; }
