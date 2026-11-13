@@ -220,6 +220,55 @@ Every browser case ends on the page's overlay with "Back to the start page" (the
 - `FULL` (every place taken while the host still waits) is not reached by a test (see the table above).
 - A visible player who does not press a key at the bonus screen still holds up the room, as in the original game (bugs.md L23).
 
+### Fix round (review findings, 13 Nov 2026)
+
+Commits: jfbuild `70bf3f4`; jfsw-browser `3c1944a`, `685eeee` and the Outcome commit. Rebuilt from clean after the pointer moved (`make veryclean && make -j4`: the same 14 warnings as before; `scripts/build-wasm.sh veryclean` and a full wasm build; note that the wasm `veryclean` also deletes the native `./sw`, so build it again afterwards).
+
+- **B1 (blocker): a newcomer at a departed player's relay address was let into the running game.** Confirmed: the relay gives the address of a member that left to the next joiner, and the master matched places by address. Fixed in mmulti with a random 32-bit session id in every relay ping, kept per place by the master and echoed in its answer (the reviewer's and the coordinator's choice). A ping from another session at a place's address gets "the game has already started" once the game has started and touches nothing of the place, so the real player's silence still ends the game after 15 s ("player 2 left the game"). During the wait, that place's player has left the room, so the newcomer takes the place. A genuine slave whose go-ahead was lost has the same id and still gets it. No `gotgame[place]` guard was needed: the id covers both cases, the vanished guest and the guest who quit properly. Tests: `netplay.js rejoin-vanish` (browsers: the guest's tab closes, the link is opened again, and the newcomer gets 10.0.0.2 and is refused in about 1 s; the host ends 15.2 s after the tab closed), `rejoin-quit` (native host; the browser guest quits at tic 200; the newcomer is refused in about 1 s; the host plays on alone to tic 1200), and the native `tests/net/test-rejoin.sh` (both cases; in `make test-net`).
+- **S1:** in relay games a slave ignores every `0xab` once it has the go-ahead, and any answer whose echoed session id is not its own.
+- **S2: test mode.**
+  - `?test=1` now needs `testMode: true` in `config.js`. The default is `false`, `config.js` and `data-hosting.md` say a public site must keep it, and `building.md` §6.6 has a note for brief 06.
+  - `?relay=` is gone.
+  - Why a `config.js` flag and not a loopback origin: the flag doesn't depend on where the page is served from (a developer's own `127.0.0.1` server would otherwise accept crafted links), and a deployment sees it in the one file it edits.
+  - The tests' servers serve the build's `config.js` with `testMode: true` (`tests/web/server.js` `configText()`, `dataserver.js`, and data.js's own configs). `netplay.js` serves the relay there too.
+  - `lobby-errors` checks that a page whose `config.js` has `testMode: false` gives `?test=1` no hooks and ignores `?args=`, and that `?relay=` supplies no relay.
+- **S3:** `netplay.js compaction`: `?host=4`; A (browser) and B (native) join; A cancels, so B moves down from place 2 to place 1; C (browser) joins; Start now with 3. B is player 2 and C is player 3 on every machine, and all three agree on every tic.
+- **N1:** Start now with fewer than 2 players in is refused and not remembered (natively: "starting needs at least 2 players"; the `start-now` scenario checks that a second player coming in afterwards does not start the game). A request whose players fall below 2 is dropped. The lobby shows a pending request ("Starting as soon as every player in the room has answered...") and offers the button again when the game drops it.
+- **N2:** the page's reload and back-to-start addresses are `location.origin + location.pathname + ...`.
+- **N3:** the invite link keeps `?data=`: every player of a game needs the same game data.
+- **N4:** in the GTK window, Online with Join and no code, a bad code or no relay address shows a message and stays open. `test-startwin.sh` checks the no-code case: the window says so and starts nothing.
+- **N5: the re-launch.**
+  - `argv[0]` is made absolute at the start of `app_main`, before its `chdir`. Linux uses `/proc/self/exe` anyway.
+  - `/net` groups are dropped from the old arguments, as `-net` groups are.
+  - On Windows the arguments are quoted for `_execv`. Not built or run: there is no Windows build here.
+  - The new process writes "Re-launched by host/join from a running game: ..." first in its new `sw.log`.
+- **N6:** `test-errors.sh host-silent`: a host whose game is stopped (SIGSTOP) leaves the joiner to give up with "the host did not answer" after 15.1 s (bounds 14 to 25 s).
+- **N7:**
+  - **Deathmatch table:** `netplay.js level-end-dm` covers it. A hidden guest leaves the deathmatch stats table by itself, and both machines agree over 200 tics of E1L1 and 150 or more of the next level. The game is stopped by the test, because deathmatch test games do not end by `-testquit` (bugs.md L16).
+  - **"Game full" notice:** not tested. It can only happen while a place's player has been silent for more than 2 s but less than 3 s, and a newcomer's ping would have to arrive in that window of under a second: a test of it would be flaky.
+
+**Tests after the fix round** (from a clean build; one at a time; load average while running):
+
+| Test | Result | Time, load |
+|---|---|---|
+| `netplay.js` (all but `lag-matrix` and `old-new`) | **1285 passed, 1 failed**. The new scenarios are `rejoin-vanish`, `rejoin-quit`, `compaction` and `level-end-dm`. The one failure was the new N1 check in `start-now`: the native game's "starting needs at least 2" line was still in its stdout buffer. Fixed by a flush (`685eeee`, netlobby.c); `start-now` then 68/0. | 30 minutes, load 2.1 to 7.5 |
+| `make test GAME_RUNS=1` | 8 PASS: mmulti, three games over the relay and over UDP, UDP against the baseline, errors (now with `host-silent`), level exit, startup window, rejoin; draw 16/0 | 9.3 minutes, load 1.4 to 4.2 |
+| `smoke.js` | 29/0 | load 1.3 |
+| `persist.js` | 14/1, then 15/0 three times. The failure was "a save survives a reload 250 ms after it reached its full size": 2 of 3 tries. This is the known window of 150 to 200 ms in which an IndexedDB write can still be lost under load (02's Outcome); nothing here touches saving. | load 1.3 to 3.5 |
+| `grptable.js` | 8/0 | |
+| `data.js` | 172/0 (it now serves configs with `testMode: true`) | load 3.5 |
+| `determinism.js` | 20/1: only the known "no stall over 100 ms" check (max 277 ms); native and wasm identical | load 2.5 to 3.1 |
+
+**Mutations** (all five rerun on the final code; each applied, rebuilt, run and reverted by a script; `git diff` empty afterwards):
+
+| Mutation | Test | Result |
+|---|---|---|
+| "Start now" without telling the slaves the final count | `start-now` | every game hangs: the slaves start with 3 or 4 players, the master with 2 |
+| an overlay that never updates the player count | `lobby` | 7 failed (10 passed) |
+| the level-end fix removed | `level-end` | the room stalls at the next level; neither machine passes tic 200 |
+| no session-id check (B1) | `test-rejoin.sh`; `rejoin-vanish`, `rejoin-quit` | 5 failed: both newcomers are let in, and the vanished guest's host ends only 50 s after the guest died, once the newcomer was gone; 5 failed (13 passed): the newcomers are not refused, and the host ends 46 s after the tab closed |
+| a relay slave that keeps its first player number (no renumbering, S3) | `compaction` | 11 failed (17 passed): C starts as player 2 like B, and no machine plays the game |
+
 ### Play-test on Arch Linux (the user)
 
 1. Get the branch and build from clean (`make veryclean`: the jfbuild pointer moved, bugs.md L9):
@@ -242,7 +291,7 @@ Every browser case ends on the page's overlay with "Back to the start page" (the
    ```
 
 3. **Host in one browser, join from the link in another.** Open `http://127.0.0.1:8000/?host=3` in Chromium, click "Click to host a game of 3". The lobby shows a room code, an invite link (press Copy) and "1 of 3 players are in". Paste the link into a Firefox window (or a private Chromium window) and click "Click to join room ...": both lobbies say "2 of 3". Check: the code and link are readable, Tab moves through Copy, Start now and Cancel, and in a narrow window (phone width, or the browser's device toolbar) nothing is cut off.
-4. **Start now:** press "Start now with 2 players" on the host. Both lobbies go and the game starts in the menus ("Lo Wang is waiting..." on the guest); start a co-op game from the host's Network Game menu and play a minute. Then open the invite link in a third window: it says "the game has already started". Close the guest's tab: about 15 s later the host's page says "player 2 (...) left the game".
+4. **Start now:** press "Start now with 2 players" on the host. Both lobbies go and the game starts in the menus ("Lo Wang is waiting..." on the guest); start a co-op game from the host's Network Game menu and play a minute. Then open the invite link in a third window: it says "the game has already started". Close the guest's tab and open the invite link again at once (fix round, B1): the new page says "the game has already started", and about 15 s after the tab closed the host's page says "player 2 (...) left the game".
 5. **Cancel:** host again (`?host=2`), join from the link, press Cancel on the guest: the guest is back on the start page and the host's count goes back to 1 of 2. Join again, then press Cancel on the host: the guest says "the host left the room before the game started" at once.
 6. **From the game's menus and console in the browser:** on `http://127.0.0.1:8000/`, start, Escape, "Host Online", "2 Players": the page reloads into the lobby. In another window start a game, Escape, "Join Online", type the code, Enter. Also: the console (Num Lock), `join <code>`. (A laptop without Num Lock: rebind "Show Console" in Options, Input, Keys Setup.)
 7. **Host natively from the console** (a terminal, the GTK window may show):
