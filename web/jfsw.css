@@ -89,4 +89,19 @@ button:focus-visible { outline: 3px solid var(--fg); outline-offset: 3px; }
 #help { margin: 0; max-width: 60em; color: var(--muted); font-size: .9rem; text-align: center; }
 #help[hidden], #testinfo[hidden] { display: none; }
 #testinfo { margin: 0; font-size: .8rem; color: var(--muted); max-width: 100%; overflow: auto; }
-@media (max-width: 520px) { body { padding: 0 8px; } }
+/* The lobby of a network game (brief 05): the whole window, so that it reads at phone width too. */
+#lobby { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; padding: 16px; overflow: auto; background: color-mix(in srgb, var(--bg) 94%, transparent); line-height: 1.45; }
+#lobby[hidden], #lobbyroom[hidden] { display: none; }
+#lobby .box { width: min(30em, 100%); display: flex; flex-direction: column; gap: 10px; text-align: center; }
+#lobby h2 { margin: 0; font-size: 1.2rem; letter-spacing: .12em; text-transform: uppercase; }
+#lobby p { margin: 0; }
+#lobbystate { color: var(--muted); }
+#lobbystate.error { color: var(--bad); }
+#lobby .label { color: var(--muted); font-size: .85rem; }
+#lobbycode { font: 700 2.2rem/1.2 ui-monospace, "DejaVu Sans Mono", monospace; letter-spacing: .25em; color: var(--accent); user-select: all; }
+#lobby .linkrow { display: flex; gap: 6px; }
+#lobbylink { flex: 1; min-width: 0; font: .85rem ui-monospace, monospace; padding: 8px; border: 1px solid var(--muted); border-radius: 6px; background: transparent; color: var(--fg); }
+#lobbylink:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
+#lobbyplayers { font-weight: 600; }
+#lobby .buttons { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 6px; }
+@media (max-width: 520px) { body { padding: 0 8px; } #lobbycode { font-size: 1.7rem; } }

@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "game.h"
 #include "demo.h"
 #include "menus.h"
+#include "netlobby.h"
 
 static int
 osdcmd_restartvid(const osdfuncparm_t *parm)
@@ -144,8 +145,65 @@ osdcmd_showfps(const osdfuncparm_t *parm)
     return OSDCMD_OK;
 }
 
+// Brief 05: host and join a network game through the relay (netlobby.c). Both restart into the
+// network game (D3): the browser reloads its page, the desktop game re-launches itself.
+static int
+osdcmd_host(const osdfuncparm_t *parm)
+{
+    int n = MAX_SW_PLAYERS;
+
+    if (parm->numparms > 1) return OSDCMD_SHOWHELP;
+    if (parm->numparms == 1)
+        {
+        char *end;
+        n = (int)strtol(parm->parms[0], &end, 10);
+        if (*end || n < 2)
+            {
+            buildprintf("host: the number of players is 2 to %d, not \"%s\".\n", MAX_SW_PLAYERS, parm->parms[0]);
+            return OSDCMD_OK;
+            }
+        }
+    NetRestart(n, NULL);
+    return OSDCMD_OK;
+}
+
+static int
+osdcmd_join(const osdfuncparm_t *parm)
+{
+    if (parm->numparms != 1) return OSDCMD_SHOWHELP;
+    NetRestart(0, parm->parms[0]);
+    return OSDCMD_OK;
+}
+
+#ifndef __EMSCRIPTEN__
+static int
+osdcmd_relay(const osdfuncparm_t *parm)
+{
+    if (parm->numparms > 1) return OSDCMD_SHOWHELP;
+    if (parm->numparms == 1)
+        {
+        if (strlen(parm->parms[0]) >= sizeof(NetRelay) || strstr(parm->parms[0], "://"))
+            {
+            buildprintf("relay: give the relay's UDP address as HOST:PORT, for example relay.example.org:7777.\n");
+            return OSDCMD_OK;
+            }
+        strcpy(NetRelay, parm->parms[0]);
+        }
+    if (NetRelay[0])
+        buildprintf("relay: host and join use %s (kept in sw.cfg).\n", NetRelay);
+    else
+        buildprintf("relay: none is set; set one with  relay HOST:PORT\n");
+    return OSDCMD_OK;
+}
+#endif
+
 void SetupOSDCommands(void)
 {
+    OSD_RegisterFunction("host", "host [players]: host a network game through the relay (restarts into its lobby; the most players the game allows if not given)", osdcmd_host);
+    OSD_RegisterFunction("join", "join <code>: join the network game with that room code (restarts into it)", osdcmd_join);
+#ifndef __EMSCRIPTEN__
+    OSD_RegisterFunction("relay", "relay [HOST:PORT]: show or set the relay that host and join use", osdcmd_relay);
+#endif
     OSD_RegisterFunction("restartvid", "restartvid: reinitialise the video mode", osdcmd_restartvid);
     OSD_RegisterFunction("vidmode", "vidmode [xdim ydim] [bpp] [fullscreen]: change the video mode", osdcmd_vidmode);
     OSD_RegisterFunction("quit", "quit: exit the game immediately", osdcmd_quit);

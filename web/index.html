@@ -24,6 +24,23 @@
     </div>
   </div>
 </main>
+<div id="lobby" role="dialog" aria-labelledby="lobbytitle" aria-describedby="lobbystate" hidden>
+  <div class="box">
+    <h2 id="lobbytitle">Network game</h2>
+    <p id="lobbystate" role="status" aria-live="polite">Connecting to the relay...</p>
+    <div id="lobbyroom" hidden>
+      <p class="label">Room code</p>
+      <p id="lobbycode" class="code"></p>
+      <label class="label" for="lobbylink">Invite link: send it to the other players</label>
+      <div class="linkrow"><input id="lobbylink" type="text" readonly><button id="lobbycopy" class="secondary" type="button">Copy</button></div>
+      <p id="lobbyplayers" aria-live="polite"></p>
+    </div>
+    <div class="buttons">
+      <button id="lobbystart" type="button" hidden disabled>Start now</button>
+      <button id="lobbycancel" class="secondary" type="button">Cancel</button>
+    </div>
+  </div>
+</div>
 <p id="help" hidden>
   Keyboard and mouse as in the desktop game (the mouse is captured when you click the picture).
   <b>Escape</b> opens the menu; it also releases the mouse.

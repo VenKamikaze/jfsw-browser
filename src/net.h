@@ -173,6 +173,9 @@ void TestSlowStart(void);       // from RunLevel, after TestStateStart
 extern int TestExitTic;         // -testexit<T>,<L>: 0 = off (sync.c)
 extern int TestExitLevel;       // L, 0 = the next level
 void TestExitArg(const char *arg);
+extern int TestSwitchTic;      // -testswitch<T> (sync.c)
+void TestSwitchArg(int tic);    // -testswitch<T>: every machine operates the level's exit switch at tic T (sync.c)
+void TestOsdArg(const char *arg);   // -testosd<T>,<command>: this machine runs a console command at tic T (sync.c)
 void TestStallArg(const char *arg);   // -teststall<T>,<ms>: this machine stops <ms> ms at the start of tic T (sync.c)
 void TestFireArg(int tic);      // -testfire[<N>]: this machine's player throws shurikens from tic N on (sync.c)
 void TestInputHook(SW_PACKET *loc);   // from faketimerhandler, after getinput

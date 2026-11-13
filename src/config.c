@@ -47,6 +47,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 
 #include "_functio.h"
 #include "_config.h"
+#include "netlobby.h"
 
 extern void ReadGameSetup(int32 scripthandle);
 extern void WriteGameSetup(int32 scripthandle);
@@ -634,6 +635,7 @@ int32 CONFIG_ReadSetup( void )
       SCRIPT_GetString( scripthandle, "Comm Setup", "RTSName",RTSName, sizeof(RTSName));
 
       SCRIPT_GetString( scripthandle, "Comm Setup","PlayerName",CommPlayerName, sizeof(CommPlayerName));
+      SCRIPT_GetString( scripthandle, "Comm Setup","Relay",NetRelay, sizeof(NetRelay));     // brief 05 (netlobby.h)
 
    ReadGameSetup(scripthandle);
 
@@ -699,6 +701,7 @@ void CONFIG_WriteSetup( void )
    SCRIPT_PutNumber( scripthandle, "Controls","MouseSensitivity",gs.MouseSpeed,FALSE,FALSE);
 
    SCRIPT_PutString( scripthandle, "Comm Setup", "PlayerName", CommPlayerName);
+   SCRIPT_PutString( scripthandle, "Comm Setup", "Relay", NetRelay);
 
    WriteGameSetup(scripthandle);
 

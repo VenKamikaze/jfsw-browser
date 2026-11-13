@@ -11,9 +11,8 @@
 # word of each check line). Run with --sw pointing at a build from before the
 # relay existed (tests/net/build-baseline.sh) to see that these checks bite
 # (tried with --only 'badcode-format|room-no-relay|no-such-room': all fail).
-# Cases with a waiting time check a lower bound as well (guestB-no-slot at
-# least 14 s, host-leaves at least 9 s), so that shortening the start-up
-# limits in mmulti_vnet.c is noticed.
+# Cases with a waiting time check a lower bound as well (host-silent at least
+# 14 s, host-leaves at least 9 s), so that shortening the start-up limits in mmulti_vnet.c is noticed.
 #
 # What happens today with plain -net (for comparison): a -net that cannot be
 # set up (bad arguments, an unresolvable host) prints "mmulti error: ..." and
@@ -25,8 +24,11 @@
 #     (10 s);
 #   - no room with that code, or the room is full (the relay's limit): as soon
 #     as the relay says so;
-#   - the host has all its players, or never answers (the game's own limit,
-#     "room full" for mmulti): 15 s after the join;
+#   - the host has all its players: at once, "the game has already started"
+#     (brief 05; before it the newcomer got no answer and gave up 15 s after
+#     the join with "the host did not answer");
+#   - the host never answers (host-silent: its game is stopped): 15 s after
+#     the join, "the host did not answer";
 #   - the host leaves while the others are waiting for players: 10 s after the
 #     last answer.
 # Host loss during the game itself behaves as with -net (the lockstep waits).
@@ -91,7 +93,7 @@ t_note "no such room"
 expect_fail no-such-room 12 'no room with that code' -net -relay "127.0.0.1:$rport" -room ABCDE2 -- $auto
 
 if want 'guestB-no-slot|guestC-room-full'; then
-t_note "room full (relay limit 3 members; host-room 2)"
+t_note "no place in the game; the relay's room full (relay limit 3 members)"
 t_game host "$t_tmp/host" --sw "$sw" --timeout 80 -- -net -relay "127.0.0.1:$rport" -host-room 2 -- $auto
 hostpid=$game_pid
 t_wait_for "$t_tmp/host/sw.log" 'room code [A-Z0-9]{6}' 20 || t_bad "the host printed no room code"
@@ -100,18 +102,40 @@ t_game guestA "$t_tmp/guestA" --sw "$sw" --timeout 80 -- -net -relay "127.0.0.1:
 guestapid=$game_pid
 t_wait_for "$t_tmp/guestA/sw.log" 'mmulti: Player 0 is here' 20 || t_bad "guest A did not meet the host"
 t_wait_for "$t_tmp/host/sw.log" 'mmulti: Player 1 is here' 20 || t_bad "the host did not meet guest A"
-# guest B enters the room (the relay takes 3) but the game has no slot for it
-minsec=14
-expect_fail guestB-no-slot 25 'the host did not answer' -net -relay "127.0.0.1:$rport" -room "$code" -- $auto
-# guest C and D: the relay's room is now full (host, A, B left?): B has left, so
-# fill the room with two quick joiners that wait, then a third is refused
-t_game fillB "$t_tmp/fillB" --sw "$sw" --timeout 40 -- -net -relay "127.0.0.1:$rport" -room "$code" -- $auto
-fillbpid=$game_pid
-sleep 2
-expect_fail guestC-room-full 12 'the room is full' -net -relay "127.0.0.1:$rport" -room "$code" -- $auto
-for p in "$fillbpid" "$guestapid" "$hostpid"; do
+# guest B enters the room (the relay takes 3) but the game has no place for it: since brief 05 the
+# host says so at once (it used to give no answer, and B gave up after 15 s)
+expect_fail guestB-no-slot 5 'the game has already started' -net -relay "127.0.0.1:$rport" -room "$code" -- $auto
+for p in "$guestapid" "$hostpid"; do
     kill -TERM "$p" 2>/dev/null; t_wait_pid "$p" 15
 done
+# the relay's room full: a game of 3 on a relay that takes 3 per room; a fourth is refused by the relay
+t_game hostF "$t_tmp/hostF" --sw "$sw" --timeout 80 -- -net -relay "127.0.0.1:$rport" -host-room 3 -- $auto
+hostfpid=$game_pid
+t_wait_for "$t_tmp/hostF/sw.log" 'room code [A-Z0-9]{6}' 20 || t_bad "the host printed no room code"
+codef="$(grep -o 'room code [A-Z0-9]*' "$t_tmp/hostF/sw.log" | head -1 | awk '{print $3}')"
+t_game fillA "$t_tmp/fillA" --sw "$sw" --timeout 80 -- -net -relay "127.0.0.1:$rport" -room "$codef" -- $auto
+fillapid=$game_pid
+t_game fillB "$t_tmp/fillB" --sw "$sw" --timeout 80 -- -net -relay "127.0.0.1:$rport" -room "$codef" -- $auto
+fillbpid=$game_pid
+t_wait_for "$t_tmp/hostF/sw.log" 'Lobby: the game starts with 3 players' 30 || t_bad "the game of 3 did not start"
+expect_fail guestC-room-full 12 'the room is full' -net -relay "127.0.0.1:$rport" -room "$codef" -- $auto
+for p in "$fillbpid" "$fillapid" "$hostfpid"; do
+    kill -TERM "$p" 2>/dev/null; t_wait_pid "$p" 15
+done
+fi
+
+if want 'host-silent'; then
+t_note "the host never answers (its game is stopped): the joiner gives up after the game's own limit, 15 s"
+t_game hostS "$t_tmp/hostS" --sw "$sw" --timeout 80 -- -net -relay "127.0.0.1:$((rport + 1))" -host-room 2 -- $auto
+hostspid=$game_pid
+t_wait_for "$t_tmp/hostS/sw.log" 'room code [A-Z0-9]{6}' 20 || t_bad "the silent host printed no room code"
+codes="$(grep -o 'room code [A-Z0-9]*' "$t_tmp/hostS/sw.log" | head -1 | awk '{print $3}')"
+gamepid="$(pgrep -P "$hostspid" -x sw | head -1)"
+if [ -n "$gamepid" ]; then kill -STOP "$gamepid"; else t_bad "could not find the silent host's game process"; fi
+minsec=14
+expect_fail host-silent 25 'the host did not answer' -net -relay "127.0.0.1:$((rport + 1))" -room "$codes" -- $auto
+[ -n "$gamepid" ] && kill -CONT "$gamepid"
+kill -TERM "$hostspid" 2>/dev/null; t_wait_pid "$hostspid" 15
 fi
 
 if want 'host-leaves'; then

@@ -28,6 +28,7 @@
 #include "baselayer.h"
 #include "build.h"
 #include "startwin.h"
+#include "netlobby.h"
 
 #define TAB_CONFIG 0
 #define TAB_GAME 1
@@ -73,6 +74,9 @@ static struct {
     GtkWidget *hostfield;
     GtkWidget *numplayersspin;
     GtkAdjustment *numplayersadjustment;
+    GtkWidget *hostfieldlabel;
+    GtkWidget *onlinecheck;     // brief 05: through the relay (room code, -host-room)
+    GtkWidget *relayfield;
 
     GtkWidget *gametable;
     GtkListStore *gamelist;
@@ -90,6 +94,9 @@ static struct startwin_settings *settings;
 static gboolean quiteventonclose = FALSE;
 static gboolean ignoresignals = FALSE;
 static int retval = -1;
+static gboolean lobbymode = FALSE;     // brief 05: the Start button is "Start now" in a relay game's wait
+static int lobbystart = 0;
+static int teststartnow = 0;           // JFSW_TEST_STARTWIN startnow=K (test only)
 
 
 extern int gtkenabled;
@@ -294,12 +301,19 @@ static void setup_config_mode(void)
         gtk_widget_set_sensitive(controls.numplayersspin, FALSE);
         gtk_spin_button_set_range(GTK_SPIN_BUTTON(controls.numplayersspin), 2, MAXPLAYERS);
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(controls.numplayersspin), 2.0);
+
+        gtk_entry_set_text(GTK_ENTRY(controls.relayfield), NetRelay);
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(controls.onlinecheck), NetRelay[0] != 0);
+        gtk_widget_set_sensitive(controls.onlinecheck, FALSE);
+        gtk_widget_set_sensitive(controls.relayfield, FALSE);
     } else {
         gtk_widget_set_sensitive(controls.singleplayerbutton, FALSE);
         gtk_widget_set_sensitive(controls.joinmultibutton, FALSE);
         gtk_widget_set_sensitive(controls.hostfield, FALSE);
         gtk_widget_set_sensitive(controls.hostmultibutton, FALSE);
         gtk_widget_set_sensitive(controls.numplayersspin, FALSE);
+        gtk_widget_set_sensitive(controls.onlinecheck, FALSE);
+        gtk_widget_set_sensitive(controls.relayfield, FALSE);
     }
 
     populate_game_list(TRUE);
@@ -353,6 +367,16 @@ static void on_multiplayerradio_toggled(GtkRadioButton *radiobutton, gpointer us
 
     gtk_widget_set_sensitive(controls.hostfield, joinmultiactive);
     gtk_widget_set_sensitive(controls.numplayersspin, hostmultiactive);
+    gtk_widget_set_sensitive(controls.onlinecheck, joinmultiactive || hostmultiactive);
+    gtk_widget_set_sensitive(controls.relayfield, joinmultiactive || hostmultiactive);
+}
+
+static void on_onlinecheck_toggled(GtkToggleButton *togglebutton, gpointer user_data)
+{
+    (void)user_data;
+    // the join field holds a room code for an online game, a host address otherwise
+    gtk_label_set_text_with_mnemonic(GTK_LABEL(controls.hostfieldlabel),
+        gtk_toggle_button_get_active(togglebutton) ? "Room co_de:" : "Host a_ddress:");
 }
 
 static void on_cancelbutton_clicked(GtkButton *button, gpointer user_data)
@@ -370,6 +394,12 @@ static void on_startbutton_clicked(GtkButton *button, gpointer user_data)
     GtkTreeSelection *sel;
 
     (void)button; (void)user_data;
+
+    if (lobbymode) {
+        // brief 05: Start now, during a relay game's wait (netlobby.c polls it)
+        lobbystart = 1;
+        return;
+    }
 
     if (gtk_combo_box_get_active_iter(GTK_COMBO_BOX(controls.vmode3dcombo), &iter)) {
         gtk_tree_model_get(GTK_TREE_MODEL(controls.vmode3dlist), &iter, 1 /*index*/, &mode, -1);
@@ -397,8 +427,38 @@ static void on_startbutton_clicked(GtkButton *button, gpointer user_data)
 
     settings->numplayers = 0;
     settings->joinhost = NULL;
+    settings->hostroom = 0;
+    settings->joinroom = NULL;
     if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(controls.singleplayerbutton))) {
         settings->numplayers = 1;
+    } else if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(controls.onlinecheck))) {
+        // brief 05: through the relay; NetStartwinArgs() (netlobby.c) makes the -net arguments
+        const char *why = NULL;
+        const char *code = gtk_entry_get_text(GTK_ENTRY(controls.hostfield));
+        int joining = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(controls.joinmultibutton));
+        if (!gtk_entry_get_text(GTK_ENTRY(controls.relayfield))[0]) {
+            why = "An online game needs the relay's address (HOST:PORT, for example relay.example.org:7777).";
+        } else if (joining && !NetIsRoomCode(code, NULL)) {
+            why = code[0] ? "That is not a room code: a room code is 6 letters and digits (no 0, 1, I or O), as the host's lobby shows it."
+                          : "Type the room code of the game to join (6 letters and digits, from the host).";
+        }
+        if (why) {
+            // say so and stay in the window, rather than start something else
+            GtkWidget *dialog = gtk_message_dialog_new(startwin, GTK_DIALOG_DESTROY_WITH_PARENT,
+                GTK_MESSAGE_ERROR, GTK_BUTTONS_CLOSE, "%s", why);
+            buildprintf("Startup window: %s\n", why);
+            fflush(stdout);
+            if (!getenv("JFSW_TEST_STARTWIN")) gtk_dialog_run(GTK_DIALOG(dialog));
+            gtk_widget_destroy(dialog);
+            settings->numplayers = 0;
+            return;
+        }
+        snprintf(NetRelay, sizeof(NetRelay), "%s", gtk_entry_get_text(GTK_ENTRY(controls.relayfield)));
+        if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(controls.joinmultibutton))) {
+            settings->joinroom = strdup(gtk_entry_get_text(GTK_ENTRY(controls.hostfield)));
+        } else {
+            settings->hostroom = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(controls.numplayersspin));
+        }
     } else if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(controls.joinmultibutton))) {
         settings->numplayers = 2;
         settings->joinhost = strdup(gtk_entry_get_text(GTK_ENTRY(controls.hostfield)));
@@ -620,6 +680,10 @@ static GtkWindow *create_window(void)
     controls.hostfield = GTK_WIDGET(gtk_builder_get_object(builder, "hostfield"));
     controls.numplayersspin = GTK_WIDGET(gtk_builder_get_object(builder, "numplayersspin"));
     controls.numplayersadjustment = GTK_ADJUSTMENT(gtk_builder_get_object(builder, "numplayersadjustment"));
+    controls.hostfieldlabel = GTK_WIDGET(gtk_builder_get_object(builder, "hostfieldlabel"));
+    controls.onlinecheck = GTK_WIDGET(get_and_connect_signal(builder, "onlinecheck",
+        "toggled", G_CALLBACK(on_onlinecheck_toggled)));
+    controls.relayfield = GTK_WIDGET(gtk_builder_get_object(builder, "relayfield"));
 
     controls.gametable = GTK_WIDGET(gtk_builder_get_object(builder, "gametable"));
     controls.gamelist = GTK_LIST_STORE(gtk_builder_get_object(builder, "gamelist"));
@@ -752,6 +816,72 @@ int startwin_idle(void *s)
     return 0;
 }
 
+// Test only (brief 05, tests/net/test-startwin.sh): JFSW_TEST_STARTWIN="host=N relay=ADDR" or
+// "room=CODE relay=ADDR", optionally "startnow=K": fill in the window's network choices as a
+// person would and press Start (and, in the wait, press Start now once K players are in). The
+// rest is the window's own code: the toggles, the Start handler, the lobby button.
+static void testchoices(void)
+{
+    const char *env = getenv("JFSW_TEST_STARTWIN");
+    char buf[256], *tok, *save = NULL;
+
+    if (!env || !*env) return;
+    snprintf(buf, sizeof(buf), "%s", env);
+    for (tok = strtok_r(buf, " ,", &save); tok; tok = strtok_r(NULL, " ,", &save)) {
+        if (!strncmp(tok, "host=", 5)) {
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(controls.hostmultibutton), TRUE);
+            gtk_spin_button_set_value(GTK_SPIN_BUTTON(controls.numplayersspin), atoi(tok + 5));
+        } else if (!strncmp(tok, "room=", 5)) {
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(controls.joinmultibutton), TRUE);
+            gtk_entry_set_text(GTK_ENTRY(controls.hostfield), tok + 5);
+        } else if (!strncmp(tok, "relay=", 6)) {
+            gtk_entry_set_text(GTK_ENTRY(controls.relayfield), tok + 6);
+        } else if (!strncmp(tok, "startnow=", 9)) {
+            teststartnow = atoi(tok + 9);
+        }
+    }
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(controls.onlinecheck), TRUE);
+    buildprintf("TEST: startup window: %s\n", env);
+    gtk_button_clicked(GTK_BUTTON(controls.startbutton));
+}
+
+void startwin_netlobby(int joined, int slots, int canstart)
+{
+    char label[64];
+    static int lastj = -1, lasts = -1, lastc = -1;
+
+    if (!gtkenabled || !startwin) return;
+    if (joined == lastj && slots == lasts && canstart == lastc) return;
+    lastj = joined; lasts = slots; lastc = canstart;
+
+    if (!joined && !slots) {
+        lobbymode = FALSE;
+        gtk_button_set_label(GTK_BUTTON(controls.startbutton), "_Start");
+        gtk_widget_set_sensitive(controls.startbutton, FALSE);
+        return;
+    }
+    lobbymode = TRUE;
+    if (canstart) {
+        snprintf(label, sizeof(label), "_Start now (%d of %d in)", joined, slots);
+    } else {
+        snprintf(label, sizeof(label), "%d of %d players in", joined, slots);
+    }
+    gtk_button_set_label(GTK_BUTTON(controls.startbutton), label);
+    gtk_widget_set_sensitive(controls.startbutton, canstart && joined >= 2);
+    if (canstart && teststartnow && joined >= teststartnow) {
+        teststartnow = 0;
+        buildprintf("TEST: startup window: pressing Start now with %d of %d in\n", joined, slots);
+        gtk_button_clicked(GTK_BUTTON(controls.startbutton));
+    }
+}
+
+int startwin_netlobby_poll(void)
+{
+    int r = lobbystart;
+    lobbystart = 0;
+    return r;
+}
+
 int startwin_run(struct startwin_settings *settings)
 {
     if (!gtkenabled || !startwin) return STARTWIN_RUN;
@@ -759,6 +889,7 @@ int startwin_run(struct startwin_settings *settings)
     set_settings(settings);
     setup_config_mode();
     startwinloop = TRUE;
+    testchoices();
     while (startwinloop) {
         gtk_main_iteration_do(TRUE);
     }

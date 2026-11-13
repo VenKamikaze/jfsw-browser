@@ -113,6 +113,7 @@ GAMEOBJS= \
 	$(SRC)/miscactr.$o \
 	$(SRC)/morph.$o \
 	$(SRC)/net.$o \
+	$(SRC)/netlobby.$o \
 	$(SRC)/ninja.$o \
 	$(SRC)/osdcmds.$o \
 	$(SRC)/osdfuncs.$o \
@@ -305,13 +306,16 @@ test-mmulti: engine-current
 	tests/net/test-mmulti-vnet.sh --runs $(MMULTI_RUNS)
 
 # three game processes (relay and plain UDP), plain UDP against the old build, errors,
-# and (F3) a level exit while the host holds the inputs of later tics
+# (F3) a level exit while the host holds the inputs of later tics, and (brief 05) the
+# GTK startup window's online host and join under xvfb-run (skipped without it)
 test-net: engine-current
 	for i in $$(seq $(GAME_RUNS)); do tests/net/test-three-games.sh --relay || exit 1; done
 	tests/net/test-three-games.sh --udp
 	tests/net/test-udp-unchanged.sh --base-sw "$$(tests/net/build-baseline.sh)"
 	tests/net/test-errors.sh
 	tests/net/test-level-exit.sh --runs $(GAME_RUNS)
+	tests/net/test-startwin.sh
+	tests/net/test-rejoin.sh
 
 # brief 04c: DrawSetupLevelStats() against a drawn frame on every shareware level (needs the GRP)
 test-draw: sw$(EXESUFFIX)

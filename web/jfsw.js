@@ -8,7 +8,14 @@
 // Query string:
 //   ?data=<url>   fetch the GRP from this URL instead of the one in config.js (size and CRC32 of config.js
 //                 are then not checked; the file must still be a GRP the game knows).
-//   ?test=1       test hooks (below). Nothing else here reads the other options.
+//   ?host=N       host a network game of N players (2 to 8; 4 with the shareware data) through the relay in
+//                 config.js (brief 05): the page starts the game with -net -relay <relay> -host-room N and shows
+//                 the lobby (room code, invite link, who is in, Start now, Cancel) while the game waits.
+//   ?join=CODE    join the room CODE (6 letters and digits, any case) the same way. The invite link is ?join=CODE.
+//                 The relay comes only from config.js (a crafted link must not route a visitor through another
+//                 relay); a bad N or CODE, or no relay configured, is said on the page and starts no game.
+//   ?test=1       test hooks (below), only when config.js has testMode: true (a link alone cannot turn them on).
+//                 Nothing else here reads the other options.
 //   ?args=...     game arguments, space separated (test only), e.g. "-level1 -dpdemo1".
 //   ?files=a,b    URLs of files to put in the game's directory before main (test only).
 //   ?persist=0    keep the game's directory in memory only (test only).
@@ -36,7 +43,10 @@
   'use strict';
 
   var params = new URLSearchParams(location.search);
-  var TEST = params.get('test') === '1';
+  // Test mode needs both ?test=1 and testMode: true in config.js (brief 05 review): a link alone cannot turn it
+  // on, so a crafted link cannot hand a visitor's game test arguments (?args=, which can name another relay).
+  // The tests serve a config.js with testMode: true; a site leaves it false (data-hosting.md, brief 06).
+  var TEST = params.get('test') === '1' && !!(window.JFSW_CONFIG && window.JFSW_CONFIG.testMode === true);
   var PERSIST = !(TEST && params.get('persist') === '0');
   if (TEST && params.get('idb') === 'off') {
     // Test hook: what an old Firefox private window did: opening a database fails (for the game's IDBFS and the data cache).
@@ -52,6 +62,37 @@
   }
   var storageNote = '';
   var CFG = (window.JFSW_CONFIG && window.JFSW_CONFIG.data) || {};
+
+  // ---- A network game from the page address (brief 05) -------------------------------------------
+  // The relay is config.js's, never the address's.
+  var RELAY = (window.JFSW_CONFIG && window.JFSW_CONFIG.relay) || '';
+  var ROOM_RE = /^[A-HJ-NP-Z2-9]{6}$/;        // the relay's alphabet: A-Z without I and O, 2-9
+  var NET = parseNet();                        // null, { host: N }, { join: CODE } or { error: text }
+  function parseNet() {
+    var h = params.get('host'), j = params.get('join');
+    if (h === null && j === null) { return null; }
+    if (h !== null && j !== null) { return { error: 'This address asks to host and to join a network game at once (?host= and ?join=). Use one of them.' }; }
+    if (!RELAY) {
+      return { error: 'This page cannot ' + (h !== null ? 'host' : 'join') + ' a network game: no relay is set up for it (the relay field of config.js is empty). Whoever runs this site can add one.' };
+    }
+    if (h !== null) {
+      if (!/^\d+$/.test(h) || +h < 2 || +h > 8) { return { error: '"' + h + '" is not a number of players. ?host= takes 2 to 8 (4 with the shareware game data).' }; }
+      return { host: +h };
+    }
+    var code = j.trim().toUpperCase();
+    if (!ROOM_RE.test(code)) { return { error: '"' + j + '" is not a room code. A room code is 6 letters and digits, without 0, 1, I or O (for example ABC234): check the invite link.' }; }
+    return { join: code };
+  }
+  // This page's address with ?host= / ?join= set as given (o: { host }, { join } or {} for neither); every other parameter is kept.
+  function netUrl(o) {
+    var p = new URLSearchParams(location.search);
+    p.delete('host'); p.delete('join');
+    if (o.host) { p.set('host', String(o.host)); }
+    if (o.join) { p.set('join', o.join); }
+    var q = p.toString();
+    return location.origin + location.pathname + (q ? '?' + q : '');     // never a path the address could make protocol-relative
+  }
+  function goStartPage() { location.replace(netUrl({})); }
   var DATA_OVERRIDE = params.get('data');
   var DATA_DIR = '/data';        // on the game's search path (DATADIR in the Makefile); not persisted
   var HOME_DIR = '/persist';     // the game's current directory: sw.cfg, saves, sw.log; IndexedDB
@@ -95,6 +136,8 @@
     if (ended) { return; }
     ended = true;
     running = false;
+    hideLobby();
+    if (NET) { reloadBtn.textContent = 'Back to the start page'; }
     setState(isError ? 'error' : 'ended');
     overlay.hidden = false;
     progressEl.hidden = true;
@@ -105,7 +148,9 @@
     showStatus(message, isError);
     reloadBtn.focus();
   }
-  reloadBtn.addEventListener('click', function () { location.reload(); });
+  // After a network game the reload button goes back to the page without ?host= or ?join= (a reload would
+  // create another room, or try the same code again).
+  reloadBtn.addEventListener('click', function () { if (NET) { goStartPage(); } else { location.reload(); } });
 
   function describe(e) {
     return (e && (e.message || e.reason && (e.reason.message || e.reason))) || String(e);
@@ -140,10 +185,16 @@
     onExit: function (code) {
       window.jfswExit = { code: code };
       stopSyncing();
+      if (lobbyCancel) {
+        // Cancel in the lobby: the game has told the others and left the room; back to the normal page.
+        syncNow().then(goStartPage, goStartPage);
+        return;
+      }
       var msg = code === 0 ? 'The game has ended.' : 'The game stopped with an error (exit status ' + code + ').';
       if (lastMessage) { msg += ' ' + lastMessage; }
-      syncNow().then(function () { finish(msg + ' Reload the page to play again.', code !== 0); },
-                     function () { finish(msg + ' (Saving to the browser failed.) Reload the page to play again.', code !== 0); });
+      var again = NET ? '' : ' Reload the page to play again.';
+      syncNow().then(function () { finish(msg + again, code !== 0); },
+                     function () { finish(msg + ' (Saving to the browser failed.)' + again, code !== 0); });
     },
     onAbort: function (what) {
       finish('The game crashed: ' + what + '. Reload the page to try again.', true);
@@ -159,6 +210,110 @@
     });
   }
   window.jfswKnobs = Module.jfswKnobs;
+
+  // ---- The lobby (brief 05, D9): an HTML overlay while the game waits for its players -------------
+  // The game (src/netlobby.c) calls Module.jfswLobby({state, code, joined, slots, host, started}) when
+  // something changes and every 100 ms while it waits; the return value is what the player asked for
+  // since the last call (1 start now, 2 cancel). state: 1 connecting to the relay, 2 in the room. The
+  // game starts the moment the wait is over (started), with the player count every machine agreed.
+  var lobbyEl = document.getElementById('lobby');
+  var lobbyStateEl = document.getElementById('lobbystate');
+  var lobbyRoomEl = document.getElementById('lobbyroom');
+  var lobbyCodeEl = document.getElementById('lobbycode');
+  var lobbyLinkEl = document.getElementById('lobbylink');
+  var lobbyCopyBtn = document.getElementById('lobbycopy');
+  var lobbyPlayersEl = document.getElementById('lobbyplayers');
+  var lobbyStartBtn = document.getElementById('lobbystart');
+  var lobbyCancelBtn = document.getElementById('lobbycancel');
+  var lobbyReq = 0;
+  var lobbyCancel = false;
+  var startAsked = false;     // Start now pressed, and the game has not had the request yet
+  var lobbyShown = '';
+  window.jfswLobby = null;        // the game's last report (also without ?test=1: the tests read it)
+
+  // The invite link keeps ?data=: every player of a game must have the same game data, so a host who plays with
+  // other data than config.js's sends the guests to it too (the game would refuse mismatched data anyway).
+  function inviteLink(code) { return location.origin + location.pathname + '?join=' + code + (DATA_OVERRIDE ? '&data=' + encodeURIComponent(DATA_OVERRIDE) : ''); }
+  function hideLobby() { lobbyEl.hidden = true; }
+  function showLobby(info) {
+    var key = [info.state, info.code, info.joined, info.slots, info.host, lobbyCancel, info.pending, startAsked].join(',');
+    if (key === lobbyShown) { return; }
+    var first = lobbyEl.hidden;
+    lobbyShown = key;
+    lobbyEl.hidden = false;
+    document.getElementById('lobbytitle').textContent = info.host ? 'Hosting a network game' : 'Joining a network game';
+    if (lobbyCancel) {
+      lobbyStateEl.textContent = 'Leaving the room...';
+    } else if (info.state !== 2) {
+      lobbyStateEl.textContent = 'Connecting to the relay...';
+    } else {
+      lobbyStateEl.textContent = info.host ? 'The room is open. Send the other players the code or the invite link.' : 'You are in the room.';
+      if (info.host && info.pending) { lobbyStateEl.textContent = 'Starting as soon as every player in the room has answered...'; }
+    }
+    lobbyRoomEl.hidden = info.state !== 2 || !info.code;
+    if (info.code && lobbyCodeEl.textContent !== info.code) {
+      lobbyCodeEl.textContent = info.code;
+      lobbyLinkEl.value = inviteLink(info.code);
+    }
+    var more = info.slots - info.joined;
+    if (info.joined > 0 && info.slots > 0) {
+      lobbyPlayersEl.textContent = info.joined + ' of ' + info.slots + ' players are in.' +
+        (more > 0 ? ' Waiting for ' + more + ' more' + (info.host ? '' : ', or for the host to start') + '...' : ' Starting...');
+    } else {
+      lobbyPlayersEl.textContent = info.state === 2 ? 'Waiting for the host to answer...' : '';
+    }
+    lobbyStartBtn.hidden = !info.host;
+    // a request the game has taken shows as pending; one it could not take (fewer than 2 in, or they left) is dropped
+    // by the game, and the button is offered again
+    lobbyStartBtn.disabled = !(info.host && info.state === 2 && info.joined >= 2 && !lobbyCancel && !info.pending && !startAsked);
+    lobbyStartBtn.textContent = (info.pending || startAsked) ? 'Starting...' : (info.joined >= 2 ? 'Start now with ' + info.joined + ' players' : 'Start now (needs 2 players)');
+    // keyboard users start on the useful button: the host on Copy once there is a link, a guest on Cancel
+    if (first && !info.host) { lobbyCancelBtn.focus(); }
+    if (info.host && info.state === 2 && (first || document.activeElement === document.body || document.activeElement === canvas)) { lobbyCopyBtn.focus(); }
+  }
+  Module.jfswLobby = function (info) {
+    window.jfswLobby = info;
+    if (info.started) { hideLobby(); canvas.focus(); return 0; }
+    showLobby(info);
+    var r = lobbyReq;
+    lobbyReq = 0;
+    startAsked = false;       // the next report says whether the game kept the request (info.pending)
+    return r;
+  };
+  lobbyStartBtn.addEventListener('click', function () { lobbyReq |= 1; startAsked = true; lobbyShown = ''; lobbyStartBtn.disabled = true; lobbyStartBtn.textContent = 'Starting...'; });
+  lobbyCancelBtn.addEventListener('click', function () {
+    if (lobbyCancel) { return; }
+    lobbyCancel = true;
+    lobbyReq |= 2;
+    lobbyShown = '';
+    lobbyStateEl.textContent = 'Leaving the room...';
+    lobbyStartBtn.disabled = true;
+    setTimeout(goStartPage, 3000);      // if the game does not get round to it
+  });
+  lobbyCopyBtn.addEventListener('click', function () {
+    var done = function () { lobbyCopyBtn.textContent = 'Copied'; setTimeout(function () { lobbyCopyBtn.textContent = 'Copy'; }, 2000); };
+    lobbyLinkEl.select();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(lobbyLinkEl.value).then(done, function () { try { document.execCommand('copy'); done(); } catch (e) { /* the link stays selected */ } });
+    } else {
+      try { document.execCommand('copy'); done(); } catch (e) { /* the link stays selected */ }
+    }
+  });
+  lobbyLinkEl.addEventListener('focus', function () { lobbyLinkEl.select(); });
+  // The game's keyboard handler (SDL, on the window) would take the keys meant for the lobby's buttons.
+  // While the lobby is up, keys stay with the page: Tab, Enter and Space work on the buttons as usual.
+  ['keydown', 'keyup', 'keypress'].forEach(function (type) {
+    window.addEventListener(type, function (e) { if (!lobbyEl.hidden) { e.stopImmediatePropagation(); } }, true);
+  });
+
+  // The console's and the menus' host and join (src/netlobby.c): restart the page into the network game (D3).
+  // Returns 0 when this page has no relay; the game says so.
+  Module.jfswNetGame = function (code, players) {
+    if (!RELAY) { return 0; }
+    var url = netUrl(code ? { join: code } : { host: players });
+    setTimeout(function () { var go = function () { location.assign(url); }; syncNow().then(go, go); }, 50);
+    return 1;
+  };
 
   // A trap in WebAssembly, or an error in the game's own scripts, would otherwise just freeze the picture.
   // Errors from elsewhere (a browser extension, say) are logged and the game goes on.
@@ -350,6 +505,11 @@
     var after = prepared ? Promise.resolve() : finishPrepare();
     return after.then(function () {
       prepared = true;
+      if (NET && NET.host > 4 && res.game === 'SHARE') {
+        netRefused('?host=' + NET.host + ': the shareware version of the game allows at most 4 players. Host a game of 2 to 4 (?host=4), or use the registered game data.');
+        return;
+      }
+      if (NET) { startBtn.textContent = NET.host ? 'Click to host a game of ' + NET.host : 'Click to join room ' + NET.join; }
       var notes = res.notes.join(' ');
       showStatus('Ready.' + (storageNote ? storageNote : '') + (notes ? ' ' + notes : ''), !!(storageNote || notes));
       startBtn.hidden = false;
@@ -416,6 +576,10 @@
         console.warn('IndexedDB unavailable:', e);
       });
     }
+    if (NET && NET.error) {
+      // checked before anything is loaded: no game starts from this address
+      return ready.then(function () { netRefused(NET.error); });
+    }
     return ready.then(function () {
       // The game's own "portable" switch: with this file in the current directory, sw.cfg, saved games
       // and the log all go in the current directory (code-facts section 6).
@@ -441,8 +605,23 @@
   // ---- Running ----------------------------------------------------------------------------------------
 
   function gameArgs() {
-    if (!TEST) { return []; }
-    return (params.get('args') || '').split(/\s+/).filter(Boolean);
+    var a = [];
+    if (NET && NET.host) { a = ['-net', '-relay', RELAY, '-host-room', String(NET.host), '--']; }
+    if (NET && NET.join) { a = ['-net', '-relay', RELAY, '-room', NET.join, '--']; }
+    if (!TEST) { return a; }
+    return a.concat((params.get('args') || '').split(/\s+/).filter(Boolean));
+  }
+
+  // A ?host= or ?join= the page cannot use: say why, and offer the normal page instead of a game.
+  function netRefused(text) {
+    setState('error');
+    progressEl.hidden = true;
+    startBtn.hidden = true;
+    dataCtl.hidden = true;
+    showStatus(text, true);
+    reloadBtn.textContent = 'Go to the start page';
+    reloadBtn.hidden = false;
+    reloadBtn.focus();
   }
 
   function start() {

@@ -441,7 +441,7 @@ async function main() {
       await waitLoaded(page);
       t.check(!!(await cacheRecords(page))[KEY(PORT, '/swshare.grp')], 'config change: cached under the first URL');
       fresh();
-      server.routes['/config.js'] = (req, res) => { res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-store' }); res.end(`window.JFSW_CONFIG={data:{url:'swshare2.grp',size:${SIZE},crc32:'08a7fa1f'}};`); };
+      server.routes['/config.js'] = (req, res) => { res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-store' }); res.end(`window.JFSW_CONFIG={testMode:true,data:{url:'swshare2.grp',size:${SIZE},crc32:'08a7fa1f'}};`); };
       await page.goto(env.base + '?test=1&persist=0');
       await waitLoaded(page);
       delete server.routes['/config.js'];
@@ -450,7 +450,7 @@ async function main() {
       t.check(Object.keys(recs).join() === KEY(PORT, '/swshare2.grp'), 'config change (new URL): the entry for the old URL was removed', Object.keys(recs).join());
 
       // A changed declared size: served as a config.js of its own.
-      const cfg = (size) => (req, res) => { res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-store' }); res.end(`window.JFSW_CONFIG={data:{url:'swshare.grp',size:${size},crc32:'08a7fa1f'}};`); };
+      const cfg = (size) => (req, res) => { res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-store' }); res.end(`window.JFSW_CONFIG={testMode:true,data:{url:'swshare.grp',size:${size},crc32:'08a7fa1f'}};`); };
       server.routes['/config.js'] = cfg(SIZE);
       await page.goto(env.base + '?test=1&persist=0');
       await waitLoaded(page);

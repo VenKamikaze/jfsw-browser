@@ -17,6 +17,9 @@
 #                   and play it back in the next
 #   --sw FILE       the game binary (default ./sw)
 #   --music         leave music on (by default it is turned off, see below)
+#   --display       keep DISPLAY (for an X server such as xvfb-run's), so that
+#                   the GTK startup window can open; the game still draws
+#                   nothing (SDL's dummy video driver). Pass -setup to show it.
 #
 # What it sets up, all of it needed by the game as it stands:
 #   * SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy, DISPLAY unset;
@@ -53,6 +56,7 @@ sw="$root/sw"
 secs=30
 workdir=""
 music=0
+keepdisplay=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -61,6 +65,7 @@ while [ $# -gt 0 ]; do
         --workdir) [ $# -ge 2 ] || { echo "--workdir needs a directory" >&2; exit 2; }; workdir="$2"; shift 2 ;;
         --sw) [ $# -ge 2 ] || { echo "--sw needs a file" >&2; exit 2; }; sw="$2"; shift 2 ;;
         --music) music=1; shift ;;
+        --display) keepdisplay=1; shift ;;
         -h|--help) sed -n '2,/^set -uo/p' "${BASH_SOURCE[0]}" | sed '$d;s/^# \{0,1\}//'; exit 0 ;;
         --) shift; break ;;
         *) break ;;
@@ -102,7 +107,8 @@ fi
 ln -sf "$grp" "$workdir/$(basename "$grp")"
 
 cd "$workdir" || exit 125
-unset DISPLAY WAYLAND_DISPLAY
+unset WAYLAND_DISPLAY
+[ "$keepdisplay" = 1 ] || unset DISPLAY
 export HOME="$workdir" SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
 
 # Our own watchdog rather than timeout(1), so that a game that dies of SIGKILL
@@ -138,7 +144,9 @@ on_signal() {
 trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
 trap 'on_signal 129' HUP
-"$sw" -nosetup "$@" &
+# <&0: the game keeps this script's standard input (bash gives a background job /dev/null
+# otherwise), so that a host can be told "start" there (brief 05, src/netlobby.c).
+"$sw" -nosetup "$@" <&0 &
 gpid=$!
 ( sleep "$secs"; : > "$flag"; kill -TERM "$gpid" 2>/dev/null; sleep 5; kill -KILL "$gpid" 2>/dev/null ) &
 wpid=$!

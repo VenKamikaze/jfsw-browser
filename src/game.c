@@ -92,6 +92,7 @@ Things required to make savegames work:
 #include "startwin.h"
 #include "version.h"
 #include "mmulti_vnet.h"
+#include "netlobby.h"
 
 #if DEBUG
 #define BETA 0
@@ -934,11 +935,9 @@ InitGame(VOID)
     if (netsuccess) {
         buildputs("Waiting for players...\n");
         mmulti_vnet_setplayercap(MAX_SW_PLAYERS);   // for -net -relay ... -host-room N
-        while (initmultiplayerscycle()) {
-            handleevents();
-            if (quitevent) {
-                return;
-            }
+        // the wait for the players (and, in a relay game, the lobby: netlobby.c)
+        if (!NetLobbyWait()) {
+            return;
         }
         if (mmulti_vnet_state() == MMULTI_VNET_FAILED) {
             // The relay refused us, could not be reached, or the host is gone.
@@ -2531,6 +2530,17 @@ BonusScreen(PLAYERp pp)
         handleevents();
         flushpackets();
 
+#ifdef __EMSCRIPTEN__
+        // Brief 05: every machine waits here for its own player's key, and the others wait for it
+        // at the start of the next level. A hidden browser tab cannot be given a key (nobody sees
+        // it), so in a network game it leaves the screen at once. Nothing here is simulation.
+        if (CommEnabled && jfbuild_browser_hidden_netgame())
+            {
+            buildputs("Network game: this tab is hidden, so it leaves the bonus screen by itself.\n");
+            break;
+            }
+#endif
+
         // taken from top of faketimerhandler
         if (totalclock < ototalclock + synctics)
             {
@@ -2833,6 +2843,15 @@ StatScreen(PLAYERp mpp)
         flushpackets();
         if (quitevent) break;
 
+#ifdef __EMSCRIPTEN__
+        // Brief 05: as in BonusScreen, a hidden tab in a network game does not wait for a key.
+        if (CommEnabled && jfbuild_browser_hidden_netgame())
+            {
+            buildputs("Network game: this tab is hidden, so it leaves the stats screen by itself.\n");
+            break;
+            }
+#endif
+
         CONTROL_GetUserInput(&uinfo);
         CONTROL_ClearUserInput(&uinfo);
         if (KEY_PRESSED(KEYSC_SPACE) || KEY_PRESSED(KEYSC_ENTER) || uinfo.button0 || uinfo.button1)
@@ -2899,7 +2918,7 @@ Control(VOID)
         NewLevel();
         }
 
-    CleanExit = TRUE;
+    CleanExit = !NetRelaunchPending();     // a host/join re-launch (netlobby.c) skips the shareware "give up" page
     TerminateGame();
     }
 
@@ -3472,6 +3491,8 @@ int app_main(int argc, char const * const argv[])
     (void)configloaded;
 #endif
 
+    NetSetArgs(argc, argv);     // for host and join (netlobby.c), before any change of directory
+
 #if defined(DATADIR)
     {
         const char *datadir = DATADIR;
@@ -3537,6 +3558,7 @@ int app_main(int argc, char const * const argv[])
     }
 
     buildsetlogfile("sw.log");
+    NetLogRelaunch();           // netlobby.c
 
     OSD_SetFunctions(
         NULL, NULL, NULL, NULL, NULL,
@@ -3610,6 +3632,7 @@ int app_main(int argc, char const * const argv[])
 
     if (netparam) { // -net parameter on command line.
         netsuccess = initmultiplayersparms(endnetparam - netparam, &argv[netparam]);
+        if (netsuccess) NetNoteRelayArg(endnetparam - netparam, &argv[netparam]);
         if (!netsuccess && mmulti_vnet_state() == MMULTI_VNET_FAILED) {
             // A bad -relay, -host-room or -room (mmulti has said what): do not fall
             // back to a single player game the way a plain -net failure does.
@@ -3663,7 +3686,23 @@ int app_main(int argc, char const * const argv[])
             const char *parmarr[3] = { modeparm, NULL, NULL };
             int parmc = 0;
 
-            if (settings.joinhost) {
+            if (settings.hostroom > 1 || settings.joinroom) {
+                // brief 05: online, through the relay (netlobby.c)
+                const char *onlinearr[8];
+                int onlinec = NetStartwinArgs(onlinearr, settings.hostroom, settings.joinroom);
+                if (settings.joinroom) {
+                    free(settings.joinroom);
+                }
+                if (onlinec < 0) {
+                    exit(1);
+                }
+                netsuccess = initmultiplayersparms(onlinec, onlinearr);
+                if (!netsuccess && mmulti_vnet_state() == MMULTI_VNET_FAILED) {
+                    buildprintf("Network game failed: %s\n", mmulti_vnet_errormsg());
+                    wm_msgbox("Network game failed", "%s.", mmulti_vnet_errormsg());
+                    exit(1);
+                }
+            } else if (settings.joinhost) {
                 strcpy(modeparm, "-nm");
                 parmarr[1] = settings.joinhost;
                 parmc = 2;
@@ -3818,6 +3857,16 @@ int app_main(int argc, char const * const argv[])
         if (Bstrncasecmp(arg, "testexit", 8) == 0)
             {
             TestExitArg(arg+8);     // test-only: every machine leaves the first level at tic T for level L
+            }
+        else
+        if (Bstrncasecmp(arg, "testswitch", 10) == 0)
+            {
+            TestSwitchArg(atoi(arg+10));    // test-only: every machine operates the exit switch at tic T
+            }
+        else
+        if (Bstrncasecmp(arg, "testosd", 7) == 0)
+            {
+            TestOsdArg(arg+7);      // test-only: this machine runs a console command at tic T
             }
         else
         if (Bstrncasecmp(arg, "teststall", 9) == 0)
@@ -4234,6 +4283,9 @@ int app_main(int argc, char const * const argv[])
         }
 
     Control();
+
+    NetEndMessage();        // a relay game the host ended (netlobby.c)
+    NetRelaunch();          // host or join asked for a re-launch into a network game (does not return then)
 
     return (0);
     }
