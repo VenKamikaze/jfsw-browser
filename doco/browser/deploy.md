@@ -132,7 +132,7 @@ After you update the repository, compare your copy with the new `web/config.js` 
 
 ### If the relay is on another machine
 
-Set `relay: 'wss://relay.example.org/vnet'`. The game derives WebTransport at `https://relay.example.org/vnet` (UDP 443 on that machine). See [The relay on a different machine](#the-relay-on-a-different-machine).
+Set `relay: 'wss://relay.example.org/vnet'`. The game derives WebTransport at `https://relay.example.org/vnet` (UDP 443 on that machine; used only if you opt in to WebTransport). See [The relay on a different machine](#the-relay-on-a-different-machine).
 
 ## 3. Apache
 
@@ -321,7 +321,7 @@ The unit's last lines keep the relay to itself: its own user, no capabilities, n
 
 ### WebTransport (opt-in, off by default for now)
 
-**A known problem first (`bugs.md` L31).** In the project's tests, a game hosted by a browser with two or more guests over WebTransport ran at about 25 of its 40 tics a second, and on a busy test machine much slower (9 to 13 tics a second), where the guests' games could **end** with "the host left the game (its machine stopped answering 15 s ago)" (on that machine one WebSocket game ended the same way once, at a load of 15, so that part is partly the machine; the slowdown is not). The host's page cannot hand its datagrams to the browser fast enough and drops them (vnet's limit of 16 datagrams in flight; vnet brief 15 is written for the fix). Two-player games, and every game over WebSocket, ran at full speed. Since a shareware game is usually a browser host with two or three guests, **leave WebTransport off until a vnet release fixes it**; everything else in this guide works without it. It has not been checked on a real network.
+**A known problem first (`bugs.md` L31).** In the project's tests, a game hosted by a browser with two or more guests over WebTransport ran at about 25 of its 40 tics a second, and on a busy test machine at 9 to 13: the host's page cannot hand its datagrams to the browser fast enough and drops them (vnet's limit of 16 datagrams in flight; vnet brief 15 is written for the fix), and the game resends them. Two-player games, and every game over WebSocket, ran at full speed. Some of those slow test games also ended with "the host left the game" on a guest, but only at their very end: the test's host stops at a fixed tic and lingers 1.5 s, and a guest that far behind was still waiting for it; a real host does not stop like that (and one WebSocket test game ended the same way at a load of 15). Since a shareware game is usually a browser host with two or three guests, **leave WebTransport off until a vnet release fixes it**; everything else in this guide works without it. It has not been checked on a real network.
 
 To turn it on anyway (or to try a fixed relay): open UDP 443, then give the relay a certificate, bigger UDP buffers and the `-wt` flags.
 
@@ -542,7 +542,7 @@ The page's messages and the desktop game's (in its console, `sw.log` and a messa
 | "GAME OUT OF SYNC! Restart the game." on the host's screen | the players run different builds (see [Builds must match](#builds-must-match)), or a game bug |
 | the game data does not download | see data-hosting.md; the page's message says what failed |
 | browsers always say `relay-ws`, never `relay-wt` | as configured by default here (no WebTransport). With the opt-in WebTransport section: UDP 443 is closed, the drop-in is not loaded (`systemctl cat vnet-relay`), or the relay cannot read its certificate copy (see its log) |
-| with WebTransport on, a game of three or more hosted by a browser runs slow, or ends with "the host left the game" | `bugs.md` L31: turn WebTransport off (remove the drop-in) until a vnet release fixes it |
+| with WebTransport on, a game of three or more hosted by a browser runs slow (and lags) | `bugs.md` L31: turn WebTransport off (remove the drop-in) until a vnet release fixes it |
 | joining takes about 3 s longer than it should | the game tries WebTransport first; with UDP 443 closed and silently dropped it waits for that try to time out. Harmless |
 | the relay logs a certificate warning | the renewal hook did not run: run it by hand and check `sudo certbot renew --dry-run` |
 | `rate_limited` grows in `/stats` during games | a member sends more than `-client-pps` or `-client-bps` allow: see the limits above |
