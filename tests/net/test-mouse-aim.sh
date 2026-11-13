@@ -26,11 +26,11 @@
 #   tests/net/test-mouse-aim.sh [--sw FILE] [--runs N] [--only NAME]
 #
 # Passes when, in every game: both exit 0; the key presses and the slope were
-# logged; no "OUT OF SYNC"; both -testdump files are byte for byte the same;
-# the state dumps (-teststate) agree field for field (what is a machine's own
-# left out, code-facts.md section 17) 20 tics after the slope, and there the
-# player's mouse aiming flag (Flags 0x40000000) is what the key made it, and
-# the view is tilted exactly when mouse aiming is off. About 15 s a game.
+# logged; no "OUT OF SYNC"; both -testdump files have every tic and agree byte
+# for byte; the state dumps (-teststate) agree field for field (what is a
+# machine's own left out, code-facts.md section 17) 20 tics after the slope, and
+# there the player's mouse aiming flag (Flags 0x40000000) is what the key made
+# it, and the view is tilted exactly when mouse aiming is off. About 15 s a game.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -96,7 +96,12 @@ game() {
             exit)   t_check "$name: the host pressed the key at tic 199 and the joiner at tic 201" bash -c "grep -q 'key pressed at tic 199 of level 1: mouse aiming on' '$d/h/sw.log' && grep -q 'key pressed at tic 201 of level 1: mouse aiming on' '$d/j/sw.log'"
                     t_check "$name: both left the first level at tic 200" bash -c "grep -q 'TEST: leaving the level at tic 200 for level 2\$' '$d/h/sw.log' && grep -q 'TEST: leaving the level at tic 200 for level 2\$' '$d/j/sw.log'" ;;
         esac
-        t_check "$name: both dumps are byte for byte the same ($(( $(stat -c %s "$d/h/d.bin" 2>/dev/null || echo 0) / 17 )) records)" bash -c "[ -s '$d/h/d.bin' ] && cmp -s '$d/h/d.bin' '$d/j/d.bin'"
+        # (a machine can play a tic or two past -testquit before it stops: compare the first $tics)
+        local n=$((tics * 17)) hn jn
+        if [ "$name" = exit ]; then n=$(((200 + tics) * 17)); fi
+        hn=$(stat -c %s "$d/h/d.bin" 2>/dev/null || echo 0); jn=$(stat -c %s "$d/j/d.bin" 2>/dev/null || echo 0)
+        t_check "$name: both dumps have every tic ($((hn / 17)) and $((jn / 17)) records, want $((n / 17)))" test "$hn" -ge "$n" -a "$jn" -ge "$n"
+        t_check "$name: and those records are byte for byte the same" cmp -s -n "$n" "$d/h/d.bin" "$d/j/d.bin"
         grep "^$when " "$d/h/d.bin.state" 2>/dev/null | own_fields > "$d/h.$when"
         grep "^$when " "$d/j/d.bin.state" 2>/dev/null | own_fields > "$d/j.$when"
         t_check "$name: the state dumps agree field for field at $when ($(wc -l < "$d/h.$when") lines)" bash -c "[ -s '$d/h.$when' ] && cmp -s '$d/h.$when' '$d/j.$when'"

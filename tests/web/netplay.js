@@ -13,8 +13,8 @@
 //
 // Needs: build-wasm/ (scripts/build-wasm.sh), the native ./sw (make), testdata/swshare.grp, Go (the
 // relay is built from ext/vnet/relay as tests/net/lib.sh builds it), and Playwright with a Chromium.
-// Never run `playwright install`. Ports: 127.0.0.1:48300 to 48399 (native network tests use 47000 to
-// 47999). The tests are real time: run one at a time on a machine that is not busy.
+// Never run `playwright install`. Ports: 127.0.0.1:48300 to 48399, moved up by JFSW_WEB_PORT_OFFSET if set (native network
+// tests use 47000 to 47999, or JFSW_TEST_PORT_BASE). The tests are real time: run one at a time on a machine that is not busy.
 //
 // How a game is checked. Every machine runs   -autonet 2,0,2,1,0,0,0,0,0,0 -testsync -testquit<N>
 // -testdump<file>   (co-op, E1L1; N game tics, then a clean exit). -testdump makes the game write
@@ -31,7 +31,7 @@ const path = require('path');
 const { serve, configText } = require('./server.js');
 const L = require('./lib.js');
 
-const PORT_WEB = 48300, PORT_UDP = 48301, PORT_HTTP = 48302, PORT_WT = 48303;
+const PORT_WEB = L.port(48300), PORT_UDP = L.port(48301), PORT_HTTP = L.port(48302), PORT_WT = L.port(48303), PORT_NONE = L.port(48392);   // (JFSW_WEB_PORT_OFFSET, lib.js)
 const NOMINAL = 40;                       // game tics a second (120 Hz clock, 3 clock ticks a game tic)
 const REC = 17;                           // bytes per tic in a -testdump file
 const AUTONET = '-autonet 2,0,2,1,0,0,0,0,0,0';
@@ -1016,6 +1016,52 @@ SCENARIOS['level-exit'] = {
   },
 };
 
+// F4 (bugs.md L25): mouse aiming toggled during a game changes on every machine at the same tic. One player's machine presses the
+// Mouse_Aiming key (-testaimkey, read by getinput with the real key), then every machine puts that player on a sloped floor
+// (-testslope), where PlayerAutoLook tilts the view of a player without mouse aiming. Before the fix only the player's own machine
+// knew of the toggle, so the machines' horiz split there. Co-op without monsters (nothing else moves the players).
+const MA_TICS = 400, MA_AUTONET = '-autonet 2,0,0,0,0,0,0,0,0,0';
+async function mouseAimGame(kinds, who, o) {
+  // who: the index of the machine (and player) that presses the key; o: { key, held, slope, when }
+  const relay = await startRelay();
+  try {
+    console.log('  ' + kinds.map((k, i) => k + (i === who ? ' (presses U' + (o.held ? ', held mode' : '') + ')' : '')).join(' + ') + ' (' + LOAD() + ')');
+    const ms = await room(relay, kinds, { tics: MA_TICS, state: true, autonet: MA_AUTONET,
+      extra: (i) => ['-testslope' + o.slope + ',' + who, '-teststate' + o.when]
+        .concat(i === who ? (o.held ? ['-testaimheld'] : []).concat(['-testaimkey' + o.key]) : []),
+      impair: (i) => (i === 0 ? null : 'lat=60,seed=' + (401 + i)) });
+    for (const m of ms) { await m.waitEnd(MA_TICS / NOMINAL * 1000 * 3 + 90000 - (now() - ms[0].started)); }
+    await checkGame(ms, MA_TICS);
+    const outs = [];
+    for (const m of ms) { outs.push(await m.out()); }
+    const t0 = +o.key.split(',')[0];
+    check(new RegExp('TEST: Mouse_Aiming key pressed at tic ' + t0 + ' of level 1: mouse aiming on').test(outs[who]), ms[who].name + ' pressed the key at tic ' + t0 + ' and mouse aiming went on');
+    ms.forEach((m, i) => check(new RegExp('TEST: player ' + who + ' put on sloped sector \\d+').test(outs[i]), m.name + ' put player ' + who + ' on a sloped floor at tic ' + o.slope));
+    const st = [];
+    for (const m of ms) { const b = await m.readFile('d.bin.state'); st.push(b ? parseState(b.toString()) : null); }
+    check(st.every(Boolean), 'every machine wrote its state dump');
+    if (!st.every(Boolean)) { return; }
+    const w = 't' + o.when;
+    for (let k = 1; k < ms.length; k++) {
+      const d = stateDifferences(st[0], st[k], w, ms[0].kind !== ms[k].kind);
+      check(d.length === 0, ms[0].name + ' and ' + ms[k].name + ' agree field by field at ' + w, d.slice(0, 10).join('; '));
+    }
+    ms.forEach((m, i) => {
+      const f = st[i].get(w + ' player ' + who);
+      const flags = f ? parseInt(f.get('Flags'), 16) : NaN, horizoff = f ? +f.get('horizoff') : NaN;
+      check(((flags >>> 30) & 1) === 1 && horizoff === 0, m.name + ': player ' + who + ' has mouse aiming at ' + w + ', standing on the slope with an untilted view (Flags ' + (f ? f.get('Flags') : '?') + ', horizoff ' + horizoff + ')');
+    });
+  } finally { await cleanup(relay); }
+}
+SCENARIOS['mouse-aim'] = {
+  what: 'mouse aiming toggled during a game, then a sloped floor (bugs.md L25): every machine agrees (browser host presses U, native joins; native host, browser joiner presses U; two browsers, the joiner holds U in held mode)',
+  run: async () => {
+    await mouseAimGame(['browser', 'native'], 0, { key: '100', slope: 300, when: 320 });
+    await mouseAimGame(['native', 'browser'], 1, { key: '100', slope: 300, when: 320 });
+    await mouseAimGame(['browser', 'browser'], 1, { key: '250,100', held: true, slope: 280, when: 300 });
+  },
+};
+
 // A visible game is unchanged by brief 04c (only by name: it needs the build from before it). NETPLAY_OLD_SW (a native
 // binary) and NETPLAY_OLD_WASM (a build of the page) are the old build; a machine of the old build and one of the new play in
 // one room, both visible. The old build's drawing clears the override sectors' parallax bit in its first frame, the new one
@@ -1195,11 +1241,11 @@ SCENARIOS.errors = {
   run: async () => {
     let relay = null;
     try {
-      // no relay is running on 48302
-      await failCase('relay-unreachable', gameArgs({ net: ['-relay', 'ws://127.0.0.1:48392/vnet', '-host-room', '2'] }), /Network game failed.*(could not be reached|did not answer)/i, { under: 30 });
+      // no relay is running on PORT_NONE
+      await failCase('relay-unreachable', gameArgs({ net: ['-relay', 'ws://127.0.0.1:' + PORT_NONE + '/vnet', '-host-room', '2'] }), /Network game failed.*(could not be reached|did not answer)/i, { under: 30 });
       await failCase('plain-net', gameArgs({ net: ['-nm:2'] }), /needs a relay.*plain -net needs UDP/is, { under: 10 });
-      await failCase('udp-relay-address', gameArgs({ net: ['-relay', '127.0.0.1:48301', '-host-room', '2'] }), /wants the relay's WebSocket URL/i, { under: 10 });
-      await failCase('bad-code', gameArgs({ net: ['-relay', 'ws://127.0.0.1:48302/vnet', '-room', 'ABC'] }), /room code is 6 letters/i, { under: 10 });
+      await failCase('udp-relay-address', gameArgs({ net: ['-relay', '127.0.0.1:' + PORT_UDP, '-host-room', '2'] }), /wants the relay's WebSocket URL/i, { under: 10 });
+      await failCase('bad-code', gameArgs({ net: ['-relay', 'ws://127.0.0.1:' + PORT_HTTP + '/vnet', '-room', 'ABC'] }), /room code is 6 letters/i, { under: 10 });
       relay = await startRelay(['-max-members', '2']);
       await failCase('no-such-room', gameArgs({ net: ['-relay', relay.ws, '-room', 'ABCDEF'] }), /Network game failed.*no room with that code/i, { under: 20 });
 
@@ -1601,7 +1647,7 @@ SCENARIOS['host-join'] = {
         await h.start();
         const code = await waitRoomCode(h, 60000);
         const out = await h.out();
-        check(/Re-launching: \S+ -net -relay 127\.0\.0\.1:48301 -host-room 2 --/.test(out), h.name + ' re-launched itself with -net -relay <its setting> -host-room 2', (out.match(/Re-launching:[^\n]*/) || [''])[0]);
+        check(new RegExp('Re-launching: \\S+ -net -relay 127\\.0\\.0\\.1:' + PORT_UDP + ' -host-room 2 --').test(out), h.name + ' re-launched itself with -net -relay <its setting> -host-room 2', (out.match(/Re-launching:[^\n]*/) || [''])[0]);
         const g = await netPage('p1', '&join=' + code, play);
         await g.start();
         await finish([h, g], 'native console host');
@@ -1614,7 +1660,7 @@ SCENARIOS['host-join'] = {
         const code = await waitRoomCode(h);
         const g = nativeMachine('p1', play.concat(['-testosd60,join ' + code.toLowerCase()]), { dump: 'd.bin', cfg });
         await g.start();
-        check(!!(await outHas(g, new RegExp('Re-launching: \\S+ -net -relay 127\\.0\\.0\\.1:48301 -room ' + code + ' --'), 60000)), g.name + ' re-launched itself with -room ' + code);
+        check(!!(await outHas(g, new RegExp('Re-launching: \\S+ -net -relay 127\\.0\\.0\\.1:' + PORT_UDP + ' -room ' + code + ' --'), 60000)), g.name + ' re-launched itself with -room ' + code);
         await finish([h, g], 'native console join');
       }
       // 4. the menus: Escape, Host Online Game (G), 2 Players (2) on one page; Escape, Join Online Game (J), the code, Enter on another
@@ -1727,7 +1773,7 @@ SCENARIOS['lobby-errors'] = {
         for (const m of [h, j]) { await m.stop(); machines.splice(machines.indexOf(m), 1); }
       }
       await closeEnv();
-      CONFIG_RELAY = 'ws://127.0.0.1:48392/vnet';     // nothing listens there
+      CONFIG_RELAY = 'ws://127.0.0.1:' + PORT_NONE + '/vnet';     // nothing listens there
       await pageRefusal('relay-unreachable', '?test=1&persist=0&host=2', /Network game failed.*could not be reached/, { start: true, ready: ['ready'] });
       await closeEnv();
       // test mode needs testMode: true in config.js: on a site that leaves it false, ?test=1 in a link does nothing
