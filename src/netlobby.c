@@ -248,7 +248,8 @@ int NetLobbyWait(void)
             if (!host)
                 buildputs("Lobby: only the host can start the game.\n");
             else if (!mmulti_vnet_startnow())
-                buildputs("Lobby: starting needs at least 2 players in the room; it will start as soon as there are.\n");
+                buildputs("Lobby: starting needs at least 2 players in the room; press it again when there are.\n");
+            fflush(stdout);
             }
         }
 
