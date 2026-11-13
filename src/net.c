@@ -84,6 +84,7 @@ BOOL ready2send = 0;
 
 BOOL CommEnabled = FALSE;
 BYTE CommPlayers = 0;
+BOOL MouseAimInInput[MAX_SW_PLAYERS_REG];  // the player's options packet says SK_MOUSE_AIM is sent
 int movefifoplc, movefifosendplc;//, movefifoend[MAX_SW_PLAYERS];
 unsigned int MoveThingsCount;
 
@@ -422,6 +423,8 @@ InitNetPlayerOptions(VOID)
         p.MouseAimingOn = gs.MouseAimingOn;
         p.Color = gs.NetColor;
         strcpy(p.PlayerName, CommPlayerName);
+        p.MouseAimInInput = 1;
+        MouseAimInInput[myconnectindex] = TRUE;
 
         netbroadcastpacket((BYTEp)(&p), sizeof(p));
         }
@@ -1447,6 +1450,9 @@ getpackets(VOID)
                 SET(pp->Flags, PF_MOUSE_AIMING_ON);
             else
                 RESET(pp->Flags, PF_MOUSE_AIMING_ON);
+
+            // from now on with each input too (an older build's packet is shorter)
+            MouseAimInInput[otherconnectindex] = packbufleng >= (int)sizeof(PACKET_OPTIONS) && p->MouseAimInInput;
 
             // palette
             pp->TeamColor = p->Color;

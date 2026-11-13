@@ -98,6 +98,7 @@ typedef struct PACKED
     BOOL MouseAimingOn;
     BYTE Color;
     char PlayerName[32];
+    BYTE MouseAimInInput;   // 1: this player's mouse aiming travels with each input (SK_MOUSE_AIM)
     }PACKET_OPTIONS,*PACKET_OPTIONSp;
 
 typedef struct PACKED
@@ -128,6 +129,8 @@ typedef struct PACKED
 #endif
 
 extern BYTE syncstat[MAXSYNCBYTES];
+extern BOOL MouseAimInInput[MAX_SW_PLAYERS_REG];
+VOID DoPlayerMouseAimSync(PLAYERp pp);
 extern BOOL PredictionOn;
 extern PLAYER PredictPlayer;
 extern PLAYERp ppp;

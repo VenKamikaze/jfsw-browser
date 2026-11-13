@@ -5018,6 +5018,7 @@ getinput(SW_PACKET *loc)
     int32 momx, momy;
     int aimvel;
     int mouseaxis;
+    BOOL aiming;
 
     extern BOOL MenuButtonAutoRun;
     extern BOOL MenuButtonAutoAim;
@@ -5034,19 +5035,26 @@ getinput(SW_PACKET *loc)
     // MAKE SURE THIS WILL GET SET
     SET_LOC_KEY(loc->bits, SK_QUIT_GAME, MultiPlayQuitFlag);
 
+    // Mouse aiming. PlayerAutoLook() reads PF_MOUSE_AIMING_ON, so in a network game
+    // every machine must change a player's flag at the same tic: here only this
+    // machine's own state (gs.MouseAimingOn) changes, it goes out with the input
+    // (SK_MOUSE_AIM) and DoPlayerMouseAimSync() sets the flag in the tic that
+    // input is played. Single player sets the flag here, as it always did.
+    aiming = CommEnabled ? gs.MouseAimingOn : !!TEST(pp->Flags, PF_MOUSE_AIMING_ON);
+
     if (gs.MouseAimingType == 1) // while held
         {
         if (BUTTON(gamefunc_Mouse_Aiming))
             {
-            SET(pp->Flags, PF_MOUSE_AIMING_ON);
+            aiming = TRUE;
             gs.MouseAimingOn = TRUE;
             }
         else
             {
-            if (TEST(pp->Flags, PF_MOUSE_AIMING_ON))
+            if (aiming)
                 {
                 SET_LOC_KEY(loc->bits, SK_LOOK_UP, TRUE);
-                RESET(pp->Flags, PF_MOUSE_AIMING_ON);
+                aiming = FALSE;
                 gs.MouseAimingOn = FALSE;
                 }
             }
@@ -5056,9 +5064,9 @@ getinput(SW_PACKET *loc)
         {
         if (BUTTON(gamefunc_Mouse_Aiming) && !BUTTONHELD(gamefunc_Mouse_Aiming))
             {
-            FLIP(pp->Flags, PF_MOUSE_AIMING_ON);
+            aiming = !aiming;
             gs.MouseAimingOn = !gs.MouseAimingOn;
-            if (!TEST(pp->Flags, PF_MOUSE_AIMING_ON))
+            if (!aiming)
                 {
                 SET_LOC_KEY(loc->bits, SK_LOOK_UP, TRUE);
                 PutStringInfo(pp, "Mouse Aiming Off");
@@ -5070,7 +5078,14 @@ getinput(SW_PACKET *loc)
             }
         }
 
-    if (TEST(pp->Flags, PF_MOUSE_AIMING_ON))
+    if (CommEnabled)
+        SET_LOC_KEY(loc->bits, SK_MOUSE_AIM, aiming);
+    else if (aiming)
+        SET(pp->Flags, PF_MOUSE_AIMING_ON);
+    else
+        RESET(pp->Flags, PF_MOUSE_AIMING_ON);
+
+    if (aiming)
         {
         mouseaxis = analog_lookingupanddown;
         }
