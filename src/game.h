@@ -2375,6 +2375,7 @@ void getsyncstat(void );	// sync.c
 void SyncStatMessage(void );	// sync.c
 
 void drawscreen(PLAYERp pp);	// draw.c
+VOID DrawSetupLevelStats(VOID);	// draw.c
 void post_analyzesprites(void );	// draw.c
 int COVERsetgamemode(int mode, int xdim, int ydim, int bpp);	// draw.c
 VOID ScreenCaptureKeys(VOID);	// draw.c

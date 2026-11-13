@@ -3,7 +3,7 @@
 // network games through a local vnet relay, and every machine's own record of every game tic is
 // compared byte for byte.
 //
-//   node tests/web/netplay.js                      # every scenario but lag-matrix (a report), one after the other (about 17 minutes)
+//   node tests/web/netplay.js                      # every scenario but lag-matrix (a report), one after the other (about 21 minutes)
 //   node tests/web/netplay.js ws wt                # only these
 //   node tests/web/netplay.js --list
 //   WASM_DIR=build-wasm-x node tests/web/netplay.js ws    # another build of the page (mutation runs)
@@ -90,9 +90,16 @@ async function env() {
   if (!browserEnv) {
     if (!fs.existsSync(path.join(L.BUILD, 'sw.wasm'))) { throw new Error(L.BUILD + '/sw.wasm not found: run scripts/build-wasm.sh'); }
     if (!fs.existsSync(L.GRP)) { throw new Error(L.GRP + ' not found: run scripts/fetch-test-data.sh'); }
-    const server = await serve(L.BUILD, { '/swshare.grp': L.GRP }, PORT_WEB);
+    const mounts = { '/swshare.grp': L.GRP };
+    // NETPLAY_OLD_WASM=<dir>: another build of the page, served under /old/ (the old-new scenario, brief 04c)
+    if (process.env.NETPLAY_OLD_WASM) {
+      const dir = path.resolve(process.env.NETPLAY_OLD_WASM);
+      for (const f of fs.readdirSync(dir)) { mounts['/old/' + f] = path.join(dir, f); }
+      mounts['/old/swshare.grp'] = L.GRP;
+    }
+    const server = await serve(L.BUILD, mounts, PORT_WEB);
     const browser = await chromium.launch();
-    browserEnv = { server, browser, base: 'http://127.0.0.1:' + PORT_WEB + '/index.html' };
+    browserEnv = { server, browser, base: 'http://127.0.0.1:' + PORT_WEB + '/index.html', oldBase: 'http://127.0.0.1:' + PORT_WEB + '/old/index.html' };
   }
   return browserEnv;
 }
@@ -119,7 +126,8 @@ function gameArgs(o) {
   return a.concat(o.extra || []);
 }
 
-// A browser machine. o.relay is the URL given to -relay; o.query adds page parameters (knobs); o.hidden imitates a hidden tab.
+// A browser machine. o.relay is the URL given to -relay; o.query adds page parameters (knobs); o.hidden imitates a hidden tab;
+// o.old: the build of the page that NETPLAY_OLD_WASM names.
 async function browserMachine(name, args, o) {
   o = o || {};
   const e = await env();
@@ -129,7 +137,8 @@ async function browserMachine(name, args, o) {
   page.on('pageerror', (er) => errors.push('pageerror: ' + er.message));
   page.on('dialog', (d) => { errors.push('dialog: ' + d.message()); d.dismiss().catch(() => {}); });
   const q = '?test=1&persist=0&args=' + encodeURIComponent(args.join(' ')) + (o.query || '');
-  await page.goto(e.base + q);
+  if (o.old && !process.env.NETPLAY_OLD_WASM) { throw new Error('an old build of the page needs NETPLAY_OLD_WASM'); }
+  await page.goto((o.old ? e.oldBase : e.base) + q);
   await L.waitState(page, 'ready', 60000);
   const m = {
     kind: 'browser', name, page, context, errors, started: 0,
@@ -157,7 +166,8 @@ async function browserMachine(name, args, o) {
   return m;
 }
 
-// A native machine (scripts/run-headless.sh). o.relay is HOST:PORT; o.impair a VNET_IMPAIR spec.
+// A native machine (scripts/run-headless.sh). o.relay is HOST:PORT; o.impair a VNET_IMPAIR spec; o.sw another binary than
+// NETPLAY_SW or ./sw.
 function nativeMachine(name, args, o) {
   o = o || {};
   const wd = path.join(tmp(), name);
@@ -169,7 +179,7 @@ function nativeMachine(name, args, o) {
     kind: 'native', name, wd, started: 0, errors: [],
     async start() {
       const out = fs.openSync(outFile, 'w');
-      m.child = spawn(path.join(L.root, 'scripts', 'run-headless.sh'), ['--workdir', wd, '--timeout', String(o.timeout || 400)].concat(process.env.NETPLAY_SW ? ['--sw', process.env.NETPLAY_SW] : [], ['--'], args),
+      m.child = spawn(path.join(L.root, 'scripts', 'run-headless.sh'), ['--workdir', wd, '--timeout', String(o.timeout || 400)].concat(o.sw || process.env.NETPLAY_SW ? ['--sw', o.sw || process.env.NETPLAY_SW] : [], ['--'], args),
         { env: envv, stdio: ['ignore', out, out], detached: true });
       m.done = new Promise((r) => m.child.on('exit', (c, s) => { m.code = c; r(c); }));
       m.started = now();
@@ -267,11 +277,16 @@ function parseState(text) {
   return m;
 }
 // The fields two machines' state dumps disagree about at `when` (e.g. 't1'). Fields that are this machine's own and not simulation
-// state are left out (myconnectindex, krandcount, numframes, the input queue's movefifoend, and the fields a sprite line lists in
-// drawscratch=: what the drawing code keeps there), and code and data addresses (values ending in '@') when the machines run
-// different builds.
+// state are left out (myconnectindex, krandcount, numframes, the input queue's movefifoend, a player's FadeAmt, FadeTics and
+// NightVision, and the fields a sprite line lists in drawscratch=: what the drawing code keeps there), and code and data addresses
+// (values ending in '@') when the machines run different builds. FadeAmt and FadeTics (brief 04c) are the screen flash when a
+// player is hurt or picks something up: PlayerUpdateHealth() (panel.c) and the other callers of SetFadeAmt() (menus.c) set them
+// only for the player this machine looks through (screenpeek), so in the original game they differ between machines as soon as a
+// player is hurt; nothing but the palette code reads them (DoPaletteFlash, SetFadeAmt). NightVision likewise: only
+// DoPlayerNightVisionPalette() (inv.c) sets it, only for screenpeek, and only drawing (analyzesprites) and the F11 key read it.
+// None of the three is in the state hash.
 function stateDifferences(a, b, when, mixed) {
-  const ignore = new Set(['global myconnectindex', 'global krandcount', 'global numframes', 'player movefifoend']);
+  const ignore = new Set(['global myconnectindex', 'global krandcount', 'global numframes', 'player movefifoend', 'player FadeAmt', 'player FadeTics', 'player NightVision']);
   const out = [];
   const keys = new Set([...a.keys(), ...b.keys()].filter((k) => k.startsWith(when + ' ')));
   for (const k of keys) {
@@ -390,7 +405,9 @@ const TICS = 1200;
 const LOAD = () => 'load average ' + os.loadavg().map((x) => x.toFixed(1)).join(' ');
 
 // Two or more machines in one room. `kinds` is a list of 'browser' | 'native' (the first hosts). Returns
-// { ms, relay }. o: tics, query (page knobs, per machine index function), impair(i), hidden, nudge: {i: tic}.
+// { ms, relay }. o: tics, query (page knobs, per machine index function), impair(i), hidden, nudge: {i: tic};
+// onStart(i, m), called right after machine i is started; machine(i), more options for machine i's browserMachine() or
+// nativeMachine() (old, sw).
 async function room(relay, kinds, o) {
   o = o || {};
   const tics = o.tics || TICS;
@@ -406,12 +423,13 @@ async function room(relay, kinds, o) {
     let m;
     if (kinds[i] === 'browser') {
       const q = (o.query ? o.query(i, relay) : '') + (impair ? '&impair=' + encodeURIComponent(impair) : '');
-      m = await browserMachine(name, args, { query: q, dump: 'd.bin' });
+      m = await browserMachine(name, args, Object.assign({ query: q, dump: 'd.bin' }, o.machine ? o.machine(i) : {}));
     } else {
-      m = nativeMachine(name, args, { impair, dump: 'd.bin' });
+      m = nativeMachine(name, args, Object.assign({ impair, dump: 'd.bin' }, o.machine ? o.machine(i) : {}));
     }
     ms.push(m);
     await m.start();
+    if (o.onStart) { await o.onStart(i, m); }
     if (i === 0) { code = await waitRoomCode(m); console.log('  room ' + code + ' (' + kinds[0] + ' host)'); }
   }
   return ms;
@@ -770,6 +788,168 @@ SCENARIOS['hidden-thin'] = {
 SCENARIOS['hidden-host'] = {
   what: 'a hidden, throttled browser host with a native slave: the same',
   run: () => hiddenRoom(['browser', 'native'], 0),
+};
+
+// ---- a tab hidden before the level's first frame (brief 04c, bugs.md L19) ----------------------------
+// Drawing leaves something behind for good: every frame clears the parallax bit of the ceiling/floor picture override sectors
+// (FAF_DrawRooms, draw.c), and the game reads that bit every tic. In the original game every machine draws before tic 1. A
+// hidden tab (brief 04's hidden pass) draws nothing, so it kept the map's bits and was out of sync from tic 1 on; since brief
+// 04c every machine applies that effect when the level is set up (DrawSetupLevelStats, draw.c). Here the tab is made hidden
+// as soon as its game is started, before the level loads: document.hidden at once, and the throttling of a background tab
+// (no animation frames, timers once a second) as soon as its relay session is up, so that the start-up before it is not
+// held to one timer run a second. It then never draws a frame of the level: its numframes (state dumps) must not move
+// from the level's start to its last tic. Every record and every field must agree with the machines that did draw, at the
+// level's start, at tics 1 to 3 and at the last tic, and the override sectors must have no parallax bit at tic 1.
+const HF_TICS = 400;
+async function hideFromStart(m) {
+  await hide(m.page, false);
+  m.throttled = (async () => {
+    const t0 = now();
+    while (now() - t0 < 90000) {
+      if (/room code [A-Z2-9]{6}|joined room/.test(await m.out())) { await hide(m.page, true); return true; }
+      if ((await m.state()) !== 'running') { return false; }
+      await sleep(100);
+    }
+    return false;
+  })();
+}
+// The sector stat bits of the planes the ceiling/floor picture override markers (the sprites with drawscratch=) change.
+function overridePlanes(st, when) {
+  const r = [];
+  for (const [k, f] of st) {
+    if (!k.startsWith(when + ' spr ') || !f.has('drawscratch')) { continue; }
+    const sec = f.get('sectnum'), plane = f.get('clipdist') === '0' ? 'ceilingstat' : 'floorstat';
+    const s = st.get(when + ' sec ' + sec);
+    r.push({ sector: +sec, plane, plax: s ? (parseInt(s.get(plane), 16) & 1) : -1 });
+  }
+  return r;
+}
+// One game. kinds as for room(); hiddenIdx: the machine hidden from its start. o.levels: what each level played must show,
+// [{ prefix: '' or 'L2.', last: its last tic with a state dump, sectors: its numsectors }]; o.extra(i): more arguments;
+// o.log: { re, what }, a line every machine must have printed.
+async function hiddenFirstGame(kinds, hiddenIdx, o) {
+  o = o || {};
+  const tics = o.tics || HF_TICS;
+  const levels = o.levels || [{ prefix: '', last: tics }];
+  const relay = await startRelay();
+  try {
+    console.log('  ' + kinds.join(' + ') + ', ' + (hiddenIdx === 0 ? 'the host' : 'p' + hiddenIdx) + ' hidden from its start (' + LOAD() + ')');
+    const ms = await room(relay, kinds, { tics, state: true, autonet: o.autonet,
+      extra: (i) => levels.map((l) => '-teststate' + l.last).concat(o.extra ? o.extra(i) : []),
+      onStart: async (i, m) => { if (i === hiddenIdx) { await hideFromStart(m); } } });
+    const h = ms[hiddenIdx];
+    const limit = (o.limitTics || tics) / NOMINAL * 1000 * 3 + 120000;
+    for (const m of ms) { await m.waitEnd(limit - (now() - ms[0].started)); }
+    check(await h.throttled, h.name + ' was throttled as a background tab once its relay session was up');
+    const hl = await h.page.evaluate(() => ({ log: Module.jfswHiddenLog.length, frames: Module.jfswShowframes, net: Module.jfswHiddenLog.filter((r) => r === 1).length })).catch(() => null);
+    console.log('  the game took ' + ((now() - ms[0].started) / 1000).toFixed(1) + ' s; ' + h.name + ': ' + (hl ? hl.log + ' hidden passes (' + hl.net + ' resumed by a network event), ' + hl.frames + ' pictures asked for in all' : 'no counters'));
+    check(!!hl && hl.log > 100, h.name + ' was driven by hidden-tab passes (' + (hl ? hl.log : 0) + ')');
+    await checkGame(ms, tics);
+    if (o.log) {
+      for (const m of ms) { check(o.log.re.test(await m.out()), m.name + ' ' + o.log.what); }
+    }
+    const st = [];
+    for (const m of ms) { const b = await m.readFile('d.bin.state'); st.push(b ? parseState(b.toString()) : null); }
+    check(st.every(Boolean), 'every machine wrote its state dump');
+    if (!st.every(Boolean)) { return { ms, st }; }
+    for (const l of levels) {
+      const whens = ['start', 't1', 't2', 't3', 't' + l.last].map((w) => l.prefix + w);
+      const missing = st.map((a, i) => whens.filter((w) => !a.has(w + ' global')).map((w) => ms[i].name + ' ' + w)).flat();
+      check(missing.length === 0, 'every machine has the state dumps ' + whens.join(', '), missing.join(', '));
+      if (missing.length) { continue; }
+      if (l.sectors) {
+        const ns = st.map((a) => +a.get(l.prefix + 'start global').get('numsectors'));
+        check(ns.every((n) => n === l.sectors), 'the level ' + (l.prefix || 'first ') + 'played is the one asked for (' + ns.join(', ') + ' sectors, want ' + l.sectors + ')');
+      }
+      const frames = (a, w) => +a.get(l.prefix + w + ' global').get('numframes') - +a.get(l.prefix + 'start global').get('numframes');
+      for (let i = 0; i < ms.length; i++) {
+        const f1 = frames(st[i], 't1'), fl = frames(st[i], 't' + l.last);
+        if (i === hiddenIdx) {
+          check(f1 === 0 && fl === 0, ms[i].name + ' (hidden) drew no frame of the level ' + l.prefix + ' (frames from its start to tic 1: ' + f1 + ', to tic ' + l.last + ': ' + fl + ')');
+        } else {
+          check(f1 > 0, ms[i].name + ' (visible) drew before tic 1, as every machine does in the original game (' + f1 + ' frames)');
+        }
+      }
+      for (let k = 1; k < ms.length; k++) {
+        for (const w of whens) {
+          const d = stateDifferences(st[0], st[k], w, ms[0].kind !== ms[k].kind);
+          check(d.length === 0, ms[0].name + ' and ' + ms[k].name + ' agree field by field at ' + w, d.slice(0, 10).join('; '));
+        }
+      }
+      for (let i = 0; i < ms.length; i++) {
+        const planes = overridePlanes(st[i], l.prefix + 't1');
+        check(planes.length > 0 && planes.every((p) => p.plax === 0), ms[i].name + ': at ' + l.prefix + 't1 the override sectors have no parallax bit, as the first frame leaves them ('
+          + planes.map((p) => 'sector ' + p.sector + ' ' + p.plane + ' ' + p.plax).join(', ') + ')');
+      }
+    }
+    return { ms, st };
+  } finally { await cleanup(relay); }
+}
+SCENARIOS['hidden-first'] = {
+  what: 'a tab hidden before the level\'s first frame (bugs.md L19): it draws nothing and agrees record for record and field by field (native host, two browsers, three machines, a hidden browser host)',
+  run: async () => {
+    await hiddenFirstGame(['native', 'browser'], 1);
+    await hiddenFirstGame(['browser', 'browser'], 1);
+    await hiddenFirstGame(['browser', 'browser', 'native'], 1);
+    await hiddenFirstGame(['browser', 'native'], 0);
+  },
+};
+// The same across a level change while hidden: every machine leaves E1L1 at tic HL_EXIT for E1L3 (-testexit, test-only: as a
+// level exit switch, without the bonus screen, which waits for a key), which has six override sectors, and plays HF_TICS
+// tics there; the hidden tab draws no frame of either level.
+const HL_EXIT = 200, HL_LEVEL = 3, HL_SECTORS = 481;
+const hiddenLevel = (kinds, hiddenIdx) => hiddenFirstGame(kinds, hiddenIdx, {
+  extra: () => ['-testexit' + HL_EXIT + ',' + HL_LEVEL], limitTics: HL_EXIT + HF_TICS,
+  log: { re: new RegExp('TEST: leaving the level at tic ' + HL_EXIT + ' for level ' + HL_LEVEL + '\\b'), what: 'left the first level at tic ' + HL_EXIT + ' for level ' + HL_LEVEL },
+  levels: [{ prefix: '', last: HL_EXIT, sectors: 486 }, { prefix: 'L2.', last: HF_TICS, sectors: HL_SECTORS }] });
+SCENARIOS['hidden-level'] = {
+  what: 'the same across a level change while hidden: E1L1 to E1L3 at tic ' + HL_EXIT + ' (-testexit); native host and hidden browser, two browsers, a hidden browser host',
+  run: async () => {
+    await hiddenLevel(['native', 'browser'], 1);
+    await hiddenLevel(['browser', 'browser'], 1);
+    await hiddenLevel(['browser', 'native'], 0);
+  },
+};
+
+// A visible game is unchanged by brief 04c (only by name: it needs the build from before it). NETPLAY_OLD_SW (a native
+// binary) and NETPLAY_OLD_WASM (a build of the page) are the old build; a machine of the old build and one of the new play in
+// one room, both visible. The old build's drawing clears the override sectors' parallax bit in its first frame, the new one
+// when the level is set up: so the two must agree on every record and on every field at tics 1 to 3, and their state when
+// the level starts (before any frame) must differ in exactly those bits.
+SCENARIOS['old-new'] = {
+  manual: true,
+  what: 'a visible game is unchanged by the fix: old and new builds in one room agree on every record and on every field at tics 1 to 3 (NETPLAY_OLD_SW, NETPLAY_OLD_WASM; only by name)',
+  run: async () => {
+    if (!process.env.NETPLAY_OLD_SW || !process.env.NETPLAY_OLD_WASM) { check(false, 'old-new needs NETPLAY_OLD_SW and NETPLAY_OLD_WASM'); return; }
+    const tics = 60;
+    // E1L1, and E1L3 (six override sectors, and two FLOOR_SLOPE_DONT_DRAW sectors whose slope bit the map already has)
+    const E1L3 = '-autonet 2,2,2,1,0,0,0,0,0,0';
+    for (const [kinds, old, autonet] of [[['native', 'native'], 0], [['native', 'native'], 1], [['browser', 'browser'], 0], [['browser', 'browser'], 1],
+      [['browser', 'native'], 0], [['browser', 'native'], 1], [['native', 'browser'], 0], [['native', 'browser'], 1],
+      [['native', 'native'], 0, E1L3], [['browser', 'native'], 1, E1L3], [['native', 'browser'], 0, E1L3]]) {
+      const relay = await startRelay();
+      try {
+        console.log('  ' + kinds.map((k, i) => k + (i === old ? ' (old)' : ' (new)')).join(' + ') + (autonet ? ', E1L3' : ', E1L1') + ' (' + LOAD() + ')');
+        const ms = await room(relay, kinds, { tics, state: true, autonet,
+          machine: (i) => (i === old ? (kinds[i] === 'browser' ? { old: true } : { sw: process.env.NETPLAY_OLD_SW }) : {}) });
+        for (const m of ms) { await m.waitEnd(90000 - (now() - ms[0].started)); }
+        await checkGame(ms, tics);
+        const st = [];
+        for (const m of ms) { const b = await m.readFile('d.bin.state'); st.push(b ? parseState(b.toString()) : null); }
+        check(st.every(Boolean), 'every machine wrote its state dump');
+        if (!st.every(Boolean)) { continue; }
+        for (const w of ['t1', 't2', 't3']) {
+          const d = stateDifferences(st[0], st[1], w, true);
+          check(d.length === 0, 'old and new agree field by field at ' + w, d.slice(0, 10).join('; '));
+        }
+        const d = stateDifferences(st[0], st[1], 'start', true);
+        const want = overridePlanes(st[old], 'start').map((p) => 'sec ' + p.sector + ' ' + p.plane).sort();
+        const got = d.map((x) => x.split(':')[0]).filter((x) => x !== 'hash list').sort();     // (the state hash covers those bits)
+        console.log('  at the start: ' + d.join('; '));
+        check(want.length > 0 && JSON.stringify(got) === JSON.stringify(want), 'at the level\'s start (no frame yet) they differ in exactly the override sectors\' stat (' + got.join(', ') + ')');
+      } finally { await cleanup(relay); }
+    }
+  },
 };
 
 SCENARIOS['hidden-local'] = {

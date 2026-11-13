@@ -610,7 +610,7 @@ void TestNudgeArg(int tic)
 // NumSyncBytes = 8 and so also changes the version that is sent.
 int TestVersionSalt(void)
     {
-    return (NumSyncBytes - 1) * 1000003 + TestQuitTics * 37;
+    return (NumSyncBytes - 1) * 1000003 + TestQuitTics * 37 + TestExitTic * 101 + TestExitLevel * 7;
     }
 
 // -testdump<name>: every machine writes its own record of every game tic to <name>, so that a test
@@ -701,9 +701,11 @@ static unsigned int TestStateHash(void)
 // alone gives only the first ones). Fields ending in '@' hold code or data addresses (as offsets from
 // a fixed symbol) and are equal only between machines running the same build. krandcount, numframes
 // and movefifoend are this machine's own (not simulation state), as are the angle and xvel of the
-// ceiling/floor picture override markers (TestStateHash). It is opt-in because it is slow: writing
-// the first dump (about 1.3 MB for E1L1) delays a browser's first frame noticeably, and that alone
-// changes the start of a game (it made the tic 1 case of brief 04b happen in most games).
+// ceiling/floor picture override markers (TestStateHash) and a player's FadeAmt, FadeTics and
+// NightVision (the screen flash and the night vision tint, set for the player this machine looks
+// through: brief 04c, code-facts.md section 17). It is opt-in because it is slow: writing the first dump (about 1.3 MB for E1L1) delays a
+// browser's first frame noticeably, and that alone changes the start of a game (it made the tic 1
+// case of brief 04b happen in most games).
 #include "interp.h"
 static int TestStateOn;
 static int TestStateTics[16];
@@ -867,9 +869,25 @@ static void TestStateFull(const char *when)
     }
 
 // Called when RunLevel starts (game.c), after InitRunLevel: the state before the first input.
+// The dumps of the first level played are labelled start, t1, t2, ...; those of later levels (brief
+// 04c, -testexit) get the number of the level played in front: L2.start, L2.t1, ...
+static int TestStateLevels;
+
+static void TestStateWhen(char *buf, const char *what)
+    {
+    if (TestStateLevels > 1)
+        sprintf(buf, "L%d.%s", TestStateLevels, what);
+    else
+        strcpy(buf, what);
+    }
+
 void TestStateStart(void)
     {
-    TestStateFull("start");
+    char when[32];
+
+    TestStateLevels++;
+    TestStateWhen(when, "start");
+    TestStateFull(when);
     }
 
 // -testslowstart<ms> (test-only, brief 04b): this machine waits <ms> milliseconds when RunLevel
@@ -911,7 +929,7 @@ void TestSlowStart(void)
 static void TestStateTic(void)
     {
     int i;
-    char when[32];
+    char what[16], when[32];
 
     if (!TestStateOn || !TestDumpName[0])
         return;
@@ -920,7 +938,8 @@ static void TestStateTic(void)
             break;
     if (MoveThingsCount > 3 && i == TestStateNum)
         return;
-    sprintf(when, "t%u", MoveThingsCount);
+    sprintf(what, "t%u", MoveThingsCount);
+    TestStateWhen(when, what);
     TestStateFull(when);
     }
 
@@ -1222,12 +1241,151 @@ void TestLagReport(void)
                 TestLagDFlushed[p & 15], TestLagDPaced[p & 15], TestLagDRedundant[p & 15]);
     }
 
+// -testdrawcheck[2] (test-only, brief 04c): checks DrawSetupLevelStats() (draw.c) against what a
+// drawn frame really leaves behind. When the level is set up (InitLevel), the game works out what
+// DrawSetupLevelStats() would make of every sector and keeps that, but puts the map's state back and
+// does not call it; after the level's first frame (RunLevel, before any tic: a single player game
+// makes its first input inside that frame) it compares every sector and every wall with that and
+// prints one line, "TEST: draw check ...", naming the first differences (a single player game then
+// quits). -testdrawcheck2 first adds
+// a second override marker to the plane of each one (another picture, TAG2 + 1), the case where the
+// order of the markers matters (with two on one plane one frame leaves the first one's picture and
+// stat bits behind). Two controls, for showing that the check can fail: -testdrawcheck3 compares
+// the frame with the map's state as it was (nothing done), -testdrawcheck4 with two markers on each
+// plane and only the parallax bits cleared (what brief 04c's first version of DrawSetupLevelStats()
+// did). Inert without the argument; tests/draw-setup.sh runs it on every shareware level.
+int TestDrawCheck;
+static int TestDrawPending, TestDrawMarkers;
+static SECTOR TestDrawSector[MAXSECTORS], TestDrawSaveSector[MAXSECTORS];
+static WALL TestDrawWall[MAXWALLS];
+static SPRITE TestDrawSaveSprite[MAXSPRITES];
+
+void TestDrawCheckArg(int mode)
+    {
+    TestDrawCheck = mode >= 2 && mode <= 4 ? mode : 1;
+    }
+
+int TestDrawCheckLevel(void)
+    {
+    short i, nexti, n = 0, list[MAXSPRITES];
+
+    if (!TestDrawCheck)
+        return 0;
+    TRAVERSE_SPRITE_STAT(headspritestat[STAT_CEILING_FLOOR_PIC_OVERRIDE], i, nexti)
+        list[n++] = i;
+    TestDrawMarkers = n;
+    if (TestDrawCheck == 2 || TestDrawCheck == 4)
+        {
+        for (i = 0; i < n; i++)
+            {
+            short j = COVERinsertsprite(sprite[list[i]].sectnum, STAT_CEILING_FLOOR_PIC_OVERRIDE);
+            memcpy(&sprite[j], &sprite[list[i]], sizeof(SPRITE));
+            sprite[j].lotag++;      // TAG2: another override picture
+            TestDrawMarkers++;
+            }
+        }
+    memcpy(TestDrawSaveSector, sector, sizeof(SECTOR) * numsectors);
+    memcpy(TestDrawSaveSprite, sprite, sizeof(sprite));
+    if (TestDrawCheck == 4)
+        {
+        TRAVERSE_SPRITE_STAT(headspritestat[STAT_CEILING_FLOOR_PIC_OVERRIDE], i, nexti)
+            {
+            if (SPRITE_TAG3(i) == 0)
+                RESET(sector[sprite[i].sectnum].ceilingstat, CEILING_STAT_PLAX);
+            else if (SPRITE_TAG3(i) == 1)
+                RESET(sector[sprite[i].sectnum].floorstat, FLOOR_STAT_PLAX);
+            }
+        TRAVERSE_SPRITE_STAT(headspritestat[STAT_FLOOR_SLOPE_DONT_DRAW], i, nexti)
+            SET(sector[sprite[i].sectnum].floorstat, FLOOR_STAT_SLOPE);
+        }
+    else if (TestDrawCheck != 3)
+        DrawSetupLevelStats();
+    memcpy(TestDrawSector, sector, sizeof(SECTOR) * numsectors);
+    memcpy(TestDrawWall, wall, sizeof(WALL) * numwalls);
+    memcpy(sector, TestDrawSaveSector, sizeof(SECTOR) * numsectors);
+    memcpy(sprite, TestDrawSaveSprite, sizeof(sprite));
+    TestDrawPending = 1;
+    return 1;
+    }
+
+void TestDrawCheckFrame(void)
+    {
+    extern short Level;
+    int i, ns = 0, nw = 0;
+    char what[512];
+    int len = 0;
+
+    if (!TestDrawPending)
+        return;
+    TestDrawPending = 0;
+    what[0] = 0;
+    for (i = 0; i < numsectors; i++)
+        {
+        SECTOR *a = &sector[i], *b = &TestDrawSector[i];
+        if (!memcmp(a, b, sizeof(SECTOR)))
+            continue;
+        ns++;
+        if (len < 400)
+            len += snprintf(what + len, sizeof(what) - len, "; sector %d: frame ceilingstat=%x floorstat=%x ceilingpicnum=%d floorpicnum=%d, setup %x %x %d %d",
+                i, (unsigned short)a->ceilingstat, (unsigned short)a->floorstat, a->ceilingpicnum, a->floorpicnum,
+                (unsigned short)b->ceilingstat, (unsigned short)b->floorstat, b->ceilingpicnum, b->floorpicnum);
+        }
+    for (i = 0; i < numwalls; i++)
+        {
+        if (memcmp(&wall[i], &TestDrawWall[i], sizeof(WALL)))
+            {
+            nw++;
+            if (len < 400)
+                len += snprintf(what + len, sizeof(what) - len, "; wall %d", i);
+            }
+        }
+    buildprintf("TEST: draw check, level %d: %d of %d sectors and %d of %d walls differ between the first frame and %s (%d override markers)%s\n",
+        Level, ns, numsectors, nw, numwalls,
+        TestDrawCheck == 3 ? "the map's state (control)" : TestDrawCheck == 4 ? "clearing the parallax bits only (control)" : "DrawSetupLevelStats",
+        TestDrawMarkers, what);
+    if (!CommEnabled)
+        {
+        // a single player game has nothing more to show (and does not leave by QuitFlag at once)
+        TerminateGame();
+        exit(0);
+        }
+    }
+
+// -testexit<T>,<L> (test-only, brief 04c): at the start of game tic T of the first level, every
+// machine leaves the level for level L (the next one without ",<L>"), as a level exit switch does
+// (sector.c), but without the co-op bonus screen, which waits for a key (FinishedLevel is not set).
+// It happens in domovethings, at the same tic on every machine; MoveLoop then runs no further tic of
+// that level (TestExitReached), so every machine has run exactly T tics of it, whatever inputs it
+// had buffered. For testing what a machine has at the start of the next level (a hidden browser
+// tab: bugs.md L19). Inert without the argument.
+int TestExitTic;
+int TestExitReached;
+int TestExitLevel;
+static int TestExitDone;
+
+void TestExitArg(const char *arg)
+    {
+    const char *c = strchr(arg, ',');
+
+    TestExitTic = atoi(arg);
+    TestExitLevel = c ? atoi(c + 1) : 0;
+    }
+
 void TestTicHook(void)
     {
     extern unsigned int MoveThingsCount;
 
     TestDumpTic();
     TestLagTic();
+
+    if (TestExitTic > 0 && !TestExitDone && (int)MoveThingsCount == TestExitTic)
+        {
+        TestExitDone = 1;
+        TestExitReached = 1;
+        Level = TestExitLevel > 0 ? TestExitLevel : Level + 1;
+        ExitLevel = TRUE;
+        buildprintf("TEST: leaving the level at tic %d for level %d\n", TestExitTic, Level);
+        }
 
     if (TestNudgeTic >= 0 && (int)MoveThingsCount == TestNudgeTic)
         {

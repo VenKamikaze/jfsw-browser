@@ -2208,7 +2208,14 @@ void PreDrawStackedWater(void)
     }
 
 
-void FAF_DrawRooms(int x, int y, int z, short ang, int horiz, short sectnum)
+// The ceiling/floor picture override markers (STAT_CEILING_FLOOR_PIC_OVERRIDE): for drawing, each
+// one saves its sector's ceiling (TAG3 0) or floor (TAG3 1) picnum in its TAG5 and stat in its TAG4,
+// puts its own picture (TAG2) and stat bits (TAG6) there and clears the parallax bit
+// (FAF_PicOverrideApply); after drawing each one puts the saved picnum and stat back, with the
+// parallax bit cleared (FAF_PicOverrideRestore). Both go through the markers in the same order, so
+// with two markers on one plane the second saves and puts back what the first put there.
+static VOID
+FAF_PicOverrideApply(VOID)
     {
     short i,nexti;
 
@@ -2235,17 +2242,15 @@ void FAF_DrawRooms(int x, int y, int z, short ang, int horiz, short sectnum)
             RESET(sector[sprite[i].sectnum].floorstat, FLOOR_STAT_PLAX);
             }
         }
+    }
 
-    drawrooms(x,y,z,ang,horiz,sectnum);
+static VOID
+FAF_PicOverrideRestore(VOID)
+    {
+    short i,nexti;
 
     TRAVERSE_SPRITE_STAT(headspritestat[STAT_CEILING_FLOOR_PIC_OVERRIDE], i, nexti)
         {
-        // manually set gotpic
-        if (TEST_GOTSECTOR(sprite[i].sectnum))
-            {
-            SET_GOTPIC(FAF_MIRROR_PIC);
-            }
-
         if (SPRITE_TAG3(i) == 0)
             {
             // restore ceilingpicnum and ceilingstat
@@ -2262,6 +2267,53 @@ void FAF_DrawRooms(int x, int y, int z, short ang, int horiz, short sectnum)
             //RESET(sector[sprite[i].sectnum].floorstat, FLOOR_STAT_TYPE_MASK);
             RESET(sector[sprite[i].sectnum].floorstat, FLOOR_STAT_PLAX);
             }
+        }
+    }
+
+void FAF_DrawRooms(int x, int y, int z, short ang, int horiz, short sectnum)
+    {
+    short i,nexti;
+
+    FAF_PicOverrideApply();
+
+    drawrooms(x,y,z,ang,horiz,sectnum);
+
+    TRAVERSE_SPRITE_STAT(headspritestat[STAT_CEILING_FLOOR_PIC_OVERRIDE], i, nexti)
+        {
+        // manually set gotpic
+        if (TEST_GOTSECTOR(sprite[i].sectnum))
+            {
+            SET_GOTPIC(FAF_MIRROR_PIC);
+            }
+        }
+
+    FAF_PicOverrideRestore();
+    }
+
+// What drawing leaves behind for good, applied once when a level is set up (brief 04c, bugs.md
+// L19). Every frame, FAF_DrawRooms() above puts the override pictures in and takes them out again,
+// and that leaves each override marker's plane with its parallax bit cleared (with two markers on
+// one plane also the first one's picture and stat bits); and PostDraw() sets the slope bit of each
+// FLOOR_SLOPE_DONT_DRAW sector. The game's code reads those bits and pictures (missiles, a player
+// landing on a parallax floor, z ranges, hitscans and splashes test the parallax bit;
+// FAF_ConnectCeiling/Floor the picture), and in the original game every machine draws a frame
+// before the first game tic of a level, so it always saw them as the first frame leaves them. A
+// machine that draws no frame before a tic (a hidden browser tab in a network game) would keep the
+// map's and go out of sync. So every machine does here what one frame does to them, with nothing
+// drawn in between, after the level and its sprites are set up and before the first frame and the
+// first tic; the frames that follow change nothing more.
+VOID
+DrawSetupLevelStats(VOID)
+    {
+    short i, nexti;
+
+    FAF_PicOverrideApply();
+    FAF_PicOverrideRestore();
+
+    // PreDraw() clears the bit and PostDraw() sets it, one marker at a time: what lasts is the bit set
+    TRAVERSE_SPRITE_STAT(headspritestat[STAT_FLOOR_SLOPE_DONT_DRAW], i, nexti)
+        {
+        SET(sector[sprite[i].sectnum].floorstat, FLOOR_STAT_SLOPE);
         }
     }
 
