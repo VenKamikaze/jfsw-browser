@@ -2983,11 +2983,6 @@ void MoveLoop(void)
             break;
 
         domovethings();
-        if (TestExitReached)
-            {
-            TestExitReached = 0;    // test-only (-testexit, sync.c): no further tic of this level
-            break;
-            }
 
         // The tic that ends the level (an exit switch, a kill or time limit,
         // FinishTimer) is its last tic on every machine. Further tics whose
@@ -3243,6 +3238,7 @@ RunLevel(VOID)
         }
 
     ready2send = 0;
+    TestLevelEnd();         // test-only (-testexit, -teststall: sync.c)
     }
 
 void swexit(int exitval)
@@ -3822,6 +3818,16 @@ int app_main(int argc, char const * const argv[])
         if (Bstrncasecmp(arg, "testexit", 8) == 0)
             {
             TestExitArg(arg+8);     // test-only: every machine leaves the first level at tic T for level L
+            }
+        else
+        if (Bstrncasecmp(arg, "teststall", 9) == 0)
+            {
+            TestStallArg(arg+9);    // test-only: this machine stops for a while at tic T of the first level
+            }
+        else
+        if (Bstrncasecmp(arg, "testfire", 8) == 0)
+            {
+            TestFireArg(atoi(arg+8));   // test-only: this machine's player throws shurikens from tic N on
             }
         else
         if (Bstrncasecmp(arg, "teststate", 9) == 0)

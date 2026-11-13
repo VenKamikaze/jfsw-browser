@@ -980,6 +980,7 @@ faketimerhandler(void)
         return;
 
     getinput(&loc);
+    TestInputHook(&loc);        // test-only (-testfire, sync.c)
 
     AveragePacket.vel += loc.vel;
     AveragePacket.svel += loc.svel;
