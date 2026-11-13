@@ -165,7 +165,7 @@ F3 added `level-exit` (about 70 s, in the full run; bugs.md L20): three games (a
 
 **The relay** is the one `web/config.js` names (`relay: 'wss://relay.example.org/vnet'`, or `'ws://127.0.0.1:PORT/vnet'` for a local relay whose `-origins` names the page's host:port). Never from the address, not even on a test page.
 
-**Test mode** (`?test=1` and the test-only parameters at the top of `web/jfsw.js`) needs `testMode: true` in `config.js` as well; the default is `false`, and a public site must keep it so (**brief 06: the deployed `config.js` leaves `testMode: false`**). The browser tests serve a `config.js` with `testMode: true` themselves (`tests/web/server.js`, `configText()`), so nothing needs changing to run them. To use test pages by hand on your own server, set `testMode: true` in `build-wasm/config.js`.
+**Test mode** (`?test=1` and the test-only parameters at the top of `web/jfsw.js`) needs `testMode: true` in `config.js` as well; the default is `false`, and a public site must keep it so (**the deployed `config.js` leaves `testMode: false`**: [`deploy.md`](deploy.md) §2). The browser tests serve a `config.js` with `testMode: true` themselves (`tests/web/server.js`, `configText()`), so nothing needs changing to run them. To use test pages by hand on your own server, set `testMode: true` in `build-wasm/config.js`.
 
 **Page parameters:**
 
@@ -208,6 +208,24 @@ tests/net/test-rejoin.sh                 # natively: a newcomer at a vanished or
 ```
 
 Test-only game arguments from brief 05: **`-testswitch<T>`** (all machines: at tic T of the first level every machine operates the level's exit switch, as a player does; unlike `-testexit` the bonus screen follows) and **`-testosd<T>,<command>`** (this machine runs a console command at tic T, e.g. `-testosd60,host 2`). The test-only environment variable `JFSW_TEST_STARTWIN` fills in the startup window (`host=N`, `room=CODE`, `relay=HOST:PORT`, `startnow=K`) and presses Start. `scripts/run-headless.sh --display` keeps `DISPLAY` for it, and the script now passes its standard input to the game (for `start`).
+
+### 6.7 Deploying, and checking a deployment (brief 06)
+
+Putting the game and the relay online (Arch, Apache, TLS, systemd) is [`deploy.md`](deploy.md). `tests/deploy/check-deploy.sh` follows that guide in a container or a spare machine and plays through it; it is **not** part of `make test`, because it needs root and changes the machine while it runs:
+
+```sh
+scripts/build-wasm.sh && make -j4 && scripts/fetch-test-data.sh     # what it deploys
+sudo tests/deploy/check-deploy.sh            # everything, about 2 minutes: the guide's default (WebSocket); ends with PASS or FAILED
+sudo tests/deploy/check-deploy.sh --wt       # with the guide's opt-in WebTransport section (certificate hook, sysctl, drop-in)
+sudo tests/deploy/check-deploy.sh --no-tls   # the guide's "Without TLS" (plain HTTP, ws://)
+sudo tests/deploy/check-deploy.sh --quick    # the set-up and the curl checks only, under a minute
+sudo tests/deploy/check-deploy.sh --guide /path/to/deploy.md   # another copy of the guide (the mutation runs)
+sudo tests/deploy/check-deploy.sh --keep     # leave Apache, the relay, the user, the files and the sysctl values in place (it says how to undo them)
+```
+
+It takes the guide's blocks as they are (each follows a `<!-- check-deploy: NAME -->` comment: `rsync`, `site-config`, `httpd-modules`, `apache-site`, `apache-site-notls`, `relay-build`, `relay-build-server`, `relay-user`, `relay-unit`, `relay-unit-wt`, `relay-cert-hook`, `relay-sysctl`, `curl-checks`, `curl-server`, `desktop-join`), so a change to one of them is checked by the next run: the files deployed are the `rsync` line's (checked against the file table and `build-wasm/`), the relay is built with the guide's own build lines (from the working tree, into the run's directory; nothing is cached, so a changed tree is always what runs), the unit's `User=`, `Group=` and hardening lines are checked and the relay runs as that user with the unit's flags and capabilities, the HTTP and stats listeners must be on 127.0.0.1, the certificate hook must ignore another site's renewal, the sysctl file must be an `/etc/sysctl.d/*.conf`, and the `curl` checks run as written (`CURL_CA_BUNDLE` trusts the test certificate; `tests/deploy/run-block.py` compares the answers with the guide's). It needs Apache 2.4.58+ (`apache2` or `httpd`), openssl, curl, file, python3, setpriv, Go and Playwright's Chromium, and it uses the guide's own ports, which must be free: **TCP 80 and 443, UDP 7777, with `--wt` UDP 443, and 127.0.0.1:8080 and 8081** (no other suite uses them).
+
+While it runs it adds `game.example.org` to `/etc/hosts`, the game to `/srv/http/games/sw` (and a test-mode copy inside it, `check-deploy-test/`, during the game with per-tic records, so that the guide's `<Directory>` settings apply to it too), the system user `vnet-relay`, and with `--wt` `/etc/vnet-relay` and two sysctl values. **It refuses to start if any of these already exists** (a real relay's user or certificate copy is never reused or overwritten), and on every exit it removes what it added, puts the sysctl values and the modes of an existing `/srv/http` and `/srv/http/games` back, and stops Apache and the relay. Apache runs with a small configuration of its own (an Arch-layout `httpd.conf` under a temporary `ServerRoot`), so the distribution's Apache configuration is not touched. Chromium reaches `game.example.org` through `--host-resolver-rules` and trusts the self-signed certificate by its key hash (`--ignore-certificate-errors-spki-list`); with `--wt` it also needs `--webtransport-developer-mode` for WebTransport to accept it (`tests/deploy/play.js`, which stops its native games and the browser on SIGINT or SIGTERM).
 
 ## 7. Layout of what brief 00 added
 
