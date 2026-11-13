@@ -150,7 +150,7 @@ Test-only page parameters (only with `?test=1`; the top of `web/jfsw.js` has the
 scripts/build-wasm.sh && make -j4 && scripts/fetch-test-data.sh   # the tests need the native ./sw as well
 node tests/web/netplay.js --list           # the scenarios
 node tests/web/netplay.js ws               # one scenario
-node tests/web/netplay.js                  # all of them but lag-matrix and old-new, about 22 minutes; one at a time, the tests are real time
+node tests/web/netplay.js                  # all of them but lag-matrix and old-new, about 28 minutes (brief 05); one at a time, the tests are real time
 ```
 
 `tests/web/netplay.js` builds the relay with Go as `tests/net/lib.sh` does (`~/.cache/jfsw-browser/vnet-relay-<rev>`), serves `build-wasm/` (`WASM_DIR=other node tests/web/netplay.js ...` for another build, as the mutation runs do) and uses 127.0.0.1 ports 48300 (page), 48301 (relay UDP), 48302 (relay WebSocket) and 48303 (relay WebTransport, UDP). Native machines run under `scripts/run-headless.sh` in a temporary directory (`JFSW_TEST_KEEP=1` keeps it). Every scenario ends with "no process this test started is left running".

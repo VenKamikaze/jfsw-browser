@@ -3,7 +3,7 @@
 // network games through a local vnet relay, and every machine's own record of every game tic is
 // compared byte for byte.
 //
-//   node tests/web/netplay.js                      # every scenario but lag-matrix (a report), one after the other (about 21 minutes)
+//   node tests/web/netplay.js                      # every scenario but lag-matrix and old-new, one after the other (about 28 minutes)
 //   node tests/web/netplay.js ws wt                # only these
 //   node tests/web/netplay.js --list
 //   WASM_DIR=build-wasm-x node tests/web/netplay.js ws    # another build of the page (mutation runs)

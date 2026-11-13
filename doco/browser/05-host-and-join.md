@@ -149,7 +149,7 @@ After this brief, a person who opens the page can play online with a friend usin
 
 ## Outcome
 
-**Status: review.** Implemented 13 Nov 2026 on `browser/05-host-and-join` in jfsw-browser and the jfbuild fork (from `claude` `791c1bf` and `a610e1e`). jfbuild: `18ee1c4` (the mmulti lobby). jfsw-browser: `58b97fa` (stages A to C and the code of D and E), `a80eed0` (the tests of C to E, the menus' layout), `ceca736` (the startup window's test), and the documentation commit. What the code does, with the details, is `code-facts.md` §19; how to use and test it is `building.md` §6.6.
+**Status: review.** Implemented 13 Nov 2026 on `browser/05-host-and-join` in jfsw-browser and the jfbuild fork (from `claude` `791c1bf` and `a610e1e`). jfbuild: `18ee1c4` (the mmulti lobby). jfsw-browser: `58b97fa` (stages A to C and the code of D and E), `a80eed0` (the tests of C to E, the menus' layout), `ceca736` (the startup window's test), `33b6d20` (documentation, the lobby quit), `bbec1c5` (test-errors.sh), and the Outcome commit. What the code does, with the details, is `code-facts.md` §19; how to use and test it is `building.md` §6.6.
 
 ### What the coordinator found, checked
 
@@ -188,5 +188,71 @@ After this brief, a person who opens the page can play online with a friend usin
 
 Every browser case ends on the page's overlay with "Back to the start page" (the page without `?host=`/`?join=`); every native case prints the line to the console and `sw.log`, shows a message box and exits 1. "Every place is taken" (`FULL`) only happens if a place's player goes silent for 2 to 3 s while the room is otherwise full; it is not reached by a test.
 
-RESULTS_PLACEHOLDER
+### Tests (load average while running; 4 shared cores)
+
+| Test | Result | Time, load |
+|---|---|---|
+| `netplay.js` (all but `lag-matrix` and `old-new`) | **1226 passed, 0 failed** (F3's 914 plus `start-now` 66, `lobby` 27, `host-join` 73, `lobby-errors` 86, `level-end` 60) | 27.5 minutes, load 1.1 to 7.1 |
+| `netplay.js lobby` after the last page change (focus) | 27/0 | load 1.7 |
+| `make test` (mmulti 10 runs, three games relay and UDP, UDP against the baseline, errors, level exit, startup window, draw) | all PASS; draw 16/0. `test-errors.sh` failed its `guestB-no-slot` and `guestC-room-full` cases first: they expected the old silence (see below); updated, PASS | 7.3 minutes plus 3 for the rest, load 0.9 to 3.8 |
+| `tests/net/test-startwin.sh` | PASS (15 checks) | about 30 s, load 1.8 |
+| `test-udp-unchanged.sh` | PASS (old and new mmulti and games mixed) | load 2 |
+| `smoke.js` | 29/0 | load 0.9 |
+| `persist.js` | 15/0 | |
+| `grptable.js` | 8/0 | |
+| `data.js` | 172/0 | load 3.1 |
+| `determinism.js` | 20/1: only the known "no stall over 100 ms" (max 198 ms); native and wasm identical, the `.dms` equals the committed one | load 2.6 |
+
+**`test-errors.sh` changed** (not loosened): `guestB-no-slot` asserted that a newcomer to a started game hears nothing and gives up after at least 14 s with "the host did not answer". The brief asks for a clear refusal, so it now asserts "the game has already started" within 5 s (the old code takes 15 s and says something else, so the case still bites). `guestC-room-full` had filled the relay's room with a joiner that waited for a place that never came; such a joiner is now refused and leaves, so the room is filled by a game of 3 on a relay that takes 3.
+
+### Mutations (each applied, rebuilt, run, reverted)
+
+| Mutation | Test | Result |
+|---|---|---|
+| "Start now" without telling the slaves the final count: the master's answer carries the original place count (`mmulti.c`) | `start-now` | every game fails: the slaves start a 3- or 4-player game, the master a 2-player one, and no machine gets past the start (all checks after the start fail, 3 of 3 games, 120 s each) |
+| an overlay that never updates the player count (`showLobby` ignores `joined`) | `lobby` | 7 checks fail: the host's count and Start now stay at 1 of 3, so the game is never started from the lobby |
+| the level-end fix removed (no early exit from the bonus and stats screens) | `level-end` | the room stalls: the visible host waits at E1L2's start for the hidden guest, which waits on the bonus screen; 15 checks fail, neither machine reaches tic 300 of the next level (188 s, then the time limit) |
+
+### Not done, or only partly
+
+- Windows: the re-launch uses `_execv` (written, not built); the Windows startup window has no online choice. macOS: the re-launch uses `argv[0]` (not run). Both have `start` on the standard input for Start now.
+- The deathmatch stats screen's hidden-tab exit is the same two lines as the bonus screen's, but no test reaches it (deathmatch test games do not end cleanly: bugs.md L16).
+- `FULL` (every place taken while the host still waits) is not reached by a test (see the table above).
+- A visible player who does not press a key at the bonus screen still holds up the room, as in the original game (bugs.md L23).
+
+### Play-test on Arch Linux (the user)
+
+1. Get the branch and build from clean (`make veryclean`: the jfbuild pointer moved, bugs.md L9):
+
+   ```bash
+   sudo pacman -S --needed base-devel git python go sdl2 libvorbis libogg mesa glu alsa-lib gtk3 chromium
+   git fetch origin && git checkout browser/05-host-and-join && git submodule update --init
+   make veryclean && make -j4
+   scripts/setup-emsdk.sh --with-ports && scripts/build-wasm.sh
+   scripts/fetch-test-data.sh && ln -sf ../testdata/swshare.grp build-wasm/
+   (cd ext/vnet/relay && go build -o /tmp/vnet-relay ./cmd/vnet-relay)
+   ```
+
+2. A local relay and the page with a relay set (terminal 1 and 2). For another machine on the LAN, use this machine's LAN address (say 192.168.1.10) instead of 127.0.0.1 in all four places, and open the page there by that address:
+
+   ```bash
+   /tmp/vnet-relay -udp 127.0.0.1:7777 -http 127.0.0.1:7778 -origins 127.0.0.1:8000 -v          # terminal 1
+   sed -i "s|relay: ''|relay: 'ws://127.0.0.1:7778/vnet'|" build-wasm/config.js                   # (build-wasm/ only; web/config.js stays empty)
+   (cd build-wasm && python3 -m http.server 8000 --bind 127.0.0.1)                                 # terminal 2
+   ```
+
+3. **Host in one browser, join from the link in another.** Open `http://127.0.0.1:8000/?host=3` in Chromium, click "Click to host a game of 3". The lobby shows a room code, an invite link (press Copy) and "1 of 3 players are in". Paste the link into a Firefox window (or a private Chromium window) and click "Click to join room ...": both lobbies say "2 of 3". Check: the code and link are readable, Tab moves through Copy, Start now and Cancel, and in a narrow window (phone width, or the browser's device toolbar) nothing is cut off.
+4. **Start now:** press "Start now with 2 players" on the host. Both lobbies go and the game starts in the menus ("Lo Wang is waiting..." on the guest); start a co-op game from the host's Network Game menu and play a minute. Then open the invite link in a third window: it says "the game has already started". Close the guest's tab: about 15 s later the host's page says "player 2 (...) left the game".
+5. **Cancel:** host again (`?host=2`), join from the link, press Cancel on the guest: the guest is back on the start page and the host's count goes back to 1 of 2. Join again, then press Cancel on the host: the guest says "the host left the room before the game started" at once.
+6. **From the game's menus and console in the browser:** on `http://127.0.0.1:8000/`, start, Escape, "Host Online", "2 Players": the page reloads into the lobby. In another window start a game, Escape, "Join Online", type the code, Enter. Also: the console (Num Lock), `join <code>`. (A laptop without Num Lock: rebind "Show Console" in Options, Input, Keys Setup.)
+7. **Host natively from the console** (a terminal, the GTK window may show):
+
+   ```bash
+   ./sw                       # in the game: Num Lock, then  relay 127.0.0.1:7777  and  host 2
+   ```
+
+   The game closes and starts again into the network game; its terminal and its startup window print the room code ("Lobby: give the other players the room code ..."). Join from a browser with `http://127.0.0.1:8000/?join=CODE`. With 3 places (`host 3`), type `start` and Enter in the terminal, or press "Start now (2 of 3 in)" in the startup window.
+8. **The startup window:** `./sw -setup`, Game tab: tick "Online, through the relay:", relay `127.0.0.1:7777`, "Join multi-player game" with a room code from a browser host, Start.
+9. **A hidden guest at a level end:** host and join as in 3 (`?host=2`), start co-op, and as the host walks to E1L1's exit switch, switch the guest's browser to another tab (or minimise it) and leave it there. The host presses the switch and Space on the bonus screen; the next level must start on the host within a few seconds (it used to wait for the hidden guest's key). Show the guest's tab again: it is in E1L2 with the host.
+10. The tests on your machine, one at a time: `node tests/web/netplay.js lobby start-now host-join lobby-errors level-end` and `tests/net/test-startwin.sh` (needs `xorg-server-xvfb`).
 
