@@ -963,6 +963,9 @@ InitGame(VOID)
 
     CommPlayers = numplayers;
     OrigCommPlayers = CommPlayers;
+    // nobody's options packet has said yet that they send SK_MOUSE_AIM
+    memset(MouseAimInInput, 0, sizeof(MouseAimInInput));
+
     if (numplayers > 1)
         {
         CommEnabled = TRUE;
