@@ -113,6 +113,7 @@ GAMEOBJS= \
 	$(SRC)/miscactr.$o \
 	$(SRC)/morph.$o \
 	$(SRC)/net.$o \
+	$(SRC)/netlobby.$o \
 	$(SRC)/ninja.$o \
 	$(SRC)/osdcmds.$o \
 	$(SRC)/osdfuncs.$o \

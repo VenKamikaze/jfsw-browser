@@ -32,6 +32,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "tags.h"
 #include "names2.h"
 #include "net.h"
+#include "netlobby.h"
 #include "pal.h"
 #include "demo.h"
 
@@ -630,7 +631,10 @@ BOOL MyCommPlayerQuit(void)
                 adduserquote(ds);
                 }
             if (i == connecthead && !NetBroadcastMode)
+                {
                 QuitFlag = TRUE;
+                NetHostQuit();      // relay games: the end message says so (netlobby.c)
+                }
             }
         }
 
@@ -1611,4 +1615,7 @@ getpackets(VOID)
     // after the receive loop (packbuf is free again), not when the master next makes an input.
     if (!NetBroadcastMode && myconnectindex == connecthead && ready2send)
         MasterForward();
+
+    // Brief 05: a relay game whose host or guest has gone ends with a message (netlobby.c).
+    NetGoneCheck();
     }

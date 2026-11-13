@@ -86,11 +86,21 @@ async function startRelay(extra) {
 // waitEnd(ms), exitCode(), stop().
 
 let browserEnv = null;      // { server, browser }
+// Brief 05: the config.js the page is served with. CONFIG_RELAY set: a copy of web/config.js whose relay field is that URL
+// (what a site with a relay has); null: the build's own (no relay). Set it before the first machine of a scenario.
+let CONFIG_RELAY = null;
 async function env() {
   if (!browserEnv) {
     if (!fs.existsSync(path.join(L.BUILD, 'sw.wasm'))) { throw new Error(L.BUILD + '/sw.wasm not found: run scripts/build-wasm.sh'); }
     if (!fs.existsSync(L.GRP)) { throw new Error(L.GRP + ' not found: run scripts/fetch-test-data.sh'); }
     const mounts = { '/swshare.grp': L.GRP };
+    if (CONFIG_RELAY !== null) {
+      const cfg = fs.readFileSync(path.join(L.BUILD, 'config.js'), 'utf8');
+      const out = path.join(tmp(), 'config-relay.js');
+      fs.writeFileSync(out, cfg.replace(/relay: '[^']*'/, 'relay: ' + JSON.stringify(CONFIG_RELAY)));
+      if (!/relay: "/.test(fs.readFileSync(out, 'utf8'))) { throw new Error('could not set the relay in config.js'); }
+      mounts['/config.js'] = out;
+    }
     // NETPLAY_OLD_WASM=<dir>: another build of the page, served under /old/ (the old-new scenario, brief 04c)
     if (process.env.NETPLAY_OLD_WASM) {
       const dir = path.resolve(process.env.NETPLAY_OLD_WASM);
@@ -108,6 +118,7 @@ async function closeEnv() {
   try { await browserEnv.browser.close(); } catch (e) { /* gone */ }
   await new Promise((r) => browserEnv.server.close(r));
   browserEnv = null;
+  CONFIG_RELAY = null;
 }
 
 const machines = [];
@@ -131,18 +142,22 @@ function gameArgs(o) {
 async function browserMachine(name, args, o) {
   o = o || {};
   const e = await env();
-  const context = await e.browser.newContext({ viewport: { width: 700, height: 560 } });
+  const context = await e.browser.newContext({ viewport: o.viewport || { width: 700, height: 560 } });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (er) => errors.push('pageerror: ' + er.message));
   page.on('dialog', (d) => { errors.push('dialog: ' + d.message()); d.dismiss().catch(() => {}); });
-  const q = '?test=1&persist=0&args=' + encodeURIComponent(args.join(' ')) + (o.query || '');
+  // o.raw: the whole query string as given (brief 05: a page without ?test=1, or one started by ?host= / ?join=)
+  const q = o.raw !== undefined ? o.raw : '?test=1&persist=0&args=' + encodeURIComponent(args.join(' ')) + (o.query || '');
   if (o.old && !process.env.NETPLAY_OLD_WASM) { throw new Error('an old build of the page needs NETPLAY_OLD_WASM'); }
   await page.goto((o.old ? e.oldBase : e.base) + q);
-  await L.waitState(page, 'ready', 60000);
+  await L.waitState(page, o.ready || 'ready', 60000);
   const m = {
     kind: 'browser', name, page, context, errors, started: 0,
     async start() { await page.click('#start'); m.started = now(); },
+    lobby: () => page.evaluate(() => ({ info: window.jfswLobby, shown: !document.getElementById('lobby').hidden, code: document.getElementById('lobbycode').textContent,
+      link: document.getElementById('lobbylink').value, players: document.getElementById('lobbyplayers').textContent, state: document.getElementById('lobbystate').textContent,
+      startHidden: document.getElementById('lobbystart').hidden, startDisabled: document.getElementById('lobbystart').disabled, url: location.href })).catch(() => null),
     out: () => page.evaluate(() => window.jfswOut.join('\n')).catch(() => ''),
     async state() { return Promise.race([page.evaluate(() => window.jfswState).catch(() => 'gone'), sleep(900).then(() => 'running')]); },
     async dumpSize() {
@@ -179,12 +194,14 @@ function nativeMachine(name, args, o) {
     kind: 'native', name, wd, started: 0, errors: [],
     async start() {
       const out = fs.openSync(outFile, 'w');
+      if (o.cfg) { fs.writeFileSync(path.join(wd, 'sw.cfg'), o.cfg); }      // brief 05: e.g. the relay setting
       m.child = spawn(path.join(L.root, 'scripts', 'run-headless.sh'), ['--workdir', wd, '--timeout', String(o.timeout || 400)].concat(o.sw || process.env.NETPLAY_SW ? ['--sw', o.sw || process.env.NETPLAY_SW] : [], ['--'], args),
-        { env: envv, stdio: ['ignore', out, out], detached: true });
+        { env: envv, stdio: [o.stdin ? 'pipe' : 'ignore', out, out], detached: true });
       m.done = new Promise((r) => m.child.on('exit', (c, s) => { m.code = c; r(c); }));
       m.started = now();
     },
     out: async () => { try { return fs.readFileSync(outFile, 'utf8'); } catch (e) { return ''; } },
+    type(line) { m.child.stdin.write(line + '\n'); },     // with o.stdin: a line on the game's standard input ("start")
     async state() { return m.code === undefined ? 'running' : (m.code === 0 ? 'ended' : 'error'); },
     async dumpSize() { try { return fs.statSync(path.join(wd, o.dump || 'd.bin')).size; } catch (e) { return 0; } },
     async readFile(name) { try { return fs.readFileSync(path.join(wd, name)); } catch (e) { return null; } },
@@ -1315,6 +1332,456 @@ SCENARIOS['relay-lost'] = {
       check(took < 15, f.name + ' ended within 15 s of thawing (' + took.toFixed(1) + ')');
       check(f.errors.length === 0, f.name + ' had no page errors', f.errors.join('; '));
     } finally { await cleanup(relay); }
+  },
+};
+
+// ---- brief 05: host and join from the game -------------------------------------------------------------
+// A network game started the way a player starts one: the page's ?host=N / ?join=CODE (the relay from config.js, or on a
+// ?test=1 page from ?relay=), the lobby overlay (room code, invite link, who is in, Start now, Cancel), the console's and the
+// menus' host and join (which restart into the game: the page reloads, a native game re-launches itself), the native host's
+// "start" on its standard input, and every way a network game fails or ends.
+
+const WSRELAY = 'ws://127.0.0.1:' + PORT_HTTP + '/vnet';
+const LOBBY_TICS = 400;
+
+async function waitFor(fn, ms) {
+  const t0 = now();
+  while (now() - t0 < ms) { const v = await fn(); if (v) { return v; } await sleep(200); }
+  return null;
+}
+async function lobbyWhen(m, pred, ms) { return waitFor(async () => { const l = await m.lobby(); return l && pred(l) ? l : null; }, ms || 30000); }
+async function outHas(m, re, ms) { return waitFor(async () => re.test(await m.out()), ms || 30000); }
+// The game's test arguments (as gameArgs() makes them) without -net ... --: the page or the host/join command adds those.
+function testArgs(o) { const a = gameArgs(Object.assign({ net: [] }, o)); return a.slice(2); }
+// A browser page that starts a network game from its address (q: '&host=3', '&join=ABC234'); args are the test arguments.
+async function netPage(name, q, args, o) {
+  return browserMachine(name, [], Object.assign({ raw: '?test=1&persist=0&relay=' + encodeURIComponent(WSRELAY) + q + '&args=' + encodeURIComponent(args.join(' ')), dump: 'd.bin' }, o || {}));
+}
+// Presses a key the way a person does: down, held for a game tic or two, up (the menus look at the keys' state: bugs.md L14).
+async function key(page, k, held) { await page.keyboard.down(k); await sleep(held || 150); await page.keyboard.up(k); await sleep(120); }
+// The players a machine's game started with, from its log ("Lobby: the game starts with N players; you are player P.").
+async function startedWith(m) { const mm = /Lobby: the game starts with (\d+) players; you are player (\d+)\./.exec(await m.out()); return mm ? { n: +mm[1], p: +mm[2] } : null; }
+
+// One game through the lobby. kinds[0] hosts a game of o.slots places (default kinds.length): a browser by ?host=, a native game
+// by -host-room. The others join by ?join= (browser; the code in lower case, as a person might type it) or -room. When fewer
+// players than places are in, the host starts with Start now: the button (browser) or "start" on its standard input (native).
+async function lobbyGame(relay, kinds, o) {
+  o = o || {};
+  const slots = o.slots || kinds.length, tics = o.tics || LOBBY_TICS;
+  const targs = (i) => testArgs({ tics, dump: 'd.bin', autonet: o.autonet, state: o.state, extra: o.extra ? o.extra(i) : [] });
+  const ms = [];
+  let code = '';
+  for (let i = 0; i < kinds.length; i++) {
+    let m;
+    if (kinds[i] === 'browser') {
+      m = await netPage('p' + i, i === 0 ? '&host=' + slots : '&join=' + code.toLowerCase(), targs(i));
+    } else {
+      m = nativeMachine('p' + i, ['-net', '-relay', relay.udp].concat(i === 0 ? ['-host-room', String(slots)] : ['-room', code], ['--'], targs(i)), { dump: 'd.bin', stdin: i === 0 });
+    }
+    ms.push(m);
+    await m.start();
+    if (o.onStart) { await o.onStart(i, m); }
+    if (i === 0) { code = await waitRoomCode(m); console.log('  room ' + code + ' (' + kinds[0] + ' host, ' + slots + ' places)'); }
+    // the next joiner waits until this one is in (the place a joiner gets is the order its first ping reaches the host)
+    check(!!(await outHas(m, new RegExp('Lobby: ' + (i + 1) + ' of ' + slots + ' players are in'), 40000)), m.name + ' sees ' + (i + 1) + ' of ' + slots + ' players in the room');
+  }
+  if (kinds.length < slots) {
+    const h = ms[0];
+    if (h.kind === 'browser') {
+      const l = await lobbyWhen(h, (x) => x.info && x.info.joined === kinds.length && !x.startDisabled, 30000);
+      check(!!l, h.name + ': Start now is offered with ' + kinds.length + ' of ' + slots + ' in', JSON.stringify(await h.lobby()));
+      await h.page.click('#lobbystart');
+    } else {
+      h.type('start');
+    }
+    console.log('  the host pressed Start now with ' + kinds.length + ' of ' + slots);
+  }
+  return { ms, code };
+}
+
+// Every machine of a lobby game: started with n players (the same count, its own number), then the finished game as checkGame().
+async function checkLobbyGame(ms, n, tics) {
+  for (let i = 0; i < ms.length; i++) {
+    const s = await startedWith(ms[i]);
+    check(!!s && s.n === n && s.p === i + 1, ms[i].name + ' started the game with ' + n + ' players as player ' + (i + 1) + ' (log: ' + JSON.stringify(s) + ')');
+    const q = /TEST: quitting after \d+ game tics: .* player (\d+) of (\d+)/.exec(await ms[i].out());
+    check(!!q && +q[2] === n, ms[i].name + ' played a ' + n + '-player game (' + (q ? q[2] : '?') + ')');
+  }
+  return checkGame(ms, tics);
+}
+
+async function lobbyRun(kinds, o) {
+  const relay = await startRelay(o.relayArgs);
+  try {
+    console.log('  ' + kinds.join(' + ') + ' in a game of ' + (o.slots || kinds.length) + ' places (' + LOAD() + ')');
+    const { ms, code } = await lobbyGame(relay, kinds, o);
+    const tics = o.tics || LOBBY_TICS;
+    const limit = tics / NOMINAL * 1000 * 3 + 90000;
+    if (o.late) { await o.late(relay, code, ms); }
+    for (const m of ms) { await m.waitEnd(limit - (now() - ms[0].started)); }
+    console.log('  the game took ' + ((now() - ms[0].started) / 1000).toFixed(1) + ' s from the start of the host to the end of the last machine');
+    await checkLobbyGame(ms, kinds.length, tics);
+    return ms;
+  } finally { await cleanup(relay); }
+}
+
+// A player who arrives after the start: refused with "the game has already started", within `under` seconds; the game goes on.
+async function lateJoiner(relay, code, kind, under) {
+  const t0 = now();
+  let m, text;
+  if (kind === 'browser') {
+    m = await netPage('late', '&join=' + code, []);
+    await m.start();
+    await m.waitEnd(40000);
+    text = await m.status();
+    check(await m.page.evaluate(() => !document.getElementById('overlay').hidden && !document.getElementById('reload').hidden), 'late browser joiner: on the end overlay with the button back to the start page');
+  } else {
+    m = nativeMachine('late', ['-net', '-relay', relay.udp, '-room', code, '--', '-autonet', '2,0,2,1,0,0,0,0,0,0']);
+    await m.start();
+    await m.waitEnd(40000);
+    text = await m.out();
+  }
+  const took = (now() - t0) / 1000;
+  console.log('  late ' + kind + ' joiner: ' + took.toFixed(1) + ' s: ' + (text.match(/Network game failed: [^\n]*/) || [text.slice(-160)])[0]);
+  check((await m.exitCode()) === 1, 'late ' + kind + ' joiner: its game ended with status 1');
+  check(/Network game failed: the game has already started/.test(text), 'late ' + kind + ' joiner: told the game has already started', text.slice(-200));
+  check(took < under, 'late ' + kind + ' joiner: within ' + under + ' s (' + took.toFixed(1) + ')');
+  await m.stop();
+  machines.splice(machines.indexOf(m), 1);
+}
+
+SCENARIOS['start-now'] = {
+  what: 'Start now (Q3): 2 of 3 (two browsers), 2 of 4 (native host by "start" on its input, browser guest), 2 of 4 (browser host, native guest): every machine starts with 2 and agrees on every tic; late joiners are refused',
+  run: async () => {
+    await lobbyRun(['browser', 'browser'], { slots: 3 });
+    await lobbyRun(['native', 'browser'], { slots: 4, late: (relay, code) => lateJoiner(relay, code, 'browser', 25) });
+    await lobbyRun(['browser', 'native'], { slots: 4, late: (relay, code) => lateJoiner(relay, code, 'native', 25) });
+  },
+};
+
+// The lobby overlay itself, on pages without ?test=1 and with the relay in config.js, as a visitor sees them.
+SCENARIOS.lobby = {
+  what: 'the lobby on ordinary pages (relay from config.js): ?host=3, the room code and invite link, the second browser joins from the link and the count updates, Start now by keyboard, the game starts on both; Cancel for a guest and for the host; phone width',
+  run: async () => {
+    let relay = null;
+    try {
+      relay = await startRelay();
+      CONFIG_RELAY = relay.ws;
+      const h = await browserMachine('host', [], { raw: '?host=3' });
+      await h.start();
+      const l1 = await lobbyWhen(h, (x) => x.shown && /^[A-HJ-NP-Z2-9]{6}$/.test(x.code), 30000);
+      check(!!l1, 'host: the lobby shows a room code', JSON.stringify(await h.lobby()));
+      if (!l1) { return; }
+      const base = 'http://127.0.0.1:' + PORT_WEB + '/index.html';
+      check(l1.link === base + '?join=' + l1.code, 'host: the invite link is this page with ?join=' + l1.code + ' (' + l1.link + ')');
+      check(/1 of 3 players are in/.test(l1.players), 'host: 1 of 3 players are in (' + l1.players + ')');
+      check(!l1.startHidden && l1.startDisabled, 'host: Start now is there but not yet usable');
+      check(/room code/.test(await h.out()) && !(await h.page.evaluate(() => !!window.jfswTest)), 'host: an ordinary page (no test hooks), the game made the room');
+      // the guest opens exactly the invite link, on a phone-sized window
+      const g = await browserMachine('guest', [], { raw: l1.link.slice(base.length), viewport: { width: 360, height: 640 } });
+      await g.start();
+      const lg = await lobbyWhen(g, (x) => x.shown && x.info && x.info.joined === 2, 30000);
+      check(!!lg, 'guest: the lobby shows 2 of 3 players', JSON.stringify(await g.lobby()));
+      check(!!lg && lg.code === l1.code && lg.startHidden, 'guest: the same room code, and no Start now for a guest');
+      const fits = await g.page.evaluate(() => { const b = document.querySelector('#lobby .box'); return { box: b.getBoundingClientRect().width, win: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth }; });
+      check(fits.box <= fits.win && fits.scroll <= fits.win, 'guest: the lobby fits a 360 px wide window (' + JSON.stringify(fits) + ')');
+      const l2 = await lobbyWhen(h, (x) => x.info && x.info.joined === 2 && !x.startDisabled, 20000);
+      check(!!l2 && /2 of 3 players are in/.test(l2.players), 'host: the count went up to 2 of 3 and Start now is usable (' + (l2 ? l2.players : '') + ')');
+      // keyboard only: Tab to Start now, Enter
+      let focused = '';
+      for (let i = 0; i < 8 && focused !== 'lobbystart'; i++) { await h.page.keyboard.press('Tab'); focused = await h.page.evaluate(() => document.activeElement && document.activeElement.id); }
+      check(focused === 'lobbystart', 'host: Start now can be reached with Tab (' + focused + ')');
+      await h.page.keyboard.press('Enter');
+      for (const m of [h, g]) {
+        const ok = await waitFor(async () => { const l = await m.lobby(); return l && !l.shown && (await startedWith(m)); }, 30000);
+        const s = await startedWith(m);
+        check(!!ok && s.n === 2, m.name + ': the lobby went and the game started with 2 players (' + JSON.stringify(s) + ')');
+      }
+      // a third browser opens the link now: refused, the two in the game are not disturbed
+      const late = await browserMachine('late', [], { raw: l1.link.slice(base.length) });
+      const t0 = now();
+      await late.start();
+      await late.waitEnd(30000);
+      const lt = await late.status();
+      check(/game has already started/.test(lt) && (now() - t0) < 20000, 'a third browser from the link is told the game has already started (' + ((now() - t0) / 1000).toFixed(1) + ' s): ' + lt);
+      check(await late.page.evaluate(() => document.getElementById('reload').textContent === 'Back to the start page'), 'and is offered the start page');
+      await late.page.click('#reload');
+      await L.waitState(late.page, 'ready', 30000);
+      check(!/join=/.test(late.page.url()), 'which is this page without ?join= (' + late.page.url() + ')');
+      await sleep(2000);
+      for (const m of [h, g]) { check((await m.state()) === 'running', m.name + ' is still in the game'); }
+      for (const m of [h, g, late]) { await m.stop(); machines.splice(machines.indexOf(m), 1); }
+
+      // Cancel: a guest leaves the lobby (the host's count goes back down and the place is free again), then the host closes the room
+      const h3 = await browserMachine('host3', [], { raw: '?host=3' });
+      await h3.start();
+      const c3 = (await lobbyWhen(h3, (x) => /^[A-Z2-9]{6}$/.test(x.code), 30000) || {}).code;
+      const g3 = await browserMachine('guest3', [], { raw: '?join=' + c3 });
+      await g3.start();
+      check(!!(await lobbyWhen(h3, (x) => x.info && x.info.joined === 2, 30000)), 'host3: 2 of 3 in');
+      let t1 = now();
+      await g3.page.click('#lobbycancel');
+      await L.waitState(g3.page, 'ready', 20000).catch(() => {});
+      check(!/join=/.test(g3.page.url()) && (await g3.state()) === 'ready', 'guest Cancel: back on the start page, ready to play (' + g3.page.url() + ', ' + (await g3.state()) + ')');
+      const back = await lobbyWhen(h3, (x) => x.info && x.info.joined === 1, 15000);
+      check(!!back, 'host3: the count went back to 1 of 3 (' + ((now() - t1) / 1000).toFixed(1) + ' s)');
+      const g4 = await browserMachine('guest4', [], { raw: '?join=' + c3 });
+      await g4.start();
+      check(!!(await lobbyWhen(h3, (x) => x.info && x.info.joined === 2, 30000)), 'host3: another guest takes the free place: 2 of 3');
+      t1 = now();
+      await h3.page.focus('#lobbycancel');
+      await h3.page.keyboard.press('Enter');
+      await L.waitState(h3.page, 'ready', 20000).catch(() => {});
+      check(!/host=/.test(h3.page.url()) && (await h3.state()) === 'ready', 'host Cancel (keyboard): back on the start page (' + h3.page.url() + ')');
+      await g4.waitEnd(20000);
+      const gt = await g4.status();
+      check(/host left the room before the game started/.test(gt) && (now() - t1) < 10000, 'the guest is told the host left the room, within 10 s (' + ((now() - t1) / 1000).toFixed(1) + ' s): ' + gt);
+      for (const m of [g3, g4, h3]) { check(m.errors.length === 0, m.name + ' had no page errors', m.errors.join('; ')); }
+    } finally { await cleanup(relay); }
+  },
+};
+
+// The console's and the menus' host and join: they restart into the network game (D3). In the browser the page reloads with
+// ?host=N or ?join=CODE; natively the game re-launches itself with -net -relay <its relay setting> ... (the relay setting is in
+// sw.cfg; -testosd<T>,<command> types the command into a native game's console at tic T).
+// (-autonet takes a single player game straight into E1L1, where the commands are typed; after the restart it starts the network game.)
+SCENARIOS['host-join'] = {
+  what: 'host and join from the console and the menus: browser console host + native guest; native console host (re-launch) + browser guest from the link; browser host + native console join (re-launch); browser menu host + browser menu join; every game agrees on every tic',
+  run: async () => {
+    const relay = await startRelay();
+    const cfg = '[Comm Setup]\nRelay = "' + relay.udp + '"\n';
+    const play = testArgs({ tics: LOBBY_TICS, dump: 'd.bin' });
+    const finish = async (ms, label) => {
+      for (const m of ms) { await m.waitEnd(LOBBY_TICS / NOMINAL * 1000 * 3 + 90000); }
+      console.log('  ' + label + ': the game took ' + ((now() - ms[0].started) / 1000).toFixed(1) + ' s');
+      await checkLobbyGame(ms, ms.length, LOBBY_TICS);
+      for (const m of ms.splice(0)) { await m.stop(); machines.splice(machines.indexOf(m), 1); }
+    };
+    // the console of a browser page: the key left of 1 opens it; the command is typed and sent with Enter
+    const consoleCmd = async (m, cmd) => {
+      await m.page.keyboard.press('Backquote');
+      await sleep(400);
+      await m.page.keyboard.type(cmd, { delay: 40 });
+      await m.page.keyboard.press('Enter');
+    };
+    const reloaded = async (m, re) => {
+      const ok = await waitFor(async () => re.test(m.page.url()) && (await m.state().catch(() => '')) === 'ready', 30000);
+      check(!!ok, m.name + ' reloaded itself into ' + re + ' (' + m.page.url() + ')');
+      await m.start();
+    };
+    try {
+      // 1. browser: console "host 2" in a single player game; a native guest joins with -room
+      {
+        console.log('  browser console host + native guest (' + LOAD() + ')');
+        const h = await netPage('p0', '', play);
+        await h.start();
+        check(!!(await waitFor(async () => (await h.dumpSize()) > 40 * REC, 60000)), h.name + ' is playing single player');
+        await consoleCmd(h, 'host 2');
+        await reloaded(h, /[?&]host=2(&|$)/);
+        const code = await waitRoomCode(h);
+        const g = nativeMachine('p1', ['-net', '-relay', relay.udp, '-room', code, '--'].concat(play), { dump: 'd.bin' });
+        await g.start();
+        await finish([h, g], 'browser console host');
+      }
+      // 2. native: console "host 2" (re-launch) in a single player game; a browser guest from the invite link's ?join=CODE
+      {
+        console.log('  native console host (re-launch) + browser guest from the link (' + LOAD() + ')');
+        const h = nativeMachine('p0', play.concat(['-testosd60,host 2']), { dump: 'd.bin', cfg });
+        await h.start();
+        const code = await waitRoomCode(h, 60000);
+        const out = await h.out();
+        check(/Re-launching: \S+ -net -relay 127\.0\.0\.1:48301 -host-room 2 --/.test(out), h.name + ' re-launched itself with -net -relay <its setting> -host-room 2', (out.match(/Re-launching:[^\n]*/) || [''])[0]);
+        const g = await netPage('p1', '&join=' + code, play);
+        await g.start();
+        await finish([h, g], 'native console host');
+      }
+      // 3. a browser hosts (?host=2); a native single player game types "join CODE" in its console (re-launch)
+      {
+        console.log('  browser host + native console join (re-launch) (' + LOAD() + ')');
+        const h = await netPage('p0', '&host=2', play);
+        await h.start();
+        const code = await waitRoomCode(h);
+        const g = nativeMachine('p1', play.concat(['-testosd60,join ' + code.toLowerCase()]), { dump: 'd.bin', cfg });
+        await g.start();
+        check(!!(await outHas(g, new RegExp('Re-launching: \\S+ -net -relay 127\\.0\\.0\\.1:48301 -room ' + code + ' --'), 60000)), g.name + ' re-launched itself with -room ' + code);
+        await finish([h, g], 'native console join');
+      }
+      // 4. the menus: Escape, Host Online Game (G), 2 Players (2) on one page; Escape, Join Online Game (J), the code, Enter on another
+      {
+        console.log('  browser menu host + browser menu join (' + LOAD() + ')');
+        const h = await netPage('p0', '', play);
+        await h.start();
+        check(!!(await waitFor(async () => (await h.dumpSize()) > 40 * REC, 60000)), h.name + ' is playing single player');
+        await key(h.page, 'Escape'); await sleep(500);
+        await key(h.page, 'g'); await sleep(500);
+        await key(h.page, '2');
+        await reloaded(h, /[?&]host=2(&|$)/);
+        const code = await waitRoomCode(h);
+        const g = await netPage('p1', '', play);
+        await g.start();
+        check(!!(await waitFor(async () => (await g.dumpSize()) > 40 * REC, 60000)), g.name + ' is playing single player');
+        await key(g.page, 'Escape'); await sleep(500);
+        await key(g.page, 'j'); await sleep(500);
+        for (const c of code.toLowerCase()) { await g.page.keyboard.press(c === c.toUpperCase() ? 'Digit' + c : 'Key' + c.toUpperCase()); await sleep(60); }
+        await sleep(200);
+        await key(g.page, 'Enter');
+        await reloaded(g, new RegExp('[?&]join=' + code + '(&|$)'));
+        await finish([h, g], 'menus');
+      }
+    } finally { await cleanup(relay); }
+  },
+};
+
+// Every way a network game can fail or end (brief 05, section E) says why, and leaves the player somewhere sensible. Those of
+// brief 04 (relay unreachable, no such room, relay room full, host gone in the wait, the relay session lost) are in `errors`
+// and `relay-lost` through the game's arguments; here they come through the page's own ?host= / ?join= and the lobby.
+async function pageRefusal(label, raw, re, o) {
+  o = o || {};
+  const m = await browserMachine('r-' + label, [], { raw, ready: o.ready || ['error', 'ready'] });
+  if (o.start) { await L.waitState(m.page, 'ready', 60000); await m.start(); }
+  const st = await m.waitEnd(o.start ? 40000 : 15000);
+  const r = await m.page.evaluate(() => ({ state: window.jfswState, status: document.getElementById('status').textContent, start: !document.getElementById('start').hidden,
+    button: document.getElementById('reload').hidden ? '' : document.getElementById('reload').textContent, ran: !!window.jfswExit || (window.jfswOut || []).some((l) => /mmulti/.test(l)) }));
+  console.log('  ' + label + ': ' + r.status.replace(/\s+/g, ' '));
+  check(re.test(r.status), label + ': the page says why (' + re + ')', r.status);
+  check(!r.start && /start page/i.test(r.button), label + ': no game to start, a button back to the start page (' + r.button + ')');
+  if (!o.start) { check(!r.ran && r.state === 'error', label + ': no game was started (' + r.state + ', ' + st + ')'); }
+  check(m.errors.length === 0, label + ': no page errors', m.errors.join('; '));
+  await m.stop(); machines.splice(machines.indexOf(m), 1);
+}
+
+// The end of a game in progress whose host (or a guest) has gone: `gone` is the index of the machine that vanishes at tic ~150
+// (its tab closes or its process is killed, so it sends nothing more), `res` the messages the others must show.
+async function goneGame(kinds, gone, res) {
+  const relay = await startRelay();
+  try {
+    console.log('  ' + kinds.join(' + ') + ': ' + (gone === 0 ? 'the host' : 'p' + gone) + ' vanishes during the game (' + LOAD() + ')');
+    const { ms } = await lobbyGame(relay, kinds, { tics: 3000 });
+    await waitFor(async () => (await ms[gone].dumpSize()) >= 150 * REC, 90000);
+    const t0 = now();
+    const g = ms[gone];
+    if (g.kind === 'browser') { await g.stop(); } else { try { process.kill(-g.child.pid, 'SIGKILL'); } catch (e) { /* gone */ } }
+    console.log('  ' + g.name + ' is gone (tic ' + Math.floor((await ms[(gone + 1) % ms.length].dumpSize()) / REC) + ' on ' + ms[(gone + 1) % ms.length].name + ')');
+    for (let i = 0; i < ms.length; i++) {
+      if (i === gone) { continue; }
+      const m = ms[i];
+      const st = await m.waitEnd(60000);
+      const took = (now() - t0) / 1000;
+      const text = m.kind === 'browser' ? await m.status() : await m.out();
+      const line = (text.match(/Network game failed: [^\n]*/) || [text.slice(-200)])[0];
+      console.log('  ' + m.name + ' ended ' + took.toFixed(1) + ' s later: ' + line);
+      check(st === 'error' && (await m.exitCode()) === 1, m.name + ': the game ended with status 1 (' + st + ')');
+      check(res[i].test(text), m.name + ': it says why (' + res[i] + ')', line);
+      check(took < NET_GONE_S + 15, m.name + ': within ' + (NET_GONE_S + 15) + ' s (' + took.toFixed(1) + ')');
+      if (m.kind === 'browser') {
+        check(await m.page.evaluate(() => !document.getElementById('overlay').hidden && document.getElementById('reload').textContent === 'Back to the start page'), m.name + ': on the end overlay, with the button back to the start page');
+      }
+    }
+  } finally { await cleanup(relay); }
+}
+const NET_GONE_S = 15;       // src/netlobby.h NET_GONE_MS
+
+SCENARIOS['lobby-errors'] = {
+  what: 'every way a network game fails or ends says why: no relay configured, bad player counts and room codes, relay unreachable, unknown room, relay room full, host gone in the game, a guest gone in the game (browser and native)',
+  run: async () => {
+    let relay = null;
+    try {
+      // the address: checked before anything is started
+      await pageRefusal('no-relay-host', '?host=2', /no relay is set up/);
+      await pageRefusal('no-relay-join', '?join=ABC234', /no relay is set up/);
+      relay = await startRelay(['-max-members', '2']);
+      CONFIG_RELAY = relay.ws;
+      await pageRefusal('host-9', '?host=9', /"9" is not a number of players.*2 to 8/);
+      await pageRefusal('host-1', '?host=1', /"1" is not a number of players/);
+      await pageRefusal('host-x', '?host=two', /"two" is not a number of players/);
+      await pageRefusal('host-5-shareware', '?host=5', /shareware version of the game allows at most 4 players/, { ready: ['error'] });
+      await pageRefusal('join-short', '?join=ABC', /"ABC" is not a room code/);
+      await pageRefusal('join-01', '?join=AB01CD', /"AB01CD" is not a room code/);
+      await pageRefusal('host-and-join', '?host=2&join=ABC234', /to host and to join/);
+      await pageRefusal('test-relay-ignored', '?relay=' + encodeURIComponent('ws://127.0.0.1:1/vnet') + '&host=9', /"9" is not a number/);    // (checked below that ?relay= does nothing here)
+      await closeEnv();
+      // ?relay= is a test knob: on an ordinary page with no relay in config.js it does not supply one
+      await pageRefusal('relay-knob-ignored', '?relay=' + encodeURIComponent(relay.ws) + '&host=2', /no relay is set up/);
+      // the relay: unreachable, an unknown room, a full room (this relay takes 2 per room)
+      await pageRefusal('relay-unreachable', '?test=1&persist=0&relay=' + encodeURIComponent('ws://127.0.0.1:48392/vnet') + '&host=2', /Network game failed.*could not be reached/, { start: true, ready: ['ready'] });
+      await pageRefusal('unknown-room', '?test=1&persist=0&relay=' + encodeURIComponent(relay.ws) + '&join=ZZZZZZ', /Network game failed.*no room with that code/, { start: true, ready: ['ready'] });
+      {
+        const h = await netPage('full-h', '&host=2', ['-autonet', '2,0,2,1,0,0,0,0,0,0']);
+        await h.start();
+        const code = await waitRoomCode(h);
+        const j = await netPage('full-j', '&join=' + code, ['-autonet', '2,0,2,1,0,0,0,0,0,0']);
+        await j.start();
+        await outHas(j, /Lobby: the game starts/, 30000);
+        await pageRefusal('relay-room-full', '?test=1&persist=0&relay=' + encodeURIComponent(relay.ws) + '&join=' + code, /Network game failed.*room is full/, { start: true, ready: ['ready'] });
+        for (const m of [h, j]) { await m.stop(); machines.splice(machines.indexOf(m), 1); }
+      }
+    } finally { await cleanup(relay); }
+    // the game in progress: the host goes, a guest goes; browsers and native games
+    await goneGame(['browser', 'browser'], 0, [null, /Network game failed: the host left the game/]);
+    await goneGame(['browser', 'native'], 0, [null, /Network game failed: the host left the game/]);
+    await goneGame(['browser', 'browser', 'browser'], 2, [/Network game failed: player 3 \(.*\) left the game/, /Network game failed: player 3 left the game/, null]);
+    await goneGame(['native', 'browser', 'browser'], 1, [/Network game failed: player 2 \(.*\) left the game/, null, /Network game failed: player 2 left the game/]);
+  },
+};
+
+// A hidden guest at the end of a level (found in 04c): every machine shows the co-op bonus screen and waits for its own
+// player's key; a hidden tab has nobody to press one, and the others wait for it at the start of the next level. A hidden tab
+// in a network game now leaves the screen at once. The level ends by its real exit switch (-testswitch: OperateSprite on it,
+// which sets FinishedLevel, unlike -testexit), the visible browser's player presses Space on the bonus screen, and the next
+// level (E1L2) must agree on every tic and field by field at its start, tics 1 to 3 and its last tic.
+const LV_SWITCH = 200, LV_TICS = 300;
+async function levelEndGame(kinds, hiddenIdx) {
+  const relay = await startRelay();
+  try {
+    console.log('  ' + kinds.join(' + ') + ', ' + (hiddenIdx === 0 ? 'the host' : 'p' + hiddenIdx) + ' hidden; the exit switch at tic ' + LV_SWITCH + ' (' + LOAD() + ')');
+    const { ms } = await lobbyGame(relay, kinds, { tics: LV_TICS, state: true, extra: () => ['-testswitch' + LV_SWITCH, '-teststate' + LV_TICS],
+      onStart: async (i, m) => { if (i === hiddenIdx) { await hideFromStart(m); } } });
+    // the visible browsers' players press Space on their bonus screens, until their game is in the next level
+    const presser = (async () => {
+      const vis = ms.filter((m, i) => i !== hiddenIdx && m.kind === 'browser');
+      const done = new Set();
+      const t0 = now();
+      while (now() - t0 < 180000 && done.size < vis.length) {
+        for (const m of vis) {
+          if (done.has(m)) { continue; }
+          const d = await m.readDump().catch(() => null);
+          if (d && dumpLevels(d).length >= 2) { done.add(m); continue; }
+          if (/TEST: operating the exit switch/.test(await m.out())) { await key(m.page, 'Space', 120); }
+        }
+        await sleep(300);
+      }
+    })();
+    const limit = (LV_SWITCH + LV_TICS) / NOMINAL * 1000 * 3 + 150000;
+    for (const m of ms) { await m.waitEnd(limit - (now() - ms[0].started)); }
+    await presser;
+    console.log('  the game took ' + ((now() - ms[0].started) / 1000).toFixed(1) + ' s');
+    const outs = [];
+    for (const m of ms) { outs.push(await m.out()); }
+    ms.forEach((m, i) => check(/TEST: operating the exit switch \(sprite \d+\) at tic 200\b/.test(outs[i]), m.name + ' operated the level\'s exit switch at tic ' + LV_SWITCH));
+    check(/leaves the bonus screen by itself/.test(outs[hiddenIdx]), ms[hiddenIdx].name + ' (hidden) left the bonus screen by itself');
+    ms.forEach((m, i) => { if (i !== hiddenIdx) { check(!/leaves the bonus screen by itself/.test(outs[i]), m.name + ' (visible) waited for its player\'s key on the bonus screen'); } });
+    const dumps = await checkLobbyGame(ms, kinds.length, LV_TICS);
+    const lv = dumps.map(dumpLevels);
+    check(lv.every((l) => l.length === 2 && l[0].length === LV_SWITCH), 'every machine played ' + LV_SWITCH + ' tics of E1L1 and went on to the next level (' + lv.map((l) => l.map((x) => x.length).join('+')).join(', ') + ')');
+    const st = [];
+    for (const m of ms) { const b = await m.readFile('d.bin.state'); st.push(b ? parseState(b.toString()) : null); }
+    if (!st.every(Boolean)) { check(false, 'every machine wrote its state dump'); return; }
+    for (let k = 1; k < ms.length; k++) {
+      for (const w of ['L2.start', 'L2.t1', 'L2.t2', 'L2.t3', 'L2.t' + LV_TICS]) {
+        if (!st[0].has(w + ' global') || !st[k].has(w + ' global')) { check(false, ms[0].name + ' and ' + ms[k].name + ' have the state dump ' + w); continue; }
+        const d = stateDifferences(st[0], st[k], w, ms[0].kind !== ms[k].kind);
+        check(d.length === 0, ms[0].name + ' and ' + ms[k].name + ' agree field by field at ' + w, d.slice(0, 10).join('; '));
+      }
+    }
+    const ns = st.map((a) => +a.get('L2.start global').get('numsectors'));
+    check(ns.every((n) => n === ns[0]) && ns[0] !== 486, 'the next level is another map than E1L1 (' + ns.join(', ') + ' sectors)');
+  } finally { await cleanup(relay); }
+}
+SCENARIOS['level-end'] = {
+  what: 'a hidden guest (and a hidden host) at the co-op bonus screen after the real exit switch: it continues by itself, the room goes on, and the next level agrees on every tic',
+  run: async () => {
+    await levelEndGame(['browser', 'browser'], 1);
+    await levelEndGame(['browser', 'browser'], 0);
   },
 };
 

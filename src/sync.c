@@ -31,6 +31,8 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "names2.h"
 #include "net.h"
 #include "mmulti_vnet.h"
+#include "sector.h"
+#include "osd.h"
 #ifndef _WIN32
 #include <time.h>
 #endif
@@ -610,7 +612,7 @@ void TestNudgeArg(int tic)
 // NumSyncBytes = 8 and so also changes the version that is sent.
 int TestVersionSalt(void)
     {
-    return (NumSyncBytes - 1) * 1000003 + TestQuitTics * 37 + TestExitTic * 101 + TestExitLevel * 7;
+    return (NumSyncBytes - 1) * 1000003 + TestQuitTics * 37 + TestExitTic * 101 + TestExitLevel * 7 + TestSwitchTic * 13;
     }
 
 // -testdump<name>: every machine writes its own record of every game tic to <name>, so that a test
@@ -1373,6 +1375,62 @@ void TestExitArg(const char *arg)
     TestExitLevel = c ? atoi(c + 1) : 0;
     }
 
+// -testswitch<T> (test-only, brief 05): at the start of game tic T of the first level, every machine
+// operates the level's exit switch, as a player pressing it does: OperateSprite() on the first
+// sprite tagged TAG_LEVEL_EXIT_SWITCH (sector.c), or, in a level that has only an exit sector,
+// what OperateTripTrigger() does for it. Unlike -testexit this sets FinishedLevel, so every machine
+// then goes through the real end of a level: waitforeverybody, the co-op bonus screen (or the
+// deathmatch stats screen), each machine waiting for its own player's key. In the version salt.
+int TestSwitchTic;
+static int TestSwitchDone;
+
+void TestSwitchArg(int tic)
+    {
+    TestSwitchTic = tic;
+    }
+
+static void TestSwitch(void)
+    {
+    extern BOOL ExitLevel, FinishedLevel;
+    int i;
+
+    for (i = 0; i < MAXSPRITES; i++)
+        {
+        if (sprite[i].statnum >= MAXSTATUS || sprite[i].lotag != TAG_LEVEL_EXIT_SWITCH || sprite[i].picnum == ST1)
+            continue;
+        buildprintf("TEST: operating the exit switch (sprite %d) at tic %u\n", i, MoveThingsCount);
+        OperateSprite(i, FALSE);
+        return;
+        }
+    for (i = 0; i < numsectors; i++)
+        {
+        if (LOW_TAG(i) != TAG_LEVEL_EXIT_SWITCH)
+            continue;
+        buildprintf("TEST: entering the exit sector %d at tic %u\n", i, MoveThingsCount);
+        if (sector[i].hitag)
+            Level = sector[i].hitag;
+        else
+            Level++;
+        ExitLevel = TRUE;
+        FinishedLevel = TRUE;
+        return;
+        }
+    buildprintf("TEST: this level has no exit switch\n");
+    }
+
+// -testosd<T>,<command> (test-only, brief 05): at the start of game tic T of the first level, this
+// machine runs the console command (for example "host 2"), as if typed into the console. Per machine.
+static int TestOsdTic, TestOsdDone;
+static char TestOsdCmd[128];
+
+void TestOsdArg(const char *arg)
+    {
+    const char *c = strchr(arg, ',');
+
+    TestOsdTic = atoi(arg);
+    snprintf(TestOsdCmd, sizeof(TestOsdCmd), "%s", c ? c + 1 : "");
+    }
+
 // -teststall<T>,<ms> (test-only, F3): at the start of game tic T of the first level, after -testexit
 // (when it is the same tic), this machine stops for <ms> milliseconds with its clock running, then
 // goes on with the tic. Meanwhile the other machines go on making their inputs, and they arrive
@@ -1463,6 +1521,19 @@ void TestTicHook(void)
         Level = TestExitLevel > 0 ? TestExitLevel : Level + 1;
         ExitLevel = TRUE;
         buildprintf("TEST: leaving the level at tic %d for level %d\n", TestExitTic, Level);
+        }
+
+    if (TestSwitchTic > 0 && !TestSwitchDone && TestStateLevels <= 1 && (int)MoveThingsCount == TestSwitchTic)
+        {
+        TestSwitchDone = 1;
+        TestSwitch();
+        }
+
+    if (TestOsdTic > 0 && !TestOsdDone && (int)MoveThingsCount == TestOsdTic)
+        {
+        TestOsdDone = 1;
+        buildprintf("TEST: console command at tic %u: %s\n", MoveThingsCount, TestOsdCmd);
+        OSD_Dispatch(TestOsdCmd);
         }
 
     if (TestStallTic > 0 && !TestStallDone && (int)MoveThingsCount == TestStallTic)

@@ -39,6 +39,7 @@ $(SRC)/menus.$o: $(SRC)/menus.c $(build_h) $(SRC)/keys.h $(names2_h) $(panel_h) 
 $(SRC)/miscactr.$o: $(SRC)/miscactr.c $(build_h) $(SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SRC)/ai.h $(SRC)/quake.h $(AUDIOLIBROOT)/include/fx_man.h $(SRC)/actor.h $(SRC)/sector.h $(SRC)/sprite.h $(SRC)/saveable.h
 $(SRC)/morph.$o: $(SRC)/morph.c $(build_h) $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SRC)/sector.h $(SRC)/ai.h $(SRC)/player.h $(SRC)/saveable.h
 $(SRC)/net.$o: $(SRC)/net.c $(build_h) $(SRC)/keys.h $(names2_h) $(tags_h) $(game_h) $(SRC)/net.h $(SRC)/pal.h $(SRC)/weapon.h $(SRC)/text.h $(SRC)/menus.h
+$(SRC)/netlobby.$o: $(SRC)/netlobby.c $(SRC)/netlobby.h $(build_h) $(game_h) $(SRC)/net.h $(SRC)/startwin.h $(ENGINEINC)/mmulti.h $(ENGINEINC)/mmulti_vnet.h $(ENGINEINC)/osd.h
 $(SRC)/ninja.$o: $(SRC)/ninja.c $(build_h) $(SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SRC)/ai.h $(SRC)/pal.h $(SRC)/player.h $(SRC)/net.h $(SRC)/weapon.h $(SRC)/track.h $(SRC)/actor.h $(SRC)/ninja.h $(SRC)/sprite.h $(SRC)/saveable.h
 $(SRC)/osdcmds.$o: $(SRC)/osdcmds.c $(build_h) $(game_h) $(SRC)/demo.h $(SRC)/menus.h $(ENGINEINC)/osd.h $(ENGINEINC)/compat.h
 $(SRC)/osdfuncs.$o: $(SRC)/osdfuncs.c $(SRC)/osdfuncs.h $(build_h) $(SRC)/mytypes.h $(MACTROOT)/keyboard.h

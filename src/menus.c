@@ -46,6 +46,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "gamedefs.h"
 #include "config.h"
 #include "net.h"
+#include "netlobby.h"
 #include "fx_man.h"
 #include "music.h"
 #include "text.h"
@@ -561,6 +562,29 @@ MenuGroup LoadGameGroup = {100, 5, "^Load Game", load_i, pic_loadgame, 0, m_defs
 #define MAIN_XSTART 55
 #define MAIN_LINE(line) (MAIN_YSTART + (MAIN_YOFF * line))
 
+// Brief 05: hosting and joining a network game through the relay (netlobby.c). Both restart
+// into the network game (D3); the lobby is the page's overlay (browser) or the startup window
+// and the console (desktop).
+static BOOL MNU_OnlineCheck(MenuItem *item);
+static BOOL MNU_HostOnlineCheck(MenuItem *item);
+static BOOL MNU_HostOnlineCustom(void);
+static BOOL MNU_DoHostOnline(UserCall call, MenuItem *item);
+static BOOL MNU_JoinOnlineCustom(UserCall call, MenuItem *item);
+
+MenuItem hostonline_i[] =
+    {
+    {DefOption(KEYSC_2, "2 Players"), OPT_XS, OPT_LINE(0), 1, m_defshade, 2, MNU_HostOnlineCustom, MNU_HostOnlineCheck, NULL},
+    {DefOption(KEYSC_3, "3 Players"), OPT_XS, OPT_LINE(1), 1, m_defshade, 3, MNU_HostOnlineCustom, MNU_HostOnlineCheck, NULL},
+    {DefOption(KEYSC_4, "4 Players"), OPT_XS, OPT_LINE(2), 1, m_defshade, 4, MNU_HostOnlineCustom, MNU_HostOnlineCheck, NULL},
+    {DefOption(KEYSC_5, "5 Players"), OPT_XS, OPT_LINE(3), 1, m_defshade, 5, MNU_HostOnlineCustom, MNU_HostOnlineCheck, NULL},
+    {DefOption(KEYSC_6, "6 Players"), OPT_XS, OPT_LINE(4), 1, m_defshade, 6, MNU_HostOnlineCustom, MNU_HostOnlineCheck, NULL},
+    {DefOption(KEYSC_7, "7 Players"), OPT_XS, OPT_LINE(5), 1, m_defshade, 7, MNU_HostOnlineCustom, MNU_HostOnlineCheck, NULL},
+    {DefOption(KEYSC_8, "8 Players"), OPT_XS, OPT_LINE(6), 1, m_defshade, 8, MNU_HostOnlineCustom, MNU_HostOnlineCheck, NULL},
+    {DefNone}
+    };
+MenuGroup hostonlinegroup = {65, 5, "^Host Online", hostonline_i, pic_newgametitl, 0, m_defshade, MNU_DoHostOnline, NULL, 0};
+MenuGroup joinonlinegroup = {0, 0, NULL, NULL, 0, 0, m_defshade, MNU_JoinOnlineCustom, NULL, 0};
+
 #define MAIN_MENU_COOL_STUFF "^Cool Stuff"
 #define MAIN_MENU_HOW_TO_ORDER "^How to Order"
 
@@ -572,6 +596,8 @@ MenuItem main_i[] =
     {DefLayer(KEYSC_O, "^Options", &optiongroup),        MAIN_XSTART, MAIN_LINE(3), pic_options, m_defshade, 0, NULL, NULL, NULL},
     {DefLayer(KEYSC_H, "^Oh Dear", &ordergroup),         MAIN_XSTART, MAIN_LINE(4), pic_orderinfo, m_defshade, 0, NULL, NULL, NULL},
     {DefLayer(KEYSC_Q, "^Quit", &quitgroup),             MAIN_XSTART, MAIN_LINE(5), pic_quit, m_defshade, 0, NULL, NULL, NULL},
+    {DefLayer(KEYSC_G, "^Host Online Game", &hostonlinegroup), MAIN_XSTART, MAIN_LINE(6), pic_newgame, m_defshade, 0, NULL, MNU_OnlineCheck, NULL},
+    {DefLayer(KEYSC_J, "^Join Online Game", &joinonlinegroup), MAIN_XSTART, MAIN_LINE(7), pic_newgame, m_defshade, 0, NULL, MNU_OnlineCheck, NULL},
     {DefNone}
     };
 
@@ -5472,3 +5498,145 @@ VOID ResetPalette(PLAYERp pp)
 // vim:ts=4:sw=4:enc=utf-8:
 
 
+
+// ---- Brief 05: Host Online Game, Join Online Game ----------------------------------------------
+
+// Not while this machine is already in a network game (or playing a demo).
+static BOOL
+MNU_OnlineCheck(MenuItem *item)
+    {
+    if (CommPlayers > 1 || CommEnabled || DemoPlaying)
+        SET(item->flags, mf_disabled);
+    else
+        RESET(item->flags, mf_disabled);
+    return (TRUE);
+    }
+
+// The player counts the game data allows (4 on shareware, 8 registered).
+static BOOL
+MNU_HostOnlineCheck(MenuItem *item)
+    {
+    if (item->tics > MAX_SW_PLAYERS)
+        SET(item->flags, mf_disabled);
+    else
+        RESET(item->flags, mf_disabled);
+    return (TRUE);
+    }
+
+static BOOL
+MNU_HostOnlineCustom(void)
+    {
+    int players = currentmenu->items[currentmenu->cursor].tics;
+
+    if (NetRestart(players, NULL))
+        ExitMenus();
+    else
+        {
+        // say why where it can be read: the console has the message
+        ExitMenus();
+        OSD_ShowDisplay(1);
+        }
+    return (TRUE);
+    }
+
+static BOOL
+MNU_DoHostOnline(UserCall call, MenuItem *item)
+    {
+    short w, h;
+    char *t;
+
+    (void)item;
+    if (call != uc_touchup)
+        return (TRUE);
+    t = "Others join with the room code";
+    MNU_MeasureString(t, &w, &h);
+    MNU_DrawString(TEXT_XCENTER(w), 150, t, 1, 16);
+    t = "or the link the lobby shows.";
+    MNU_MeasureString(t, &w, &h);
+    MNU_DrawString(TEXT_XCENTER(w), 160, t, 1, 16);
+    t = "The host can start before every place is filled.";
+    MNU_MeasureString(t, &w, &h);
+    MNU_DrawString(TEXT_XCENTER(w), 172, t, 1, 16);
+    return (TRUE);
+    }
+
+// The room code is typed in here, like the player name (MNU_DoPlayerName): the original menus'
+// own text entry.
+static BOOL
+MNU_JoinOnlineCustom(UserCall call, MenuItem *item)
+    {
+    static const char *err;
+    char code[8];
+    short w, h;
+    char *t;
+
+    if (call == uc_touchup)
+        return (TRUE);
+
+    if (cust_callback == NULL)
+        {
+        if (call != uc_setup)
+            return (FALSE);
+        memset(MessageInputString, '\0', sizeof(MessageInputString));
+        while (KB_KeyWaiting())
+            {
+            if (KB_Getch() == 0)
+                KB_Getch();
+            }
+        err = NULL;
+        MenuInputMode = TRUE;
+        cust_callback = MNU_JoinOnlineCustom;
+        cust_callback_call = uc_draw;
+        cust_callback_item = item;
+        return (TRUE);
+        }
+
+    switch (MNU_InputString(MessageInputString, 120))
+        {
+        case -1: // Escape: back to the menu
+            MenuInputMode = FALSE;
+            cust_callback = NULL;
+            KB_ClearKeysDown();
+            KB_FlushKeyboardQueue();
+            memset(MessageInputString, '\0', sizeof(MessageInputString));
+            return (TRUE);
+        case FALSE: // Enter
+            if (NetIsRoomCode(MessageInputString, code))
+                {
+                MenuInputMode = FALSE;
+                cust_callback = NULL;
+                KB_ClearKeysDown();
+                KB_FlushKeyboardQueue();
+                memset(MessageInputString, '\0', sizeof(MessageInputString));
+                ExitMenus();
+                if (!NetRestart(0, code))
+                    OSD_ShowDisplay(1);
+                return (TRUE);
+                }
+            err = MessageInputString[0] ? "That is not a room code." : NULL;
+            break;
+        default:
+            break;
+        }
+    if (strlen(MessageInputString) > 6)
+        MessageInputString[6] = '\0';
+
+    t = "Join Online Game";
+    MNU_MeasureString(t, &w, &h);
+    MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE-30, t, 1, 16);
+    t = "Type the room code and press Enter";
+    MNU_MeasureString(t, &w, &h);
+    MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE-10, t, 1, 16);
+    MNU_MeasureString(MessageInputString, &w, &h);
+    MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE, MessageInputString, 1, 16);
+    rotatesprite((TEXT_XCENTER(w)+w+7)<<16,(MESSAGE_LINE+3)<<16,64<<9,0,COINCURSOR+((totalclock>>3)%7),0,0,MenuDrawFlags,0,0,xdim-1,ydim-1);
+    if (err)
+        {
+        t = "6 letters and digits, no 0, 1, I or O";
+        MNU_MeasureString(err, &w, &h);
+        MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE+14, (char *)err, 1, 16);
+        MNU_MeasureString(t, &w, &h);
+        MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE+24, t, 1, 16);
+        }
+    return (TRUE);
+    }

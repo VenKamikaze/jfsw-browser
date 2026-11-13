@@ -138,7 +138,9 @@ on_signal() {
 trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
 trap 'on_signal 129' HUP
-"$sw" -nosetup "$@" &
+# <&0: the game keeps this script's standard input (bash gives a background job /dev/null
+# otherwise), so that a host can be told "start" there (brief 05, src/netlobby.c).
+"$sw" -nosetup "$@" <&0 &
 gpid=$!
 ( sleep "$secs"; : > "$flag"; kill -TERM "$gpid" 2>/dev/null; sleep 5; kill -KILL "$gpid" 2>/dev/null ) &
 wpid=$!
