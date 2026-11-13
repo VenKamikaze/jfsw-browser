@@ -596,8 +596,8 @@ MenuItem main_i[] =
     {DefLayer(KEYSC_O, "^Options", &optiongroup),        MAIN_XSTART, MAIN_LINE(3), pic_options, m_defshade, 0, NULL, NULL, NULL},
     {DefLayer(KEYSC_H, "^Oh Dear", &ordergroup),         MAIN_XSTART, MAIN_LINE(4), pic_orderinfo, m_defshade, 0, NULL, NULL, NULL},
     {DefLayer(KEYSC_Q, "^Quit", &quitgroup),             MAIN_XSTART, MAIN_LINE(5), pic_quit, m_defshade, 0, NULL, NULL, NULL},
-    {DefLayer(KEYSC_G, "^Host Online Game", &hostonlinegroup), MAIN_XSTART, MAIN_LINE(6), pic_newgame, m_defshade, 0, NULL, MNU_OnlineCheck, NULL},
-    {DefLayer(KEYSC_J, "^Join Online Game", &joinonlinegroup), MAIN_XSTART, MAIN_LINE(7), pic_newgame, m_defshade, 0, NULL, MNU_OnlineCheck, NULL},
+    {DefLayer(KEYSC_G, "^Host Online", &hostonlinegroup), MAIN_XSTART, MAIN_LINE(6), pic_newgame, m_defshade, 0, NULL, MNU_OnlineCheck, NULL},
+    {DefLayer(KEYSC_J, "^Join Online", &joinonlinegroup), MAIN_XSTART, MAIN_LINE(7), pic_newgame, m_defshade, 0, NULL, MNU_OnlineCheck, NULL},
     {DefNone}
     };
 
@@ -5550,13 +5550,13 @@ MNU_DoHostOnline(UserCall call, MenuItem *item)
         return (TRUE);
     t = "Others join with the room code";
     MNU_MeasureString(t, &w, &h);
-    MNU_DrawString(TEXT_XCENTER(w), 150, t, 1, 16);
-    t = "or the link the lobby shows.";
+    MNU_DrawString(TEXT_XCENTER(w), 110, t, 1, 16);
+    t = "or the lobby's invite link.";
     MNU_MeasureString(t, &w, &h);
-    MNU_DrawString(TEXT_XCENTER(w), 160, t, 1, 16);
-    t = "The host can start before every place is filled.";
+    MNU_DrawString(TEXT_XCENTER(w), 120, t, 1, 16);
+    t = "The host may start early.";
     MNU_MeasureString(t, &w, &h);
-    MNU_DrawString(TEXT_XCENTER(w), 172, t, 1, 16);
+    MNU_DrawString(TEXT_XCENTER(w), 132, t, 1, 16);
     return (TRUE);
     }
 
@@ -5621,22 +5621,23 @@ MNU_JoinOnlineCustom(UserCall call, MenuItem *item)
     if (strlen(MessageInputString) > 6)
         MessageInputString[6] = '\0';
 
+    // (above the status bar: MESSAGE_LINE is where the player name is typed, lower down)
     t = "Join Online Game";
     MNU_MeasureString(t, &w, &h);
-    MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE-30, t, 1, 16);
+    MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE-50, t, 1, 16);
     t = "Type the room code and press Enter";
     MNU_MeasureString(t, &w, &h);
-    MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE-10, t, 1, 16);
+    MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE-38, t, 1, 16);
     MNU_MeasureString(MessageInputString, &w, &h);
-    MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE, MessageInputString, 1, 16);
-    rotatesprite((TEXT_XCENTER(w)+w+7)<<16,(MESSAGE_LINE+3)<<16,64<<9,0,COINCURSOR+((totalclock>>3)%7),0,0,MenuDrawFlags,0,0,xdim-1,ydim-1);
+    MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE-26, MessageInputString, 1, 16);
+    rotatesprite((TEXT_XCENTER(w)+w+7)<<16,(MESSAGE_LINE-23)<<16,64<<9,0,COINCURSOR+((totalclock>>3)%7),0,0,MenuDrawFlags,0,0,xdim-1,ydim-1);
     if (err)
         {
         t = "6 letters and digits, no 0, 1, I or O";
-        MNU_MeasureString(err, &w, &h);
-        MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE+14, (char *)err, 1, 16);
+        MNU_MeasureString((char *)err, &w, &h);
+        MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE-12, (char *)err, 1, 16);
         MNU_MeasureString(t, &w, &h);
-        MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE+24, t, 1, 16);
+        MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE-2, t, 1, 16);
         }
     return (TRUE);
     }

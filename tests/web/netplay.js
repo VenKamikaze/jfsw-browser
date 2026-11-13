@@ -1557,9 +1557,9 @@ SCENARIOS['host-join'] = {
       await checkLobbyGame(ms, ms.length, LOBBY_TICS);
       for (const m of ms.splice(0)) { await m.stop(); machines.splice(machines.indexOf(m), 1); }
     };
-    // the console of a browser page: the key left of 1 opens it; the command is typed and sent with Enter
+    // the console of a browser page: Num Lock opens it (the game's default key for it); the command is typed and sent with Enter
     const consoleCmd = async (m, cmd) => {
-      await m.page.keyboard.press('Backquote');
+      await key(m.page, 'NumLock');
       await sleep(400);
       await m.page.keyboard.type(cmd, { delay: 40 });
       await m.page.keyboard.press('Enter');
@@ -1612,16 +1612,17 @@ SCENARIOS['host-join'] = {
         const h = await netPage('p0', '', play);
         await h.start();
         check(!!(await waitFor(async () => (await h.dumpSize()) > 40 * REC, 60000)), h.name + ' is playing single player');
+        // (a menu's hot key moves the cursor to its item; Enter takes it)
         await key(h.page, 'Escape'); await sleep(500);
-        await key(h.page, 'g'); await sleep(500);
-        await key(h.page, '2');
+        await key(h.page, 'g'); await sleep(300); await key(h.page, 'Enter'); await sleep(500);
+        await key(h.page, '2'); await sleep(300); await key(h.page, 'Enter');
         await reloaded(h, /[?&]host=2(&|$)/);
         const code = await waitRoomCode(h);
         const g = await netPage('p1', '', play);
         await g.start();
         check(!!(await waitFor(async () => (await g.dumpSize()) > 40 * REC, 60000)), g.name + ' is playing single player');
         await key(g.page, 'Escape'); await sleep(500);
-        await key(g.page, 'j'); await sleep(500);
+        await key(g.page, 'j'); await sleep(300); await key(g.page, 'Enter'); await sleep(500);
         for (const c of code.toLowerCase()) { await g.page.keyboard.press(c === c.toUpperCase() ? 'Digit' + c : 'Key' + c.toUpperCase()); await sleep(60); }
         await sleep(200);
         await key(g.page, 'Enter');
@@ -1690,7 +1691,8 @@ SCENARIOS['lobby-errors'] = {
       await pageRefusal('no-relay-host', '?host=2', /no relay is set up/);
       await pageRefusal('no-relay-join', '?join=ABC234', /no relay is set up/);
       relay = await startRelay(['-max-members', '2']);
-      CONFIG_RELAY = relay.ws;
+      await closeEnv();
+      CONFIG_RELAY = relay.ws;        // from here on the page's config.js has the relay
       await pageRefusal('host-9', '?host=9', /"9" is not a number of players.*2 to 8/);
       await pageRefusal('host-1', '?host=1', /"1" is not a number of players/);
       await pageRefusal('host-x', '?host=two', /"two" is not a number of players/);
@@ -1698,7 +1700,6 @@ SCENARIOS['lobby-errors'] = {
       await pageRefusal('join-short', '?join=ABC', /"ABC" is not a room code/);
       await pageRefusal('join-01', '?join=AB01CD', /"AB01CD" is not a room code/);
       await pageRefusal('host-and-join', '?host=2&join=ABC234', /to host and to join/);
-      await pageRefusal('test-relay-ignored', '?relay=' + encodeURIComponent('ws://127.0.0.1:1/vnet') + '&host=9', /"9" is not a number/);    // (checked below that ?relay= does nothing here)
       await closeEnv();
       // ?relay= is a test knob: on an ordinary page with no relay in config.js it does not supply one
       await pageRefusal('relay-knob-ignored', '?relay=' + encodeURIComponent(relay.ws) + '&host=2', /no relay is set up/);
