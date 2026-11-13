@@ -207,16 +207,30 @@ The check script (one at a time; load average while running):
 
 | Run | Result |
 |---|---|
-| `check-deploy.sh` (final tree) | RESULT_FULL |
-| `check-deploy.sh --no-tls` | RESULT_NOTLS |
+| `check-deploy.sh`, during the work (load 0.4 to 4) | the first run FAILED only its four WebTransport checks (Chromium did not yet trust the certificate for QUIC; the browsers fell back to the WebSocket and the per-tic game ran at 40 tics a second); after `--webtransport-developer-mode`, PASS three times (61 checks each), the per-tic game over WebTransport at 24.8 to 26.8 tics a second (L25; a WARNING line, not a check) |
+| `check-deploy.sh`, the final tree, three runs while other sessions' tests loaded the container (load 3 to 15) | PASS once (64 checks; the per-tic game at 8.9 tics a second, 1,253 datagrams dropped by the host's page); FAILED twice, each with one failed group: in the per-tic game over WebTransport the browser guest gave up, "Network game failed: the host left the game (its machine stopped answering 15 s ago)", at 8.6 and 11.1 tics a second with 1,518 and 1,598 datagrams dropped (L25 under load); every other check passed (60) |
+| `check-deploy.sh --no-tls` | PASS twice (57 checks, then 59 on the final tree with the sysctl step): 40.0 tics a second at load 0.8; 27.2 at load 3 to 9, nothing dropped |
+| `check-deploy.sh --quick` | PASS |
+
+So the script reproduces the validation on a machine that is not busy; on a loaded one, L25 can end its WebTransport game (2 of 6 such games, both at load 7 or more). It is not loosened: the game it reports is a real failure of the WebTransport path.
 
 Regression (acceptance 5), one at a time, after the restart, on the final code:
 
-REGRESSION_TABLE
+| Test | Result | Time, load |
+|---|---|---|
+| `netplay.js` (all but `lag-matrix` and `old-new`) | **1286 passed, 0 failed** (`rejoin-vanish`, `rejoin-quit` with the relay's default time-outs included) | 31.5 minutes, load 3.7 to 8 |
+| `make test GAME_RUNS=1` | **8 PASS** (mmulti 10 runs, three games over the relay and over UDP, UDP against the baseline, errors, level exit, startup window, rejoin); draw 16 passed, 0 failed | 9.3 minutes, load 3.5 to 4.4 |
+| `smoke.js` | 29 passed, 0 failed | load 1.9 to 2.4 |
+| `persist.js` | 15 passed, 0 failed | load 2.4 to 3.1 |
+| `data.js` | 172 passed, 0 failed | load 3.1 to 3.6 |
+| `grptable.js` | 8 passed, 0 failed | |
+| `determinism.js` | 20 passed, 1 failed: only the known "no stall over 100 ms" check (max 240 ms, p99 104.7 ms) | load 3.6 to 4 |
+
+Nothing in the game, the page or the build changed in this brief, so these are the same code as brief 05's merge; they were run because acceptance 5 asks for them.
 
 ### Mutations
 
-Each is a copy of the guide with one line changed, deployed with `check-deploy.sh --guide FILE` (the full run), so the deployment really is broken that way:
+Each is a copy of the guide with one line changed, deployed with `check-deploy.sh --guide FILE` (the full run), so the deployment really is broken that way. Both were run during the work and again on the final guide (load 7), with the same results; in the final `testMode` run the per-tic WebTransport game also failed, as in the loaded runs above (L25), which has nothing to do with the mutation:
 
 | Mutation | Result |
 |---|---|

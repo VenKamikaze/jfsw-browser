@@ -206,19 +206,21 @@ async function dumpGame() {
     check(diff < 0, 'all three machines agree on every tic, record for record (' + n + ' tics)', 'first difference at record ' + diff);
   }
   {
-    // how fast the game ran on the host: -testlag's records (36 bytes: tic, made, ready, ran, ...; microseconds)
+    // How fast the game ran on the host: -testlag's records (36 bytes: tic, made, ready, ran, ...; microseconds). Not a check:
+    // it depends on the machine's load, and a browser host with two guests over WebTransport runs slow (bugs.md L25: the
+    // pages drop datagrams), which this brief records and does not fix (vnet's send queue).
     const lag = await a.readFile('lag.bin');
+    const load = fs.readFileSync('/proc/loadavg', 'utf8').split(' ').slice(0, 3).join(' ');
+    const drops = wtDrops.A + wtDrops.B;
     if (lag && lag.length >= 36 * 400) {
       const n = Math.floor(lag.length / 36), ran = (i) => lag.readUInt32LE(i * 36 + 12);
-      const t1 = ran(100), t2 = ran(n - 1);
-      const tps = (n - 101) / ((t2 - t1) / 1e6);
-      // Not a check: a browser host with two guests over WebTransport runs slow (bugs.md L25), which this brief records and
-      // does not fix (vnet's send queue). Over WebSocket the same game runs at 40.
-      console.log((tps < 36 ? 'WARNING: ' : 'note: ') + 'the host ran tics 100 to ' + (n - 1) + ' at ' + tps.toFixed(1) + ' tics a second (nominal 40)' +
-        (tps < 36 ? ': slower than it should be (bugs.md L25: WebTransport, a browser host with two guests)' : ''));
+      const tps = (n - 101) / ((ran(n - 1) - ran(100)) / 1e6);
+      const why = WANT === 'relay-wt' && drops > 0 ? ' (the browsers dropped WebTransport datagrams: bugs.md L25)' : ' (a busy machine?)';
+      console.log((tps < 36 ? 'WARNING: ' : 'note: ') + 'the host ran tics 100 to ' + (n - 1) + ' at ' + tps.toFixed(1) + ' tics a second (nominal 40; load average ' + load + ')' +
+        (tps < 36 ? ': slower than it should be' + why : ''));
     }
+    if (WANT === 'relay-wt') { console.log('note: WebTransport datagrams dropped by the browsers\' send queues (vnet): A ' + wtDrops.A + ', B ' + wtDrops.B); }
   }
-  console.log('note: WebTransport datagrams dropped by the browsers\' send queues (vnet): A ' + wtDrops.A + ', B ' + wtDrops.B);
   const r = rates(await a.out());
   if (r.length) {
     const per = r.map((x) => (x.n / x.ms * 1000).toFixed(1)), tot = r.reduce((s, x) => s + x.n / x.ms * 1000, 0), bytes = r.reduce((s, x) => s + x.bytes / x.ms * 1000, 0);
