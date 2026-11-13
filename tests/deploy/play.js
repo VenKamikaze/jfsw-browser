@@ -1,21 +1,23 @@
 #!/usr/bin/env node
 // The browser and desktop part of tests/deploy/check-deploy.sh (brief 06): plays through a deployment the script
-// set up (Apache with TLS for game.example.org, the relay behind /vnet, UDP 7777 and WebTransport on UDP 443).
+// set up (Apache with TLS for game.example.org, the relay behind /vnet, UDP 7777, with --wt WebTransport on UDP 443).
 // Not meant to be run alone: the script passes
 //   DEPLOY_BASE       https://game.example.org/games/sw/        the deployed site (testMode: false)
-//   DEPLOY_TEST_BASE  https://game.example.org/games/sw-test/   the same files with testMode: true, for -testdump only
+//   DEPLOY_TEST_BASE  https://game.example.org/games/sw/check-deploy-test/   the same files with testMode: true, for -testdump only
 //   DEPLOY_SPKI       base64 SHA-256 of the certificate's public key: Chromium trusts it by that hash (and, for WebTransport,
 //                     with --webtransport-developer-mode, below)
-//   DEPLOY_RELAY_UDP  game.example.org:7777                      what a desktop player gives -relay
+//   DEPLOY_DESKTOP_JOIN  the guide's desktop command after ./sw, e.g. -net -relay game.example.org:7777 -room CODE --
+//   DEPLOY_TRANSPORT  relay-ws (the guide's default) or relay-wt (check-deploy.sh --wt)
 //   DEPLOY_STATS      http://127.0.0.1:8081/stats               the relay's counters
 //   DEPLOY_WORK       a directory for the native games
 // Checks:
 //   1. the deployed page with ?test=1&args=...: no test hooks, no test line, and the game does not see ?args=;
 //   2. a game through the deployed page's lobby: A hosts with ?host=3, B opens the invite link, a native ./sw joins by
-//      code over UDP; all three start a 3-player game with their own numbers; both browsers use WebTransport;
+//      code over UDP with the guide's command; all three start a 3-player game with their own numbers; both browsers use
+//      DEPLOY_TRANSPORT;
 //   3. a co-op game of the same three through the test-mode copy (?host=3 / ?join=CODE and -room CODE, -autonet,
 //      -testquit, -testdump, -testlag on the host): every machine ends with status 0 and the three dumps agree record for
-//      record; both browsers over WebTransport; the host's datagram rates are printed (brief 06, known 4).
+//      record; both browsers over DEPLOY_TRANSPORT; the host's tic and datagram rates are printed (brief 06, known 4).
 'use strict';
 const { chromium } = require('playwright');
 const { spawn } = require('child_process');
@@ -25,11 +27,14 @@ const http = require('http');
 
 const root = path.resolve(__dirname, '..', '..');
 const BASE = process.env.DEPLOY_BASE, TBASE = process.env.DEPLOY_TEST_BASE, SPKI = process.env.DEPLOY_SPKI;
-const RELAY_UDP = process.env.DEPLOY_RELAY_UDP, STATS = process.env.DEPLOY_STATS, WORK = process.env.DEPLOY_WORK;
-if (!BASE || !TBASE || !SPKI || !RELAY_UDP || !STATS || !WORK) { console.error('play.js: run tests/deploy/check-deploy.sh'); process.exit(125); }
+const JOIN = process.env.DEPLOY_DESKTOP_JOIN, STATS = process.env.DEPLOY_STATS, WORK = process.env.DEPLOY_WORK;
+// the desktop player's arguments for room `code`, from the guide's command (the args after "--" are added by the caller)
+const joinArgs = (code) => JOIN.split(/\s+/).filter(Boolean).map((x) => (x === 'CODE' ? code : x));
+const RELAY_UDP = (JOIN || '').split(/\s+/)[(JOIN || '').split(/\s+/).indexOf('-relay') + 1];
+if (!BASE || !TBASE || !SPKI || !JOIN || !/ -room CODE --$/.test(' ' + JOIN.trim()) || !STATS || !WORK) { console.error('play.js: run tests/deploy/check-deploy.sh'); process.exit(125); }
 const HOSTNAME = new URL(BASE).hostname;
 const TICS = 1200, REC = 17;
-const WANT = process.env.DEPLOY_TRANSPORT || 'relay-wt';     // relay-ws for the guide's "Without TLS" (--no-tls)
+const WANT = process.env.DEPLOY_TRANSPORT || 'relay-ws';     // relay-ws for the guide's "Without TLS" (--no-tls)
 const AUTONET = ['-autonet', '2,0,2,1,0,0,0,0,0,0'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = () => Date.now();
@@ -130,7 +135,7 @@ async function deployedLobby() {
   check((await b.page.evaluate(() => document.getElementById('start').textContent)) === 'Click to join room ' + l.code, 'B (the invite link): "Click to join room ' + l.code + '"');
   await b.page.click('#start');
   check(!!(await waitFor(async () => { const x = await b.lobby(); return x && /2 of 3/.test(x.players); }, 30000)), 'B: the lobby says 2 of 3');
-  const c = native('lobby-native', ['-net', '-relay', RELAY_UDP, '-room', l.code, '--'], 60);
+  const c = native('lobby-native', joinArgs(l.code), 60);
   const ok = await waitFor(async () => started(await a.out()) && started(await b.out()) && started(c.out()), 40000);
   check(!!ok, 'all three start the game');
   const sa = started(await a.out()), sb = started(await b.out()), sc = started(c.out());
@@ -162,7 +167,7 @@ async function dumpGame() {
   const b = await page(TBASE + q('join=' + l.code.toLowerCase()), 'B');
   await b.page.click('#start');
   await waitFor(async () => /Lobby: 2 of 3 players are in/.test(await a.out()), 30000);
-  const c = native('dump-native', ['-net', '-relay', RELAY_UDP, '-room', l.code, '--'].concat(targs()), 200);
+  const c = native('dump-native', joinArgs(l.code).concat(targs()), 200);
   const t0 = now();
   // datagrams each browser's WebTransport dropped because too many were still being handed to the browser (vnet relay_wt.c)
   const wtDrops = { A: 0, B: 0 };
@@ -233,6 +238,18 @@ async function dumpGame() {
   await a.stop(); await b.stop(); await c.stop();
 }
 
+// Interrupted (Ctrl+C, or check-deploy.sh stopped): stop the native games (detached, each in its own process group) and the browser.
+let stopping = false;
+async function stopAll(code) {
+  if (stopping) { return; }
+  stopping = true;
+  for (const m of natives) { try { process.kill(-m.child.pid, 'SIGKILL'); } catch (e) { /* gone */ } }
+  if (browser) { await Promise.race([browser.close().catch(() => {}), sleep(5000)]); }
+  process.exit(code);
+}
+process.on('SIGINT', () => stopAll(130));
+process.on('SIGTERM', () => stopAll(143));
+
 (async () => {
   let code = 0;
   try {
@@ -241,7 +258,7 @@ async function dumpGame() {
     // one trusted by hash or in the NSS store (QUIC_TLS_CERTIFICATE_UNKNOWN). --origin-to-force-quic-on does not do: it
     // sends the page's own requests to the relay's HTTP/3 listener (404).
     browser = await chromium.launch({ args: ['--host-resolver-rules=MAP ' + HOSTNAME + ' 127.0.0.1', '--ignore-certificate-errors-spki-list=' + SPKI,
-      '--webtransport-developer-mode', '--no-proxy-server'] });
+      '--no-proxy-server'].concat(WANT === 'relay-wt' ? ['--webtransport-developer-mode'] : []) });
     await testModeOff();
     await deployedLobby();
     await dumpGame();
