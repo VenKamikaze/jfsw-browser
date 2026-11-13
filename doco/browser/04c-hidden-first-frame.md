@@ -214,3 +214,10 @@ Each was then run one at a time. The load averages (1, 5 and 15 minutes) are as 
 | `persist.js` | **15 passed, 0 failed** | 2.5 to 3.6 |
 | `data.js` | **172 passed, 0 failed** | 3.0 to 3.6 |
 | `determinism.js` | **20 passed, 1 failed**: only the known "no stall over 100 ms" check (7,549 frames over 140 s: median 16.7 ms, p99 61.7, max 160). The committed `jfsw1.dms` still matches, and native and wasm agree byte for byte | 2.7 to 3.7 |
+
+### Coordinator verification and merge (13 Nov 2026)
+
+- Independent review (read-only, own worktree): no blockers; S1 (copy one frame's override steps exactly, any map) and S2 (L20 reproduced: 201 against 200 tics) and N1 to N5 handled in the fix round above (L20 recorded, fixed in F3 at the user's request).
+- Fix diff read (`1409929..116b400`). Rebuilt from clean (native: 14 warnings as before; wasm), one test at a time: `netplay.js` 827 passed, 0 failed (load 2.0 to 2.8 at the start); `make test GAME_RUNS=1` 5 PASS and `test-draw` 16/0; `persist.js` 15/0; `data.js` 172/0; `determinism.js` 20/1 (the known stall check: max 154 ms); `smoke.js` 28/1 once at load 5.3 ("Down moves the menu cursor down": one press moved three rows, the menus' arrow polling, L14), then 29/0 in 5 of 5 reruns at load 1.4 to 3.5. Not caused by 04c (it touches neither the menus nor the input); a load-sensitive check, noted for the smoke-test follow-up.
+- Merged into `claude` with `--no-ff`. No submodule changed.
+

@@ -18,7 +18,7 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 | 03 | [Data download from a URL](03-data-download.md) | jfsw-browser | 02 | done (play-test pending) |
 | 04 | [Browser netplay](04-browser-netplay.md) | jfsw-browser, jfbuild | 01, 02 | done (play-test pending) |
 | 04b | [Netcode lag cuts](04b-lag-cuts.md) | jfsw-browser, jfbuild | 04 | done (play-test pending) |
-| 04c | [A tab hidden before the level's first frame (L19)](04c-hidden-first-frame.md) | jfsw-browser | 04b | review |
+| 04c | [A tab hidden before the level's first frame (L19)](04c-hidden-first-frame.md) | jfsw-browser | 04b | done (play-test pending) |
 | 05 | Host and join from the game | jfsw-browser (+ jfbuild) | 03, 04 | not written |
 | 06 | Deployment guide | jfsw-browser | 05 | not written |
 
@@ -30,6 +30,7 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 |---|---|---|---|---|
 | F1 | [Co-op game freezes at tic 1522](F1-coop-freeze.md) | `fix/coop-freeze` | 01 (for the regression test) | on hold (the user, 6 Nov 2026) |
 | F2 | [Native crash in the ALSA MIDI music driver](F2-alsa-midi-lock.md) | `fix/alsa-midi-lock` (jfaudiolib fork, from `68be97f`) | 00 | done (verified by the user on Arch, 7 Nov 2026) |
+| F3 | [Machines play different numbers of tics after a level exit (L20)](F3-level-exit-tics.md) | `fix/level-exit-tics` | 04c (for the tests) | written (the user, 12 Nov 2026: straight after 04c, before 05) |
 
 Later, not briefed: music (Q4), WebGL rendering through the GLES2 path, touch controls, the Wanton Destruction and Twin Dragon add-ons in the browser, mouse turns drawn between tics (view angle only), smoothing prediction corrections.
 
