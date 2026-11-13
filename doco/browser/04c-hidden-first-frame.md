@@ -148,7 +148,7 @@ Implemented in one session on `browser/04c-hidden-first-frame` (jfsw-browser onl
 
 - *L20 (bugs.md, suspected, not reproduced):* when a level ends (an exit switch, a deathmatch limit), `MoveLoop` goes on running every tic for which it already has all inputs before `RunLevel` sees `ExitLevel`, and how many that is is timing. In co-op the next level keeps health, weapons, ammo and inventory, so a machine that ran an extra tic in which something happened would start the next level out of sync. Found by reading while writing `-testexit` (which avoids it); not part of the drawing audit and not tested. For the user, under the bug policy.
 - *L21 (lesser):* the savegame picture skips `PostDraw` (single player).
-- *Maps other than the shareware ones:* the audit's map facts (one marker per plane, nothing re-sets the bits) were checked for the shareware GRP only.
+- *Maps other than the shareware ones:* that nothing in the simulation sets the bits again was checked for the shareware GRP only. (The first version also relied on one marker per plane; since the review round it does not: see below.)
 - The `hidden-first` throttling: Playwright cannot hide a tab; the page says it is hidden from the click on "Start" on, and the background-tab throttling is imitated from when its relay session is up (before that, a page held to one timer run a second would take minutes to start). The game's hidden path depends only on `document.hidden` and the session, so the hidden tab never drew; a real background tab is the play test.
 
 **Play-test steps (Arch Linux)**
@@ -170,3 +170,47 @@ cp testdata/swshare.grp build-wasm/
 3. *The other way round:* host in the browser (`...&args=-net%20-relay%20ws://127.0.0.1:7778/vnet%20-host-room%202%20--%20-autonet%202,0,2,1,0,0,0,0,0,0`), switch away from it right after Start, join natively with `./sw -net -relay 127.0.0.1:7777 -room CODE -- -autonet 2,0,2,1,0,0,0,0,0,0`, and play as in step 2 from the native side.
 4. *A level change while in the background:* as step 1, then finish E1L1 (the exit switch) while the guest's tab is in the background (each player presses Space on the bonus screen; switch to the guest tab only to press it, and away again before E1L2 starts), and play on. E1L3 has six override sectors (pools and skies); reaching it takes two exits.
 5. *The tests on your machine:* `node tests/web/netplay.js hidden-first hidden-level`, and with the build from `claude` in another worktree (`git worktree add ../jfsw-claude claude`, build it there): `NETPLAY_OLD_SW=../jfsw-claude/sw NETPLAY_OLD_WASM=../jfsw-claude/build-wasm node tests/web/netplay.js old-new`.
+
+### Review fix round
+
+The independent review found no blockers. What was changed (commit `d6aa0ae`):
+
+- **S1: `DrawSetupLevelStats()` does exactly what one frame does, on any map.** The first version only cleared the parallax bit, which is not what a frame does when two override markers share a plane: a frame then also leaves the first marker's picture (TAG2) and stat bits (TAG6) for good, and the simulation reads that picture (`FAF_ConnectCeiling`/`FAF_ConnectFloor`, rooms.c 646/652, compare it with `FAF_MIRROR_PIC`). `FAF_DrawRooms`' two marker loops are now `FAF_PicOverrideApply()` and `FAF_PicOverrideRestore()` (draw.c). `FAF_DrawRooms` calls them around `drawrooms()` and behaves as before; its `gotpic` loop is separate now, which changes nothing because it reads only `gotsector`. `DrawSetupLevelStats()` calls the two back to back, with nothing in between. The `FLOOR_SLOPE_DONT_DRAW` part does not depend on marker order (each marker only clears and then sets the bit), so it stays as it was.
+  - *Test:* a new test-only `-testdrawcheck[2|3|4]` (sync.c). In a single player game it works out what `DrawSetupLevelStats()` makes of every sector, puts the map back, draws the first frame, compares every sector and wall, prints one line and exits. `tests/draw-setup.sh` (`make test-draw`, now part of `make test`, about 10 s) runs it on all four shareware levels in four modes:
+    - the map as it is;
+    - a second marker added to every override plane (TAG2 + 1);
+    - control 3, nothing applied: it finds E1L1's 2 and E1L3's 6 override sectors;
+    - control 4, two markers per plane with only the parallax bits cleared (the first version): it finds them too. For example, on E1L1 the frame leaves sector 149 with ceilingstat `0x180` and picnum 781, where clearing the bit alone gives `0` and 2356.
+  - *Results:* 16 passed, 0 failed. With the fix and the doubled markers, no sector or wall differs on any level. `code-facts.md` §17 no longer relies on "one marker per plane".
+- **L20: reproduced by the reviewer.** With `-testexit`'s stop turned off, 1 of 3 two-browser games ran 201 tics of level 1 against 200. It is not fixed here; `bugs.md` L20 now says:
+  - it is reproduced (tic count);
+  - a desync needs a lasting co-op change in an extra tic;
+  - the likely fix is `if (ExitLevel) break;` after `domovethings()` in `MoveLoop`.
+  - *Checked:* `InitRunLevel` resets the random seed (`InitTimingVars`: `randomseed = 17`) and the input fifos (`InitNetVars`).
+  - *Upstream:* jonof/jfsw `master` is still `befcdd0`, with the same `MoveLoop`. None of its 18 pull requests touches `ExitLevel` in game.c or player.c, so it is not fixed upstream.
+- **N1: a level change in normal play waits for a key on every machine.** Both screens wait for Space, Enter or a mouse button, and a hidden tab gets no keys:
+  - the co-op `BonusScreen` (game.c about 2526);
+  - the deathmatch table in `StatScreen`.
+
+  So in normal play, "hidden across a level change" means hidden again after that key, before the next level's first frame. `-testexit` skips the screen so that its test can stay hidden throughout. For brief 05: a guest whose tab stays hidden holds up the whole room at every level end. This is in §17.
+- **N2:** a player's `NightVision` is per machine too. Only `DoPlayerNightVisionPalette()` (inv.c) sets it, only for `screenpeek`. Only drawing (`analyzesprites`) and the F11 key (game.c 4777) read it, and it is not in the state hash. It is now in `stateDifferences()`'s ignore set and in §17's per-machine list, with the reason in a comment.
+- **N3:** the `-testexit` level is now in the version salt.
+- **N5:** `bugs.md` L19 (1) now says the marker's `ang` is 0 from the first frame on since 04c.
+
+**Results after the fix round.** The container restarted in the middle of the first try, so everything below was rebuilt from clean afterwards:
+- the base `1468558` for `old-new`;
+- the remove-the-fix mutation;
+- the final tree (`make veryclean && make -j4`: 14 warnings as before; `scripts/build-wasm.sh clean` and build).
+
+Each was then run one at a time. The load averages (1, 5 and 15 minutes) are as given.
+
+| Run | Result | Load |
+|---|---|---|
+| mutation: the `DrawSetupLevelStats()` call removed, `hidden-first` and `hidden-level` | 57 failed, 179 passed. All 7 games fail: records differ from tic 1, naming `sec 149 ceilingstat`, `sec 238 floorstat` and, on E1L3, its six sectors | 2.5 to 2.6 |
+| `old-new` (11 games, old base and new build in one room) | **198 passed, 0 failed** | 2.5 to 3.3 |
+| `netplay.js` full (21.1 min) | **827 passed, 0 failed**. Hidden scenarios: 39.9 to 40.0 tics a second; 42, 44 and 69 hidden passes a second (6 for `hidden-thin`); at most 6 yields with data held back | 1.9 to 8.1 |
+| `make test GAME_RUNS=1` (7.7 min) | **5 PASS**, plus `test-draw` 16 passed, 0 failed; exit 0 | 1.9 to 5.7 |
+| `smoke.js` | **29 passed, 0 failed** | 1.9 to 2.5 |
+| `persist.js` | **15 passed, 0 failed** | 2.5 to 3.6 |
+| `data.js` | **172 passed, 0 failed** | 3.0 to 3.6 |
+| `determinism.js` | **20 passed, 1 failed**: only the known "no stall over 100 ms" check (7,549 frames over 140 s: median 16.7 ms, p99 61.7, max 160). The committed `jfsw1.dms` still matches, and native and wasm agree byte for byte | 2.7 to 3.7 |
