@@ -149,4 +149,44 @@ After this brief, a person who opens the page can play online with a friend usin
 
 ## Outcome
 
-(To be written by the implementer.)
+**Status: review.** Implemented 13 Nov 2026 on `browser/05-host-and-join` in jfsw-browser and the jfbuild fork (from `claude` `791c1bf` and `a610e1e`). jfbuild: `18ee1c4` (the mmulti lobby). jfsw-browser: `58b97fa` (stages A to C and the code of D and E), `a80eed0` (the tests of C to E, the menus' layout), `ceca736` (the startup window's test), and the documentation commit. What the code does, with the details, is `code-facts.md` §19; how to use and test it is `building.md` §6.6.
+
+### What the coordinator found, checked
+
+1. True: only `?test=1&args=...` could start a network game, and `config.js`'s `relay` was unused. Now `?host=N` and `?join=CODE` do it on any page, with the relay from `config.js` only (`?relay=` is a `?test=1` knob; `lobby-errors` checks that an ordinary page ignores it).
+2. True: the relay says nothing about members. Who is in comes from mmulti's own start-up exchange: the master counts its places and sends the count to the slaves in a fifth byte of its answer to their pings.
+3. True: `-host-room N` waited for N. "Start now" makes the master's `numplayers` the number of players in; the go-ahead and the count travel in the same answer, so no slave can start with another count (the mutation that sends the old count hangs every game). Late joiners are told "the game has already started" (they used to get no answer and fail after 15 s). Plain UDP is unchanged: every new path is behind `mmulti_vnet_active()`; `test-udp-unchanged.sh` passes with old and new binaries mixed.
+4. True, and also for the deathmatch table: both screens wait for a key on every machine. A hidden tab in a network game now leaves them at once.
+
+### Choices, and why
+
+- **The lobby's data flow** (D9, "a small exported function"): the game pushes its state to the page (`Module.jfswLobby`, an `EM_JS` call from the wait loop, on every change and every 100 ms) and gets the player's requests back as the return value. Nothing on the page calls into the wasm, so nothing runs inside the game while ASYNCIFY has `main` suspended. `mmulti_vnet.h` gained what the game needs (`lobbyplayers`, `lobbyslots`, `lobbystarted`, `startnow`, `leave`, `silentms`, `tellleft`); `mmulti.h` is unchanged (D4).
+- **Who is in, and Cancel:** a guest who leaves the lobby (Cancel, or a closed tab) frees its place, and the later players move down, so "Start now" always keeps places 1 to n-1 and a newcomer can take the free place. Cancel sends a notice (the host's count drops at once, measured 0.4 s; a guest whose host cancels is told at once, 0.2 s); a closed tab is noticed after 3 s of silence.
+- **Start now natively:** a line `start` on the host's standard input, or the GTK startup window's Start button, which reads "Start now (J of N in)" during the wait (the window is the only thing on screen then: the video mode is set after the wait, so neither the console nor a key in the game window can be used). Windows and macOS have the standard input only.
+- **Menus:** "Host Online" (a list of 2 to 8 players; those above the data's limit are disabled) and "Join Online" in the main menu, where a single player picks a game. The room code is typed into the menus' own text entry, the one the player name uses (`MNU_InputString`), with a check and a message for a bad code. Simpler than opening the console with `join ` typed, and it needs no knowledge of the console. "Host Online Game" did not fit the main menu's large font, hence the shorter names.
+- **Host and join restart** (D3): the page reloads with `?host=N`/`?join=CODE` (all other parameters kept); the desktop game sets `QuitFlag`, leaves through `Control()` (skipping the shareware "give up" page) and `execv`s itself (`/proc/self/exe` on Linux, `argv[0]` elsewhere, `_execv` on Windows: written but not built or run here). `host` without a count hosts the most the data allows, since Start now can begin earlier.
+- **Native relay setting:** `[Comm Setup] Relay` in `sw.cfg`, set by the console's `relay HOST:PORT`, the startup window's relay field, or a successful `-net -relay HOST:PORT` start. Without one, host and join say how to set it.
+- **Startup window** (GTK): one check box, "Online, through the relay:", with the relay's address, turns the existing join field into a room code and the existing player count into `-host-room`. Windows' startup window is unchanged (not cheap to do without a Windows build).
+- **The end of a game whose host or guest has gone:** no packet from the host (on a slave) or from a guest (on the master) for 15 s, the relay's default session timeout, ends the game with the reason; the master first tells the others who left. A guest's disappearance cannot be turned into a quit inside the game without changing the netcode (a quit is an input bit that the missing player would have to send), so the game ends for everyone with "player P left the game"; the page offers the start page. The host's own proper quit now says "The host ended the game." to the others.
+- **The hidden guest at a level end:** a hidden tab (`jfbuild_browser_hidden_netgame()`) leaves the bonus screen and the deathmatch table at once. No timer for visible players: they behave as in the original game.
+- **Tests at a real level exit:** `-testswitch<T>` operates the level's real exit switch sprite (E1L1: sprite 403) through `OperateSprite()`, so `FinishedLevel` is set and every machine goes through `waitforeverybody`, the bonus screen and `TerminateLevel`, unlike `-testexit` (F3's coverage note).
+
+### Error states (section E): where each is tested, with the measured time
+
+| Failure | Message (after "Network game failed: ") | Test | Time |
+|---|---|---|---|
+| relay not configured | the page: "This page cannot host/join a network game: no relay is set up for it ..." | `lobby-errors` (`no-relay-*`, `relay-knob-ignored`) | at once, no game started |
+| relay unreachable | the relay could not be reached | `lobby-errors`, `errors` | about 4 s |
+| bad room code / bad player count | the page: "... is not a room code ..." / "... is not a number of players ..." / "the shareware version ... at most 4" | `lobby-errors` (7 cases); the menus: their own message; the console: a console line | at once |
+| unknown room code | there is no room with that code | `lobby-errors`, `errors` | under 1 s |
+| room full (relay) | the room is full | `lobby-errors`, `errors` | under 1 s |
+| game already started | the game has already started (joining a game in progress is not possible) | `start-now` (browser and native late joiners), `lobby` | 0.5 to 1.2 s |
+| host left during the wait | the host left the room before the game started (Cancel); the host stopped answering (closed tab, brief 04) | `lobby`, `errors` | 0.2 s; 10 s |
+| host left during the game | the host left the game (its machine stopped answering N s ago) | `lobby-errors` (browser and native guests) | 15.1 to 15.3 s |
+| relay session lost | the relay ended the session ... (brief 04) | `relay-lost` | under 4 s after thawing |
+| a guest left mid-game | player P (Name) left the game (master); player P left the game (the others) | `lobby-errors` (browser and native hosts) | 15.3 s; 17.2 s |
+
+Every browser case ends on the page's overlay with "Back to the start page" (the page without `?host=`/`?join=`); every native case prints the line to the console and `sw.log`, shows a message box and exits 1. "Every place is taken" (`FULL`) only happens if a place's player goes silent for 2 to 3 s while the room is otherwise full; it is not reached by a test.
+
+RESULTS_PLACEHOLDER
+

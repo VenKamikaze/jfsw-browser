@@ -258,9 +258,9 @@
     lobbyStartBtn.hidden = !info.host;
     lobbyStartBtn.disabled = !(info.host && info.state === 2 && info.joined >= 2 && !lobbyCancel);
     lobbyStartBtn.textContent = info.joined >= 2 ? 'Start now with ' + info.joined + ' players' : 'Start now (needs 2 players)';
-    if (first) { (info.host ? lobbyCopyBtn : lobbyCancelBtn).focus(); }
+    // keyboard users start on the useful button: the host on Copy once there is a link, a guest on Cancel
     if (first && !info.host) { lobbyCancelBtn.focus(); }
-    if (info.host && info.state === 2 && document.activeElement === document.body) { lobbyCopyBtn.focus(); }
+    if (info.host && info.state === 2 && (first || document.activeElement === document.body || document.activeElement === canvas)) { lobbyCopyBtn.focus(); }
   }
   Module.jfswLobby = function (info) {
     window.jfswLobby = info;

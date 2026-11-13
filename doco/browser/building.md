@@ -133,7 +133,7 @@ They use the preinstalled Chromium through Playwright (`require('playwright')`; 
 
 ### 6.5 Network games in the browser, and their tests (brief 04)
 
-A browser plays only through a relay. The game takes the same arguments as the desktop one, with one difference: `-relay` is the relay's **WebSocket URL** (`wss://host/vnet`; `ws://127.0.0.1:PORT/vnet` for a local relay) instead of `HOST:PORT`. vnet then tries WebTransport first (derived from a `wss://` URL) and falls back to WebSocket; the game prints which it got (`... relay-wt` or `... relay-ws`). A plain `-net` without `-relay`, or a `HOST:PORT` for `-relay`, ends the game with a message on the page (exit status 1). Starting a network game from the page, without `?test=1`, is brief 05; for now:
+A browser plays only through a relay. The game takes the same arguments as the desktop one, with one difference: `-relay` is the relay's **WebSocket URL** (`wss://host/vnet`; `ws://127.0.0.1:PORT/vnet` for a local relay) instead of `HOST:PORT`. vnet then tries WebTransport first (derived from a `wss://` URL) and falls back to WebSocket; the game prints which it got (`... relay-wt` or `... relay-ws`). A plain `-net` without `-relay`, or a `HOST:PORT` for `-relay`, ends the game with a message on the page (exit status 1). Players start network games from the page address, the console or the menus (section 6.6, brief 05); a test page can still pass the arguments itself:
 
 ```sh
 # a local relay for the page, a native player and the browser (WebSocket on /vnet, UDP for native games;
@@ -160,6 +160,48 @@ Brief 04b added three scenarios. `lag` (about 3 minutes, in the full run) plays 
 Brief 04c added three scenarios (a tab hidden before the level's first frame, bugs.md L19). `hidden-first` (about 2.5 minutes, in the full run) plays four games of 400 tics in which one browser is made hidden as soon as its game is started (before the level loads; the throttling of a background tab is added once its relay session is up): a native host with a hidden browser guest, two browsers, a browser host with a hidden browser guest and a native guest, and a hidden browser host with a native guest. It checks that the hidden tab drew no frame of the level (`numframes` in its state dumps does not move from the level's start to its last tic), that the visible machines did draw before tic 1, that every record and every field agree at the start, at tics 1 to 3 and at the last tic, and that the override sectors have no parallax bit at tic 1. `hidden-level` (about 2.5 minutes, in the full run) does the same across a level change while hidden: E1L1 to E1L3 (six override sectors) at tic 200 with `-testexit200,3`, then 400 tics there, for a native host with a hidden browser, two browsers, and a hidden browser host. `old-new` (about 2 minutes, **only by name**) needs the build from before brief 04c (`NETPLAY_OLD_SW=/path/to/old/sw NETPLAY_OLD_WASM=/path/to/old/build-wasm node tests/web/netplay.js old-new`; the old page is served under `/old/`): in eleven games an old and a new machine play in one room, both visible (every pairing of browser and native, E1L1 and E1L3), and must agree on every record and on every field at tics 1 to 3, and differ when the level starts (before any frame) in exactly the override sectors' stat. The field comparison (`stateDifferences()`) leaves out a player's `FadeAmt` and `FadeTics`, which the original game sets only for the player a machine looks through (`code-facts.md` §17).
 
 F3 added `level-exit` (about 70 s, in the full run; bugs.md L20): three games (a native host and a browser, two browsers, a browser host and a native) in which the level ends at tic 200 by `-testexit200` (the next level, E1L2) while the master holds the inputs of the tics after it: every slave's datagrams are 200 ms late (latency impairment, so a slave has made its inputs about 8 tics ahead) and the master stops for 1.5 s inside the exit tic (`-teststall200,1500`); every player throws shurikens from tic 150 (`-testfire150`). It checks that every machine played exactly 200 tics of the first level with the same records, that the second level agrees record for record and field by field at its start, tics 1 to 3 and tic 300, that the master had every player's inputs beyond tic 201 when it left (the case the original game got wrong), and that the shurikens were thrown before and after the exit. The game of the original `MoveLoop` (the fix removed) fails it in every game: the master plays 8 to 17 more tics of the first level (a slave can play extra tics too, fewer than the master), so the tic counts and records always differ; in most games the master also starts the next level with fewer shurikens and goes out of sync there.
+
+### 6.6 Hosting and joining (brief 05)
+
+**The relay** is the one `web/config.js` names (`relay: 'wss://relay.example.org/vnet'`, or `'ws://127.0.0.1:PORT/vnet'` for a local relay whose `-origins` names the page's host:port). Never from the address: only a `?test=1` page may override it with `?relay=<url>`.
+
+**Page parameters:**
+
+| Address | What happens |
+|---|---|
+| `?host=N` | "Click to host a game of N": the game starts with `-net -relay <relay> -host-room N --` and the lobby opens: room code, invite link (with Copy), "J of N players are in", Start now (once 2 are in), Cancel. N is 2 to 8; 4 with the shareware data. |
+| `?join=CODE` | "Click to join room CODE": `-net -relay <relay> -room CODE --`; the same lobby without Start now. CODE is 6 letters and digits, any case, no 0, 1, I or O. The invite link is `?join=CODE` on the page's own address. |
+| a bad N or CODE, both, or no relay in `config.js` | The page says why and offers "Go to the start page"; no game starts. |
+
+The lobby works with the keyboard alone (Tab, Enter, Space; the game does not see the keys while it is up) and reads at phone width. Cancel leaves the room (the others are told at once) and goes back to the page without `?host=`/`?join=`; so does the button on the end-of-game overlay of a network game. Other parameters (`?data=`, and on a test page `?test=1`, `?args=`, ...) are kept.
+
+**In the game** (browser and desktop):
+- Console (**Num Lock** opens it; the key is "Show Console" in Options, Input, Keys Setup): `host [players]` (default: the most the data allows), `join <code>`, and on the desktop `relay [HOST:PORT]` (show or set the relay for host and join; kept in `sw.cfg` as `[Comm Setup] Relay = "HOST:PORT"`).
+- Main menu: **Host Online** (hot key G, then Enter; a list of 2 to 8 players) and **Join Online** (J, Enter; type the code, Enter). Disabled during a network game.
+- Both restart into the network game (D3): the page reloads with `?host=N` / `?join=CODE`; the desktop game quits and re-launches itself with `-net -relay <its relay setting> -host-room N | -room CODE --` and the rest of its arguments (Linux: `/proc/self/exe`). A desktop game without a relay setting says how to set one; a `-net -relay HOST:PORT` start remembers its relay.
+- **Start now on the desktop:** type `start` and Enter in the terminal the host was started from, or press "Start now" in the GTK startup window (it shows the lobby while the game waits; `-setup` or a first run opens it). `cancel` (or the window's Cancel) leaves the room.
+- **Startup window** (GTK): tick "Online, through the relay:", give the relay's `HOST:PORT`, then "Join multi-player game" with the room code, or "Host multi-player game" with the number of players.
+
+```sh
+./sw -net -relay relay.example.org:7777 -host-room 4 --      # prints the room code; type "start" to begin with fewer
+./sw                                     # then, in the console:  relay relay.example.org:7777   and   host 3   or   join ABC234
+JFSW_TEST_STARTWIN="host=3 relay=127.0.0.1:47180 startnow=2" ./sw -setup    # test only: fills in the window and presses Start
+```
+
+**How a network game ends** (each says why on the page, or natively in the console, the log and a message box, and exits with status 1 unless the host ended the game): the relay cannot be reached or none is configured; a bad or unknown room code; the relay's room is full; every place in the game is taken; the game has already started (a late joiner, within about a second); the host left the room before the game started (Cancel: at once; a closed tab: 10 s); the host left the game (15 s after its last packet); a player left the game (the host after 15 s, the others about 2 s later); the relay session was lost (brief 04); the host ended the game (status 0, "The host ended the game."). A hidden tab leaves the co-op bonus screen and the deathmatch table by itself, so it does not hold up the room at a level end.
+
+**Tests** (one at a time; local relay, ports as in 6.5):
+
+```sh
+node tests/web/netplay.js start-now      # Start now: 2 of 3 and 2 of 4, browser and native hosts; late joiners refused (about 3 minutes)
+node tests/web/netplay.js lobby          # the lobby on ordinary pages (relay in config.js): code, link, count, keyboard, Cancel, phone width (about 1.5 minutes)
+node tests/web/netplay.js host-join      # console and menus, browser and native (re-launch); every game agrees on every tic (about 3 minutes)
+node tests/web/netplay.js lobby-errors   # every refusal and end of section E, browser and native (about 4 minutes)
+node tests/web/netplay.js level-end      # a hidden guest or host at the bonus screen after the real exit switch (about 1.5 minutes)
+tests/net/test-startwin.sh               # the GTK window's online host and join under xvfb-run (in make test-net; about 30 s)
+```
+
+Test-only game arguments from brief 05: **`-testswitch<T>`** (all machines: at tic T of the first level every machine operates the level's exit switch, as a player does; unlike `-testexit` the bonus screen follows) and **`-testosd<T>,<command>`** (this machine runs a console command at tic T, e.g. `-testosd60,host 2`). The test-only environment variable `JFSW_TEST_STARTWIN` fills in the startup window (`host=N`, `room=CODE`, `relay=HOST:PORT`, `startnow=K`) and presses Start. `scripts/run-headless.sh --display` keeps `DISPLAY` for it, and the script now passes its standard input to the game (for `start`).
 
 ## 7. Layout of what brief 00 added
 
@@ -191,7 +233,7 @@ Native players can play through a vnet relay as well as over plain UDP. The rela
 ./sw -net -relay relay.example.org:7777 -room ABC234 -- -autonet 2,0,2,1,0,0,0,0,0,0
 ```
 
-`-host-room N` takes 2 up to 4 players on the shareware GRP (8 registered) and the relay's room size; more is clamped with a message. `-autonet` (code-facts §4) starts the game without menus once everyone is in; without it the host picks the game in the menus. A failed start (bad code, no such room, room full, relay down) prints why and exits with status 1. Plain UDP as before: `./sw -net -nm:3 -- ...` for the master, `./sw -net -nm HOST[:PORT] -- ...` for the others. Impairment for testing: `VNET_IMPAIR="loss=5,dup=2,reorder=3,lat=20,jit=10,seed=N"` in the environment (own seed per process). Details: `code-facts.md` §12 and `jfbuild/include/mmulti_vnet.h`.
+`-host-room N` takes 2 up to 4 players on the shareware GRP (8 registered) and the relay's room size; more is clamped with a message. The host can start before every place is filled: `start` and Enter on its standard input, or the startup window's Start now (brief 05, section 6.6, which also has the console's and the menus' host and join). `-autonet` (code-facts §4) starts the game without menus once everyone is in; without it the host picks the game in the menus. A failed start (bad code, no such room, room full, relay down) prints why and exits with status 1. Plain UDP as before: `./sw -net -nm:3 -- ...` for the master, `./sw -net -nm HOST[:PORT] -- ...` for the others. Impairment for testing: `VNET_IMPAIR="loss=5,dup=2,reorder=3,lat=20,jit=10,seed=N"` in the environment (own seed per process). Details: `code-facts.md` §12 and `jfbuild/include/mmulti_vnet.h`.
 
 Tests (all local, on 127.0.0.1, ports 47000 to 47999 from `JFSW_TEST_PORT_BASE`, default 47100; they build the relay with Go into `~/.cache/jfsw-browser` the first time; each stops every process it started):
 
@@ -205,6 +247,7 @@ tests/net/test-mmulti-vnet.sh --runs 10 [--stub-resend]       # mmulti over vnet
 tests/net/test-three-games.sh [--udp] [--tics N] [--impair SPEC] [--nudge N:T]   # three game processes, co-op, quit after N tics
 tests/net/test-udp-unchanged.sh --base-sw "$(tests/net/build-baseline.sh)" [--mutate-wire]   # plain -net against the pre-brief build
 tests/net/test-errors.sh [--only REGEX] [--sw FILE]           # bad code, full room, relay down, host leaves, caps
+tests/net/test-startwin.sh [--sw FILE]                        # brief 05: the GTK startup window's online host and join, under xvfb-run
 ```
 
 `tests/net/build-baseline.sh` builds the game as it was before brief 01. **`make test` therefore runs `git worktree add` on your repository** (a detached worktree of the commit this branch was made from, in `~/.cache/jfsw-browser/baseline-<commit>`; `git worktree list` shows it, `git worktree remove` deletes it) and needs network access to the submodule forks the first time (it checks out jfbuild, jfaudiolib and jfmact there and builds them). After editing anything in `jfbuild/`, run `make test` or `make -C jfbuild USE_POLYMOST=1 USE_OPENGL=1 USE_ASM=0 libengine.a`: the top-level `make` does not rebuild an existing `jfbuild/libengine.a`.

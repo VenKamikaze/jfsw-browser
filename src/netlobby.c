@@ -150,8 +150,16 @@ int NetLobbyWait(void)
         handleevents();
         if (quitevent)
             {
-            // the startup window's Cancel, a closed window, SIGTERM: tell the others
-            mmulti_vnet_leave();
+            if (mmulti_vnet_active())
+                {
+                // The startup window's Cancel, a closed window, SIGTERM: tell the others and
+                // leave. (Returning, as plain UDP still does, carries on with an unfinished
+                // start and crashes a moment later: bugs.md L4.)
+                buildputs("Lobby: cancelled; leaving the room.\n");
+                mmulti_vnet_leave();
+                uninitmultiplayers();
+                exit(0);
+                }
             return 0;
             }
         if (!mmulti_vnet_active())
