@@ -303,5 +303,24 @@ Commits: jfbuild `70bf3f4`; jfsw-browser `3c1944a`, `685eeee` and the Outcome co
    The game closes and starts again into the network game; its terminal and its startup window print the room code ("Lobby: give the other players the room code ..."). Join from a browser with `http://127.0.0.1:8000/?join=CODE`. With 3 places (`host 3`), type `start` and Enter in the terminal, or press "Start now (2 of 3 in)" in the startup window.
 8. **The startup window:** `./sw -setup`, Game tab: tick "Online, through the relay:", relay `127.0.0.1:7777`, "Join multi-player game" with a room code from a browser host, Start.
 9. **A hidden guest at a level end:** host and join as in 3 (`?host=2`), start co-op, and as the host walks to E1L1's exit switch, switch the guest's browser to another tab (or minimise it) and leave it there. The host presses the switch and Space on the bonus screen; the next level must start on the host within a few seconds (it used to wait for the hidden guest's key). Show the guest's tab again: it is in E1L2 with the host.
-10. The tests on your machine, one at a time: `node tests/web/netplay.js lobby start-now host-join lobby-errors level-end` and `tests/net/test-startwin.sh` (needs `xorg-server-xvfb`).
+10. The tests on your machine, one at a time: `node tests/web/netplay.js lobby start-now host-join lobby-errors level-end level-end-dm rejoin-vanish rejoin-quit compaction`, `tests/net/test-startwin.sh` (needs `xorg-server-xvfb`) and `tests/net/test-rejoin.sh`.
+
+### Coordinator verification and merge (13 Nov 2026)
+
+- **The fix diff, read:** jfbuild `18ee1c4..70bf3f4` and jfsw-browser `243cb84..cd3f9bd`. The session id goes into every relay ping and is kept per place (moved along by `lobbyfree()`). A ping from another session is refused once the game has started and takes the place during the wait. A slave ignores any `0xab` once it has the go-ahead, and any answer for another id. Everything is behind `mmulti_vnet_active()`. Test mode needs both `?test=1` and `config.js`'s `testMode: true`, and `?relay=` is gone. One nit, not blocking: the Windows `_execv` quoting can write past its buffer if an argument has a long run of backslashes (its bound check is before the backslash loop). That code is not built in this project; fix it if a Windows build is ever made.
+- **A clean rebuild after the pointer moved** (`scripts/build-wasm.sh clean` and a full build, then `make veryclean && make -j4`): wasm builds clean, native has the same 14 warnings.
+- **Every suite, one at a time** (load average 2.9 to 4.7):
+
+  | Test | Result |
+  |---|---|
+  | `netplay.js` (full) | 1286 passed, 0 failed |
+  | `make test GAME_RUNS=1` | 8 PASS (startwin and rejoin included), draw 16/0 |
+  | `smoke.js` | 29/0 |
+  | `persist.js` | 14/1, then 15/0 in 3 of 3 reruns (load 1.1 to 3.6) |
+  | `data.js` | 172/0 |
+  | `grptable.js` | 8/0 |
+  | `determinism.js` | 20/1: the known 100 ms stall check only (max 346 ms) |
+
+  The persist failure is the same check the implementer saw once: "a save survives a reload 250 ms after it reached its full size", 2 of 3 tries. That is 02's measured IndexedDB window (about 150 to 200 ms on a loaded machine), and under load 4 it reaches 250 ms. Brief 05 changes nothing in the save path (no change to `FS.close`, IDBFS or `onExit` in `web/jfsw.js`). Two failures in two loaded full runs make it a flaky check worth a look with the smoke follow-up. It is not loosened here.
+- **Merged:** jfbuild `browser/05-host-and-join` into the fork's `claude` (`5950d14`, the same tree as `70bf3f4`, so no rebuild was needed). The jfsw-browser pointer moved to it (`808a015`), then `browser/05-host-and-join` was merged into `claude` with `--no-ff`.
 

@@ -19,8 +19,8 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 | 04 | [Browser netplay](04-browser-netplay.md) | jfsw-browser, jfbuild | 01, 02 | done (play-test pending) |
 | 04b | [Netcode lag cuts](04b-lag-cuts.md) | jfsw-browser, jfbuild | 04 | done (play-test pending) |
 | 04c | [A tab hidden before the level's first frame (L19)](04c-hidden-first-frame.md) | jfsw-browser | 04b | done (play-test pending) |
-| 05 | [Host and join from the game](05-host-and-join.md) | jfsw-browser, jfbuild | 03, 04 | review |
-| 06 | Deployment guide | jfsw-browser | 05 | not written |
+| 05 | [Host and join from the game](05-host-and-join.md) | jfsw-browser, jfbuild | 03, 04 | done (play-test pending) |
+| 06 | [Deployment guide](06-deployment-guide.md) | jfsw-browser | 05 | written |
 
 01 and 02 can run in parallel, as can 03 and 04.
 
