@@ -195,3 +195,25 @@ After an independent review (no blocking defect) and a merge of `claude` (brief 
 - *`deploy.md` checked*: its "Game data from another server" section is about `data.js`, untouched here; its overlay messages ("The game could not start: ...", "The game crashed: ...") still match (now with one full stop each).
 - *First round's runs* (machine shared with two other agents' network tests, load 2.6 to 16): `smoke.js` failed three of five runs (screenshot timeouts, one "Up moves it up") and passed at load 2.7; `persist.js` 14/1 (the known 250 ms reload window) at load 9, 15/0 at load 3.7; `determinism.js` 19/2 at load 9 to 11; `netplay.js` 1277/8 (two games where "the host left the game" under load), `impaired` alone 39/0. All pass in the final runs above.
 - Commits: `fa2ed49`, `d8e530e`, `d077afd` (first round); `243585b`, `53e9749` (fix round), `e2bcd7d` (merge of `claude`), and this Outcome.
+
+### Coordinator verification and merge (13 Nov 2026)
+
+- **Read:** the final page diff (`web/jfsw.js` against `claude`).
+  - `quietRefusal()` wraps `canvas.requestPointerLock`, `canvas.requestFullscreen`, `document.exitFullscreen` and `AudioContext.prototype.resume`. A synchronous throw becomes a rejected promise that already has its handler, and bursts are logged once plus a count.
+  - `gameError()` order:
+    1. a DOMException after the exit is never fatal;
+    2. `ExitStatus` is never fatal;
+    3. while running, the game's error is fatal;
+    4. within 250 ms of an exit, the game's error replaces the end message.
+  - `fromGame()` is unchanged. No game, engine or build file changed.
+- **Rerun by the coordinator on the implementer's final build** (`214e3d8`; the built `jfsw.js` is the tree's):
+  - `focus.js`: 24 passed, 0 failed;
+  - `smoke.js`: 29 passed, 0 failed.
+- **The implementer's final runs on the quiet machine stand:**
+  - `netplay.js` full: 1286 passed, 0 failed;
+  - `make test`: 8 passed;
+  - `firefox.js`: 16 passed, 0 failed;
+  - `persist.js` 15/0, `data.js` 172/0, `grptable.js` 8/0;
+  - `determinism.js` 20/1 twice: the known stall check.
+- **Merged** `browser/02c-focus-loss` into `claude` with `--no-ff`.
+
