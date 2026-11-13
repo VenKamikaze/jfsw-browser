@@ -103,4 +103,49 @@ F3 (for the tests: `-testdump`, `-teststate`, `stateDifferences()`), and brief 0
 
 ## Outcome
 
-(To be written by the implementer.)
+### State (in progress)
+
+Stopped on the coordinator's request (session low on tokens), 13 Nov 2026.
+
+**Done (pushed):**
+- `fix/mouse-aim-sync` `5eec5fa`: the fix, from `master`, upstream trailer only. Cherry-picked onto a fresh clone of `jonof/jfsw` `master` `befcdd0` with no conflict (`5907053` there), built with upstream's own submodules: green, 14 warnings as before.
+- `browser/F4-mouse-aim-sync`:
+  - `72d1455`: merge of the fix;
+  - `d17c456`: hooks `-testaimkey`, `-testaimheld`, `-testslope` and `tests/net/test-mouse-aim.sh` (in `make test-net`);
+  - `0eddf6f`: `netplay.js mouse-aim`, and `JFSW_WEB_PORT_OFFSET` for every browser test;
+  - `9122c00`: `-testaimon`, `-testoldaim` (a stand-in for an old build), and the `oldjoin`/`oldhost` games;
+  - `d947c8a`: docs (bugs.md L25 fixed, code-facts §20, building.md, README F4 set to `review`).
+- **Upstream check.** `jonof/jfsw` `master` is still `befcdd0` (`git ls-remote`). None of its 18 pull requests touches mouse aiming: #1, 2, 4, 23, 24 and 37 are merged; #5, 6, 9, 19, 29 and 44 to 50 are not, and none changes `PF_MOUSE_AIMING_ON`, `MouseAiming`, `PlayerAutoLook` or `horizoff`.
+
+**The fix:**
+- In a network game `getinput` changes only `gs.MouseAimingOn` and sends it every tic as `SK_MOUSE_AIM` (bit 28, which was free).
+- `DoPlayerMouseAimSync()` sets every player's flag from that bit in `domovethings` (right after the inputs are copied) and in `DoPrediction`.
+- `ChopsCheck` masks the bit out.
+
+**Decisions:**
+- **Demos and single player.** When `CommEnabled` is false, `getinput` sets the flag as before and never sends the bit, so demos and the `.dms` are unchanged.
+- **Mixed builds.** No `GameVersion` bump: it is also the saved-game version (save.c), so bumping it would make saved games unloadable. Instead the options packet gains a trailing byte, `MouseAimInInput`. A player whose packet lacks it keeps the flag from the options packet, so a game of old and new builds behaves as an old one.
+- **Delay.** The input path adds no tics. The simulation sees the change in the tic of that input, like any key; prediction shows it at once.
+
+**Test results:**
+- `make test GAME_RUNS=1` (`JFSW_TEST_PORT_BASE=49600`): 9 PASS, and `test-draw` 16/0.
+- `test-mouse-aim.sh`: passes every time on the fixed build.
+- `netplay.js mouse-aim`: 60/0.
+- `grptable.js`: 8/0.
+- **Mutation, the old behaviour:**
+  - native: master, slave and held fail in 3 of 3 runs (9 of 9 games). `exit` passes on the old code too, because the old code also resends the options at a level start;
+  - browser: 9 of 9 games fail in 3 runs.
+- **Mutation without the old-build gating:** `oldjoin` fails and `oldhost` passes, as expected.
+- **Full `netplay.js`, second run** (the first was spoiled by another agent's run at load 10 to 13 and stopped): at 34 scenarios, 1312 ok and 1 FAIL, `hidden-frozen`'s "the room made up most of the stall" (2.0 s against 3 s, load 6 to 9). That is timing under load; it still needs a rerun on its own.
+
+**Left to do:**
+- Finish or rerun the full `netplay.js` (its log is `dm-desync/np-full2.log` in the scratchpad), and rerun `hidden-frozen` alone.
+- Run `smoke.js`, `persist.js`, `data.js` and `determinism.js` (with `JFSW_WEB_PORT_OFFSET=1300`; check that the native `.dms` equals the committed one).
+- Write the final Outcome:
+  - play-test steps for Arch: browser against browser via `?host=2` / `?join=CODE` with `config.js` relay `ws://127.0.0.1:7778/vnet`, and native against browser; press U a few times, walk on slopes, and the host must never show "GAME OUT OF SYNC!";
+  - the results above.
+
+**Running processes:** none of mine (the `netplay.js` run, PIDs 19821/19822, was stopped when this was written).
+
+**Uncommitted:** nothing.
+
