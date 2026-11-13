@@ -30,7 +30,7 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 |---|---|---|---|---|
 | F1 | [Co-op game freezes at tic 1522](F1-coop-freeze.md) | `fix/coop-freeze` | 01 (for the regression test) | on hold (the user, 6 Nov 2026) |
 | F2 | [Native crash in the ALSA MIDI music driver](F2-alsa-midi-lock.md) | `fix/alsa-midi-lock` (jfaudiolib fork, from `68be97f`) | 00 | done (verified by the user on Arch, 7 Nov 2026) |
-| F3 | [Machines play different numbers of tics after a level exit (L20)](F3-level-exit-tics.md) | `fix/level-exit-tics` (from `master`), integrated on `browser/F3-level-exit-tics` | 04c (for the tests) | review |
+| F3 | [Machines play different numbers of tics after a level exit (L20)](F3-level-exit-tics.md) | `fix/level-exit-tics` (from `master`), integrated on `browser/F3-level-exit-tics` | 04c (for the tests) | done (play-test pending) |
 
 Later, not briefed: music (Q4), WebGL rendering through the GLES2 path, touch controls, the Wanton Destruction and Twin Dragon add-ons in the browser, mouse turns drawn between tics (view angle only), smoothing prediction corrections.
 
