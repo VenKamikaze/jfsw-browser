@@ -136,7 +136,7 @@ They use the preinstalled Chromium through Playwright (`require('playwright')`; 
 
 ```sh
 scripts/setup-firefox.sh                    # a pinned stock Firefox (160.0, SHA-256 checked) and puppeteer-core (25.17.0), in ~/.cache/jfsw-browser
-node tests/web/firefox.js                   # about 2.5 minutes
+node tests/web/firefox.js                   # about 1 minute
 FIREFOX=/usr/bin/firefox node tests/web/firefox.js     # another Firefox (Arch: sudo pacman -S firefox); puppeteer-core still from the script
 ```
 
