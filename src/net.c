@@ -41,6 +41,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "menus.h"
 #include "grpscan.h"
 #include "version.h"
+#include "mmulti_vnet.h"
 
 
 /*
@@ -706,6 +707,11 @@ waitforeverybody(void)
     size++;
 #endif
     netbroadcastpacket(tempbuf, size);
+    // Brief 05b: on the wire now, with whatever was queued before it, not at the next dosendpackets() after
+    // mmulti's 25 ms window: a machine that leaves this wait at once (it already has everyone's ready) and
+    // is then busy without reading the network (precaching, or netplay.js tic1's -testslowstart) would
+    // otherwise keep the others waiting for its ready until it next reads.
+    mmulti_vnet_flush();
 
     #if 0
     TRAVERSE_CONNECT(i)

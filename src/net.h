@@ -132,10 +132,12 @@ typedef struct PACKED
     int GrpSize;
     unsigned int AddonCrc;  // an add-on GRP (Twin Dragon) on top of it, 0 if none
     int AddonSize;
-    char Edition[48];       // the known GRP's name (grpscan.c), "" if it is not a known one
-    char Build[48];         // game_version (git describe), for people to read
-    char BuildId[48];       // what the build's game code is made from (version-auto.c), "" if not known
-    }PACKET_DATA_ID,*PACKET_DATA_IDp;
+    char Edition[28];       // the known GRP's name (grpscan.c), "" if it is not a known one
+    char Build[24];         // game_version (git describe), for people to read
+    char BuildId[40];       // what the build's game code is made from (version-auto.c), "" if not known
+    }PACKET_DATA_ID,*PACKET_DATA_IDp;     // 110 bytes: mmulti puts at most about 214 bytes of packets into one
+                                          // datagram (MAXPAKSIZ 256), and unacknowledged ones go again with the next
+                                          // ones, so it must leave room for the options packet and the ready
 
 #undef PACKED
 #ifdef _MSC_VER
