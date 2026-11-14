@@ -41,6 +41,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #define PACKET_TYPE_MENU_LEVEL_QUIT                 35
 #define PACKET_TYPE_NAME_CHANGE                     36
 #define PACKET_TYPE_VERSION                         38
+#define PACKET_TYPE_DATA_ID                         39  // brief 05b: the game data and build (sent after the version)
 
 #define PACKET_TYPE_NULL_PACKET                     127
 #define PACKET_TYPE_PLAYER_READY                    250
@@ -119,6 +120,22 @@ typedef struct PACKED
     BYTE PacketType;  // first byte is always packet type
     int Version;
     }PACKET_VERSION,*PACKET_VERSIONp;
+
+// Brief 05b: what game data and which build a player has, sent right after the version at every
+// level start. Builds without it ignore the packet (getpackets' default), and a player who never
+// sends it is "unknown": nothing is said about its data or build.
+typedef struct PACKED
+    {
+    BYTE PacketType;        // PACKET_TYPE_DATA_ID
+    BYTE Layout;            // 1
+    unsigned int GrpCrc;    // the main GRP's CRC32 and size (0: not found)
+    int GrpSize;
+    unsigned int AddonCrc;  // an add-on GRP (Twin Dragon) on top of it, 0 if none
+    int AddonSize;
+    char Edition[48];       // the known GRP's name (grpscan.c), "" if it is not a known one
+    char Build[48];         // game_version (git describe), for people to read
+    char BuildId[48];       // what the build's game code is made from (version-auto.c), "" if not known
+    }PACKET_DATA_ID,*PACKET_DATA_IDp;
 
 #undef PACKED
 #ifdef _MSC_VER
@@ -265,6 +282,9 @@ void Connect(void );
 void waitforeverybody(void );
 BOOL MenuCommPlayerQuit(short quit_player);
 VOID SendVersion(int version);
+struct grpfile;
+VOID NetDataIdentity(const char *grpfile, struct grpfile const *gamegrp);   // brief 05b, from app_main
+VOID SendDataIdentity(VOID);    // brief 05b, right after SendVersion
 VOID InitNetPlayerOptions(void );
 VOID CheckVersion(int GameVersion);
 VOID SendMessage(short pnum,char *text);

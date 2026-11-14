@@ -108,4 +108,46 @@ Brief 05 (the relay games, `netlobby.c`, the page overlay), F4 if it has merged 
 
 ## Outcome
 
-(To be written by the implementer.)
+### State (in progress)
+
+Stopped on the coordinator's request (session out of tokens), 14 Nov 2026. Nothing is built or tested yet.
+
+**Done (uncompiled):** `src/net.h` gains `PACKET_TYPE_DATA_ID` (39) and the `PACKET_DATA_ID` struct:
+- the main GRP's CRC32 and size;
+- the add-on's CRC32 and size;
+- the edition name;
+- `Build`, the `git describe` string;
+- `BuildId`;
+- prototypes for `NetDataIdentity()` and `SendDataIdentity()`.
+
+**Left: the game**
+1. **`net.c`, identity.** Implement `NetDataIdentity()`. The main GRP is `gamegrp`; for an add-on, the registered GRP found in `GroupsFound()`; otherwise the `GroupsFound()` entry whose name is `grpfile`. Unknown data is shown as "unknown data, CRC X". Call it in `game.c` just before `buildprintf("GRP file: ...")`, because `FreeGroups()` comes after.
+2. **`net.c`, exchange.** `SendDataIdentity()`, called after `SendVersion` (game.c about line 3102). Receive it in `getpackets`, check `packbufleng`, and store it per player in a static array, which is never reset per level.
+3. **`net.c`, `CheckVersion`.** Keep the `CheckVersion():` log line for version differences. Then, per other player:
+   - a data line when the data is known and differs;
+   - otherwise a version line when the versions differ;
+   - a milder build line when both `BuildId`s are known and differ.
+
+   Each goes to `buildprintf`, and to two `adduserquote` lines with `user_quote_time[0]` set to about 600 tics. Replace the six quotes, and send the peer one `SendMessage` instead of six.
+4. **`netlobby.c`.** Add `NetPageNotice()`, an `EM_JS` call to `Module.jfswNotice(text)`.
+5. **`Makefile`.** In the `version-auto.c` rule, add `game_build_id`: the `src` tree hash, the jfbuild, jfmact and jfaudiolib HEADs, and `+` when that working tree has changes. Add an empty one to `src/version.c` and `src/version.h`. This makes item 5 easy: the id stays the same across commits that touch only the docs.
+
+**Left: the page**
+
+6. **`web/jfsw.js` and `index.html`.** A `#notice` banner beside the stage, in the lobby overlay's style, with `role="alert"` and a Close button:
+   - it stays until closed;
+   - on the first appearance it focuses Close, and the page keeps the keys while the focus is inside the banner;
+   - it shows again only when the text changes;
+   - `window.jfswNotice` records it for the tests.
+7. **The wrong claim.** Correct the comment at about line 235 of `web/jfsw.js`, 05's N3, and `data-hosting.md`.
+
+**Left: tests**
+
+8. `tests/net/test-data-mismatch.sh` in `make test-net`, ports 497xx. It should use modified GRP copies made at run time (`dm-desync/scripts/modgrp.py`; for a different variant, rename SHADSW.BIN to SWREG.BIN) and cover a 3-player game.
+9. A `netplay.js` scenario. Use `desyncExpected` for mismatched data, because the dumps differ.
+10. The old-against-new run, the mutations, and the regression suites.
+
+**Left: docs**
+
+11. The docs (`bugs.md` L26, `code-facts.md`, `building.md`, `data-hosting.md`), this Outcome, and the README row.
+
