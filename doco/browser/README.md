@@ -1,6 +1,6 @@
 # Shadow Warrior in the browser: work briefs
 
-The goal is Shadow Warrior (JFShadowWarrior) playable in a browser (Emscripten/WASM). The game data is downloaded from a URL on startup, and online multiplayer runs over [vnet](https://github.com/VenKamikaze/vnet) `v0.4.0`. Players host or join by room code, and native desktop players can join the same rooms.
+The goal is Shadow Warrior (JFShadowWarrior) playable in a browser (Emscripten/WASM). The game data is downloaded from a URL on startup, and online multiplayer runs over [vnet](https://github.com/VenKamikaze/vnet) `v0.5.0`. Players host or join by room code, and native desktop players can join the same rooms.
 
 Each brief (`NN-*.md`) is one unit of work, sized for a single implement → review → merge cycle, and written so that a fresh session can pick it up.
 

@@ -35,7 +35,7 @@ const L = require('./lib.js');
 // JFSW_WEB_PORT_OFFSET (F4, lib.js) moves the default base, as it moves the other browser tests' ports.
 const PORT_BASE = +(process.env.NETPLAY_PORT_BASE || L.port(48300));
 const PORT_WEB = PORT_BASE, PORT_UDP = PORT_BASE + 1, PORT_HTTP = PORT_BASE + 2, PORT_WT = PORT_BASE + 3, PORT_NONE = PORT_BASE + 92;
-const PORT_STATS = L.port(49701);       // the relay's /stats in the wt-host scenario (brief 06b: 497xx)
+const PORT_STATS = PORT_BASE + 1401;    // the relay's /stats in the wt-host scenario (brief 06b: 49701 with the default base)
 const NOMINAL = 40;                       // game tics a second (120 Hz clock, 3 clock ticks a game tic)
 const REC = 17;                           // bytes per tic in a -testdump file
 const AUTONET = '-autonet 2,0,2,1,0,0,0,0,0,0';

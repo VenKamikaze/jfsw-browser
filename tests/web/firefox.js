@@ -38,7 +38,7 @@ const CACHE = process.env.FIREFOX_CACHE || path.join(process.env.XDG_CACHE_HOME 
 const FIREFOX = process.env.FIREFOX || path.join(CACHE, 'firefox-' + FIREFOX_VERSION, 'firefox', 'firefox');
 const PUPPETEER = process.env.PUPPETEER_CORE || path.join(CACHE, 'puppeteer-core-' + PUPPETEER_VERSION, 'node_modules', 'puppeteer-core');
 const PORT_WEB = t.port(48400), PORT_UDP = t.port(48401), PORT_HTTP = t.port(48402);   // (JFSW_WEB_PORT_OFFSET, lib.js)
-const PORT_WT = t.port(49702);
+const PORT_WT = PORT_WEB + 1302;        // 49702 with the default ports (brief 06b)
 const ONLY = process.env.FIREFOX_ONLY || '';
 const SABOTAGE = process.env.FIREFOX_SABOTAGE === 'unhandled';
 const MSG = 'The document is not focused.';
@@ -241,9 +241,10 @@ async function wtHost(puppeteer, base) {
       throw new Error('Firefox never showed a room code: ' + JSON.stringify(d));
     }
     const code = await h.page.evaluate(() => window.jfswLobby.code);
-    const guests = [];
+    const guests = [], guestErrors = [];
     for (let i = 0; i < 2; i++) {
       const g = await (await chrome.newContext({ viewport: { width: 700, height: 560 } })).newPage();
+      g.on('pageerror', (e) => guestErrors.push('guest ' + (i + 1) + ': ' + ((e && e.message) || e)));
       await g.goto(base + '?test=1&persist=0&join=' + code + knobs + '&args=' + args());
       await g.waitForFunction(() => window.jfswState === 'ready', null, { timeout: 120000 });
       await g.click('#start');
@@ -293,6 +294,7 @@ async function wtHost(puppeteer, base) {
     t.check(tps >= 36, 'Firefox, the host, ran ' + tps.toFixed(1) + ' tics a second from tic 100 to its last (nominal 40; at least 36)');
     t.check(drops.every((d) => d === 0), 'no page dropped a WebTransport datagram (Firefox ' + drops[0] + ', Chromium ' + drops[1] + ' and ' + drops[2] + ')');
     t.check(h.errors.length === 0, 'Firefox: no page error', h.errors.join(' | '));
+    t.check(guestErrors.length === 0, 'the Chromium guests: no page error', guestErrors.join(' | '));
   } finally {
     await browser.close().catch(() => {});
     await chrome.close().catch(() => {});

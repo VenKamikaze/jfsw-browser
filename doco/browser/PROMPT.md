@@ -2,7 +2,7 @@
 
 You are the **coordinator** for a multi-brief project in [`VenKamikaze/jfsw-browser`](https://github.com/VenKamikaze/jfsw-browser), a fork of [jonof/jfsw](https://github.com/jonof/jfsw) (JonoF's Shadow Warrior port, C, SDL2, Build engine). This file is meant to live at `doco/browser/PROMPT.md` in that repo.
 
-**The goal:** Shadow Warrior playable in a browser (Emscripten/WASM), with the game data downloaded from a URL on startup and online multiplayer over [vnet](https://github.com/VenKamikaze/vnet) (`v0.4.0`, MIT, a virtual-UDP library plus a Go relay). Players host or join a game by room code, from the in-game menu or the console. Desktop (native) players can join the same rooms. Joining a game already in progress is **out of scope**.
+**The goal:** Shadow Warrior playable in a browser (Emscripten/WASM), with the game data downloaded from a URL on startup and online multiplayer over [vnet](https://github.com/VenKamikaze/vnet) (`v0.5.0`, MIT, a virtual-UDP library plus a Go relay). Players host or join a game by room code, from the in-game menu or the console. Desktop (native) players can join the same rooms. Joining a game already in progress is **out of scope**.
 
 vnet was built for the same job in [`VenKamikaze/BitRiot`](https://github.com/VenKamikaze/BitRiot): see that repo's `doco/netplay/` (briefs 09, 12 and `deploy.md`) and vnet's `doco/integration.md`. Reuse what was learnt there; don't copy Bit Riot code wholesale.
 

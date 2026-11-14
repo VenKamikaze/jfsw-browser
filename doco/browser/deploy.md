@@ -373,7 +373,7 @@ The unit's last lines keep the relay to itself: its own user, one capability (bi
 
 **Memory.** A WebTransport member is a QUIC connection: plan on 250 to 300 KB each in normal play, and up to about 3.5 MB each in the worst case, when every queue is full (`ext/vnet/relay/README.md`, "Sizing WebTransport"; vnet 0.5.0 deepened the queues). `-max-wt` (4000 by default) caps the number of them; for a home server with a few rooms nothing needs changing, and a small machine can lower it (`-max-wt 200`: at most about 700 MB even in the worst case; browsers over the cap use the WebSocket).
 
-The relay is built from `ext/vnet` **0.5.0 or later**: 0.4.0 slowed games hosted by a browser with two or more guests over WebTransport to about 25 of 40 tics a second (`bugs.md` L31, fixed in vnet 0.5.0). A relay built from this repository's `claude` branch is new enough.
+Build the page and the relay from `ext/vnet` **0.5.0 or later**. It is the page's vnet code that matters here: with 0.4.0 a browser that hosts two or more guests over WebTransport dropped datagrams and slowed the game to about 25 of 40 tics a second (`bugs.md` L31, fixed in vnet 0.5.0); the 0.5.0 relay also handles bigger bursts than this game sends, so rebuild both. This repository's `claude` branch is new enough.
 
 ### Without WebTransport
 
