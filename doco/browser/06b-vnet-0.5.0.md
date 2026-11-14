@@ -125,8 +125,8 @@ Regression (acceptance 2), one at a time, on the final tree:
 
 ### Concerns
 
-- **An uncaught "The session is closed."** In the first `wt-host` run, the browser host's page reported it (Playwright's `pageerror`) as its WebTransport session closed at the end of the game, which was otherwise correct (all three agreed on every tic). It did not happen again in about 15 more WebTransport games (the reruns, the full `netplay.js`, `check-deploy.sh`, `firefox.js`), and not in this project's runs on 0.4.0. Every promise in vnet's `relay_wt.c` has a rejection handler, so where it comes from is not known (Chromium itself, at close, is possible). A vnet follow-up if it recurs; the test is not loosened (it counts as a failure when it happens).
-- The first wasm build after the clean was marked as having local changes (above).
+- **An uncaught "The session is closed."** (corrected in the fix round below: not rare, and now traced.)
+- The first wasm build after the clean was marked as having local changes (fixed in the fix round below: `scripts/build-id.sh`).
 - Not checked: a real network, and Firefox on the deployment (`check-deploy.sh` drives Chromium only). Firefox was checked as a WebTransport host on loopback.
 
 ### Play-test on Arch Linux (the user)
