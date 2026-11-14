@@ -314,3 +314,29 @@ The independent review approved the brief once the should-fix items were done; n
 - **The build id and local edits.** It does not tell two different sets of uncommitted changes apart: both are `<id>+`. It does tell a modified build from a clean one.
 - **A mid-game join** is not possible, so the per-session identity is enough.
 - **User maps** (`-map`) are not part of the identity (optional in the brief). Players on different user maps are not told.
+
+### Coordinator verification and merge (14 Nov 2026)
+
+- **Read** the fix round's changes to the game and the page.
+  - **The identity is sent once per session.** That is safe: nobody can join a running game, and `NetDataOf[]` keeps what every player sent. The check still runs at every level start.
+  - **The descriptions:**
+    - `Layout >= 1` is accepted;
+    - size 0 counts as unknown;
+    - two descriptions that read the same get their CRCs;
+    - players are counted from 1.
+  - **The page:**
+    - the notice is counted in `fit()`;
+    - Close takes the focus only when nothing has it;
+    - keydowns on Close are the page's, and Escape there sets 02c's `lastEscape`;
+    - keyups always reach the game.
+- **Rebuilt from a fresh worktree** at `3bda6da`: native, 14 warnings as before.
+  - `tests/net/test-data-mismatch.sh`: PASS.
+  - On the implementer's final wasm build (its `jfsw.js` is the tree's): `focus.js` 37/0, `smoke.js` 29/0.
+- **The implementer's final runs stand:**
+  - `netplay.js` full: 1693/0;
+  - `tic1` ×8: 193/0;
+  - `make test GAME_RUNS=1`: 10 passed, after the 3-player numbering fix;
+  - `smoke.js`: 29/0 in 6 of 6 runs;
+  - `determinism.js`: 20/1 twice (the known stall check); `.dms` unchanged.
+- **Merged** `browser/05b-data-mismatch-warning` into `claude` with `--no-ff`.
+

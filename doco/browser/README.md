@@ -23,9 +23,9 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 | 04c | [A tab hidden before the level's first frame (L19)](04c-hidden-first-frame.md) | jfsw-browser | 04b | done (play-test pending) |
 | 05 | [Host and join from the game](05-host-and-join.md) | jfsw-browser, jfbuild | 03, 04 | done (play-test pending) |
 | 06 | [Deployment guide](06-deployment-guide.md): [`deploy.md`](deploy.md) | jfsw-browser | 05 | done (play-test pending) |
-| 06b | [vnet 0.5.0: WebTransport at full speed for browser hosts (L31)](06b-vnet-0.5.0.md) | jfsw-browser | 06, vnet `v0.5.0` | written (after 05b) |
+| 06b | [vnet 0.5.0: WebTransport at full speed for browser hosts (L31)](06b-vnet-0.5.0.md) | jfsw-browser | 06, vnet `v0.5.0` | written (next) |
 | 02c | [A refused pointer lock shows the fatal overlay (L24)](02c-focus-loss.md) | jfsw-browser | 02 | done (play-test pending) |
-| 05b | [Warn every player when the players' game data differs (L26)](05b-data-mismatch-warning.md) | jfsw-browser | 05 | review (the user, 13 Nov 2026: warn, don't refuse) |
+| 05b | [Warn every player when the players' game data differs (L26)](05b-data-mismatch-warning.md) | jfsw-browser | 05 | done (play-test pending) |
 
 01 and 02 can run in parallel, as can 03 and 04.
 
