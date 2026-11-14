@@ -115,7 +115,8 @@ Brief 05 (the relay games, `netlobby.c`, the page overlay), F4 if it has merged 
 - `57293ab`: the exchange, the check, the page's notice and the tests;
 - `9ff8da5`: docs;
 - `3306647`: a smaller packet, and `waitforeverybody()` flushes its ready (below);
-- then this Outcome.
+- `485de9a`: this Outcome;
+- then the fix round (its own section below).
 
 ### What "What is known" said, checked
 
@@ -215,6 +216,62 @@ Every game also ends with status 0 and plays its 200 tics.
 | `grptable.js` | 8/0, twice |
 | `focus.js` (02c) | 24/0, twice |
 
+### Fix round (after the review, 14 Nov 2026)
+
+The independent review approved the brief once the should-fix items were done; nothing was blocking. It confirmed:
+- the packet layout and the checks;
+- the ordering through the proxy;
+- old peers, players who leave, and 3 or more players;
+- that the `waitforeverybody()` flush changes only when packets go.
+
+**Commits:**
+- `b38f0b8`: the fixes;
+- `faf8177`: the 3-player test;
+- then this section.
+
+**Should-fix:**
+1. **The notice cropped the picture.** `fit()` counted `#help` but not `#notice`: with the notice open, the top of the canvas went to −66 to −71 px, out of the window. `fit()` now counts the notice, and is called when the notice opens and closes. `netplay.js data-mismatch` and `focus.js` check that the whole picture and the notice are in the window while it is open.
+2. **The notice took the keyboard mid-game.** It now gives Close the focus only when nothing has it (`document.body`). While the game has the focus, every key is the game's.
+   - **Tab:** with the focus elsewhere, Tab reaches Close; the page keeps that Tab from SDL, which would cancel the browser's move.
+   - **Keys on Close:** keydowns there are the page's. Enter and Space press Close. Escape closes the notice and counts as the player's own Escape (02c's `lastEscape`), so a pointer lock it ends does not make the page send the game an Escape.
+   - **Keyups always go on to the game,** so a key held while the focus moves is never left down. A keyup alone presses nothing.
+   - **The test:** `focus.js` part 3, real key presses in Chromium with the pointer locked. A key is held while the notice opens and its keyup is checked after the focus moves into the notice. Then Escape on Close with the pointer locked, Tab from the page, Enter and Space on Close, and the focus when nothing has it: 13 checks.
+   - **Against the notice code before this round,** with the same wasm: 5 of those checks fail (it took the focus from the game; the picture at −71 px; the held key's keyup swallowed; Tab never reached Close; Enter was not Close's). Escape passed there too, in this Chromium.
+3. **The build id could disagree for identical code.**
+   - **The fix.** `scripts/build-id.sh` now hashes the full object ids (the tree of `src/`, and the jfbuild, jfmact and jfaudiolib commits) with `git hash-object` into 16 hex digits, plus `+` for uncommitted changes. It is always 16 or 17 characters, and fits `BuildId[40]`.
+   - **The test.** `test-data-mismatch.sh` checks the length, and that the id is the same with git's abbreviation set to 12 or 4 characters. The old script's id fails that check.
+4. **MSVC and Xcode** define `game_build_id` as an empty string: `tools/generateversion.cmd`, and the Xcode project's generated `version.c`. Neither was built here; no Windows or macOS toolchain.
+5. **Docs** (code-facts §22 and §16):
+   - the `waitforeverybody()` flush;
+   - why the first packet broke `tic1`: a flush sends only what fits in one datagram, unacknowledged packets first;
+   - `net.h`'s comment, now right for any number of players;
+   - **the 3+ player cost:** the master forwards each slave's packet, 118 bytes with the proxy header, so at the first level start its ready can wait a few round trips.
+   - **Sending once per session:** done, because it is simple and safe. A player's data and build don't change, and the others keep what they got for every later level, so later level starts carry no extra packet. The check and the warning still run at every level start.
+
+**Nits, all done:**
+- a later, longer `Layout` is read;
+- the `NetTestBuildId` comment names `game.c`;
+- the `CheckVersion()` log line counts players from 1, as the screen does (the tests follow);
+- `NetNotice` holds every line of an 8-player game, and says "(more lines in the game's log)" if one does not fit;
+- data of size 0 on either side counts as unknown;
+- two descriptions that would read the same get their CRCs ("Twin Dragon (Addon, v1.2), CRC ... and ...");
+- the temporary GRP directory is removed in `finally`.
+
+**Also found.** In this round's `make test` the 3-player game failed. The two joiners start together, so either can get the second place, and the test had assumed the modified one would be player 2. The test now takes each machine's number from its log ("you are player N") and checks that they are 1, 2 and 3. 3 runs passed: twice with the modified machine as player 3, once as player 2.
+
+**Results** (rebuilt from clean: native 14 warnings, wasm; `JFSW_WEB_PORT_OFFSET=1400`, `JFSW_TEST_PORT_BASE=49600`):
+
+| Test | Result |
+|---|---|
+| `test-data-mismatch.sh` | PASS. The 3-player game alone: 3 of 3. |
+| `netplay.js data-mismatch` | 53/0 |
+| `netplay.js tic1` (8 games) | 193/0 |
+| `netplay.js`, full | 1693/0 (30 minutes, load 2.2 to 6.9) |
+| `make test GAME_RUNS=1` | First 7 PASS: the 3-player game's player numbering, above. After the test's fix, 10 PASS and `test-draw` 16/0. |
+| `focus.js` | 37/0 |
+| `smoke.js` | 6 runs, 29/0 each: 4 before `determinism.js` and 2 right after it (where the previous round's two failures came) |
+| `determinism.js` | 20/1 twice: only the known stall check (max 215 ms, then 246 ms). The native `.dms` equals the committed one. |
+
 ### Play-test on Arch Linux (the user)
 
 1. **Build.**
@@ -250,7 +307,7 @@ Every game also ends with status 0 and plays its 200 tics.
 
 ### Concerns
 
-- **`smoke.js`.** It failed a menu-cursor check in 2 of 7 runs on the final build, the first two, right after `determinism.js`, and passed 5 in a row after that. The build before 05b passed 4 of 4. I found no path from this brief's changes to the single-player menu, but the count is small. A second pair of eyes on a few more runs would settle it.
+- **`smoke.js`.** It failed a menu-cursor check in 2 of 7 runs on the first round's build, the first two, right after `determinism.js`. In the fix round, 6 runs passed, 2 of them right after `determinism.js`.
 - **`waitforeverybody()` now flushes its ready.** That changes when a datagram goes (earlier), not what is in it. The full `netplay.js` and `make test` passed with it.
 
 - **The page refuses unknown data.** It accepts only GRPs it knows. So in the browser the only real mismatches are known editions against each other: shareware, registered, and the Mac versions (Wanton Destruction is not started yet). The browser test therefore puts the modified copy on the native side.
