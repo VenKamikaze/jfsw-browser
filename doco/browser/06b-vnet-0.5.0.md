@@ -139,3 +139,22 @@ Regression (acceptance 2), one at a time, on the final tree:
 6. Play a few minutes: it should feel like the WebSocket game did (no slow motion, no lag that grows). On the server, during the game, `curl -s 127.0.0.1:8081/stats`: `"webtransports":2`, and `wt_rx_queue_drops`, `wt_datagram_drops` and `rate_limited` at 0.
 7. If you play in Firefox: host the same game from Firefox (it was checked as a WebTransport host on loopback, not on a real network).
 8. Optional: `sudo tests/deploy/check-deploy.sh` on a spare machine or VM (not the real server: it refuses to run next to a real relay set-up).
+
+### Fix round (review findings, 14 Nov 2026)
+
+Commits: `f50ff23` (B1, S1), `5bf9599` (nits), `96472ce` (code-facts, bugs.md L34, this Outcome's corrections), and the commit of this section.
+
+- **B1: "The session is closed." was not rare** (the review: 3 of 4 `wt-host` games, 5 of 8 probe runs; this Outcome's "once in about 15" was wrong). The cause, as the reviewer traced it: at the game's exit `vnet_wt_close` calls `s.wt.close()` while the datagram writer still has unsettled writes (usual with 0.5.0's queue depth of 64), and Chromium rejects a promise of its own with a `WebTransportError`. Harmless (after `exit()`), but an unhandled rejection. **Fixed on the page:** `web/jfsw.js`'s `unhandledrejection` handler, after `gameError()` (so a real game error is still fatal), calls `preventDefault()` for a `WebTransportError`, or any `DOMException` once the game has ended, and logs it with `console.info`. The vnet fix (defer `wt.close()` until `s.dgT` is empty, capped at about 250 ms) is recorded for vnet as `bugs.md` **L34**. Checked: `wt-host` 8 times in a row (16 games), with `wt`, `impaired-wt` and `knobs`: **608 passed, 0 failed**, no page error, the browser host at 39.9 to 40.1 tics a second in all 16 games.
+- **S1: the build id ended in `+` on every full wasm build** (Emscripten's `*.wasm-<hash>.o.tmp` files are untracked files in `src/` and the submodules while `version-auto.c` is generated). `scripts/build-id.sh` now uses `git status --porcelain --untracked-files=no --ignore-submodules=untracked`. Checked: after `scripts/build-wasm.sh veryclean` and a full wasm build, then `make veryclean && make -j4`, both binaries carry `976d8bcd3a8a10a0` with no `+`; with a tracked edit (a line appended to `src/version.c`) `build-id.sh` prints `976d8bcd3a8a10a0+`, and without it again `976d8bcd3a8a10a0`.
+- **Nits:** `netplay.js`'s `PORT_STATS` is `PORT_BASE + 1401` and `firefox.js`'s `PORT_WT` is `PORT_WEB + 1302` (49701 and 49702 with the default ports, and they move with `NETPLAY_PORT_BASE` and the port offset); `firefox.js` part 4 also requires no page error on the two Chromium guests; `README.md` and `PROMPT.md` say `v0.5.0` in their first lines; `deploy.md` says it is the page's vnet code that needs 0.5.0 (the relay's fix is for bigger bursts), so both are rebuilt. `play.js`'s 36 tics check is kept under `--ws` and `--no-tls` too: they ran at 39.9 to 40.0 here (load up to 7.4), and a busy VM that cannot keep 36 a second is worth a failure.
+
+**Results after the fix round** (one at a time):
+
+| Test | Result | Load |
+|---|---|---|
+| `netplay.js` full | **1759 passed, 0 failed** | 2.3 to 8.5 |
+| `check-deploy.sh` (WebTransport) | PASS, 89 checks; 40.0 tics a second | 4.5 to 6.2 |
+| `check-deploy.sh --ws` | PASS, 81 checks; 39.9 tics a second | 6.2 to 7.4 |
+| `focus.js` | 37 passed, 0 failed | 3.5 to 7.4 |
+| `smoke.js` | 29 passed, 0 failed | 3.5 |
+| `firefox.js` part 4 | 9 passed, 0 failed (with the guests' page errors) | 3.6 to 6.7 |
