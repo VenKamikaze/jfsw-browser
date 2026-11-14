@@ -321,18 +321,26 @@
   // The game (net.c CheckVersion, through src/netlobby.c NetPageNotice) calls Module.jfswNotice(text) at a network
   // game's level start when another player's game data, version or build differs from this one's: one line per
   // difference. The game also says it on its screen, but only for 15 s, and a hidden tab misses that: the notice
-  // stays beside the picture until it is closed. The first time it opens, Close has the focus and the keys stay with
-  // the page (Enter, Space or Escape closes it, and the game gets the keyboard back); the same text again (the next
-  // level) does not open it again. window.jfswNotice is the last text, window.jfswNoticeFocus whether Close got the
-  // focus (the tests read them).
+  // stays below the picture until it is closed, and fit() makes room for it. The same text again (the next level)
+  // does not open it again.
+  // The keyboard (02c's review): the notice never takes the keys from the game. It gives Close the focus only when
+  // nothing has it (document.body: the player is not playing); while the game has it, the keys stay the game's, and
+  // Tab does not reach the page. With the focus anywhere but the game, Tab reaches Close. With the focus on Close,
+  // Enter or Space presses it and Escape closes the notice: those keys are the page's, never the game's, and that
+  // Escape counts as the player's own (02c's lastEscape), so the page does not send the game one for a lost pointer
+  // lock. A key's keyup always goes on to the game, so that a key held while the focus moves is never left down.
+  // window.jfswNotice is the last text, window.jfswNoticeFocus whether Close took the focus and window.jfswNoticeBefore
+  // what had it (the tests read them).
   var noticeEl = document.getElementById('notice');
   var noticeTextEl = document.getElementById('noticetext');
   var noticeCloseBtn = document.getElementById('noticeclose');
   var noticeShown = '';
   window.jfswNotice = null;
   function closeNotice() {
+    var had = noticeEl.contains(document.activeElement);
     noticeEl.hidden = true;
-    if (document.activeElement === noticeCloseBtn) { canvas.focus(); }
+    fit();
+    if (had) { canvas.focus(); }
   }
   Module.jfswNotice = function (text) {
     text = String(text);
@@ -341,17 +349,23 @@
     if (text === noticeShown) { return; }
     noticeShown = text;
     noticeTextEl.textContent = text;
+    var idle = !document.activeElement || document.activeElement === document.body;
+    window.jfswNoticeBefore = document.activeElement ? (document.activeElement.id || document.activeElement.tagName) : '';
     noticeEl.hidden = false;
-    noticeCloseBtn.focus();
-    window.jfswNoticeFocus = document.activeElement === noticeCloseBtn;     // (the tests read it)
+    fit();
+    if (idle) { noticeCloseBtn.focus(); }
+    window.jfswNoticeFocus = document.activeElement === noticeCloseBtn;
   };
   noticeCloseBtn.addEventListener('click', closeNotice);
-  // While the focus is in the notice, keys are the page's (the game's keyboard handler is on the window).
-  ['keydown', 'keyup', 'keypress'].forEach(function (type) {
+  ['keydown', 'keypress'].forEach(function (type) {
     window.addEventListener(type, function (e) {
-      if (noticeEl.hidden || !noticeEl.contains(document.activeElement)) { return; }
-      e.stopImmediatePropagation();
-      if (type === 'keydown' && e.code === 'Escape') { e.preventDefault(); closeNotice(); }
+      if (noticeEl.hidden) { return; }
+      if (noticeEl.contains(document.activeElement)) {
+        e.stopImmediatePropagation();           // not the game's (Tab, Enter and Space do what they do on a button)
+        if (type === 'keydown' && e.code === 'Escape') { e.preventDefault(); lastEscape = performance.now(); closeNotice(); }
+      } else if (type === 'keydown' && e.code === 'Tab' && document.activeElement !== canvas) {
+        e.stopImmediatePropagation();           // the browser moves the focus (to Close); the game would keep the Tab
+      }
     }, true);
   });
 
@@ -718,8 +732,9 @@
     var w = canvas.width, h = canvas.height;
     if (!w || !h) { return; }
     var helpH = helpEl.hidden ? 0 : helpEl.offsetHeight + 10;
+    var noticeH = noticeEl.hidden ? 0 : noticeEl.offsetHeight + 10;      // (brief 05b: the notice below the picture)
     var availW = document.documentElement.clientWidth - 16;
-    var availH = window.innerHeight - helpH - 16;
+    var availH = window.innerHeight - helpH - noticeH - 16;
     var scale = Math.max(0.25, Math.min(availW / w, availH / h));
     canvas.style.width = Math.floor(w * scale) + 'px';
     canvas.style.height = Math.floor(h * scale) + 'px';

@@ -9,5 +9,7 @@ IF %ERRORLEVEL% EQU 0 (
 )
 ECHO const char *game_date = __DATE__;
 ECHO const char *game_time = __TIME__;
+REM brief 05b: no build id here (the "different build" line of a network game is then not shown)
+ECHO const char *game_build_id = "";
 
 EXIT /B 0

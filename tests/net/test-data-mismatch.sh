@@ -17,6 +17,7 @@
 #             player 2, player 2 names players 1 and 3;
 #   build     same data, the joiner reports another build (-testbuildid): the
 #             milder build line on both, nothing about data.
+# And (no game) the build id has a fixed length, whatever git's abbreviation.
 #
 #   tests/net/test-data-mismatch.sh [--sw FILE] [--only NAME]
 #   tests/net/test-data-mismatch.sh --old-sw FILE   # also: an older build (no data packet) against this one
@@ -107,6 +108,13 @@ want() {
 }
 run() { [ -z "$only" ] || [ "$only" = "$1" ]; }
 
+# the build id (scripts/build-id.sh, version-auto.c): full object ids hashed to 16 hex digits and an optional
+# "+", the same however git abbreviates ids (a shallow clone and a full one abbreviate differently)
+if run buildid; then
+    ids="$("$root/scripts/build-id.sh"); $(GIT_CONFIG_PARAMETERS="'core.abbrev=12'" "$root/scripts/build-id.sh"); $(GIT_CONFIG_PARAMETERS="'core.abbrev=4'" "$root/scripts/build-id.sh")"
+    t_check "build id: 16 hex digits and an optional +, the same with ids abbreviated to 12 or 4 ($ids)" bash -c "echo '$ids' | grep -Eq '^([0-9a-f]{16}\\+?); \\1; \\1\$'"
+fi
+
 if run match; then
     game match relay ",," ",,"
     want match 1; want match 2
@@ -122,8 +130,8 @@ if run variant; then
     game variant udp ",," ",$t_tmp/reg/sw.grp,"
     want variant 1 "$(data_line 2 "$REG" "$SHARE")"
     want variant 2 "$(data_line 1 "$SHARE" "$REG")"
-    t_check "variant: the host's log has the version difference too" grep -Eq 'CheckVersion\(\): player 1 has version [0-9]+, expecting [0-9]+' "$d/1/sw.log"
-    t_check "variant: the joiner's log has it too" grep -Eq 'CheckVersion\(\): player 0 has version [0-9]+, expecting [0-9]+' "$d/2/sw.log"
+    t_check "variant: the host's log has the version difference too" grep -Eq 'CheckVersion\(\): player 2 has version [0-9]+, expecting [0-9]+' "$d/1/sw.log"
+    t_check "variant: the joiner's log has it too" grep -Eq 'CheckVersion\(\): player 1 has version [0-9]+, expecting [0-9]+' "$d/2/sw.log"
 fi
 if run three; then
     game three relay ",," ",$t_tmp/map/sw.grp," ",,"

@@ -548,8 +548,8 @@ NetDataIdentity(const char *grpfile, struct grpfile const *gamegrp)
     Bsnprintf(NetDataMine.BuildId, sizeof(NetDataMine.BuildId), "%s", game_build_id);
     }
 
-// -testbuildid<name> (test-only, brief 05b, sync.c): this machine reports the build <name> (both the
-// name and the id), as a different build would.
+// -testbuildid<name> (test-only, brief 05b; the argument is parsed in game.c): this machine reports the
+// build <name> (both the name and the id), as a different build would.
 VOID
 NetTestBuildId(const char *name)
     {
@@ -557,11 +557,17 @@ NetTestBuildId(const char *name)
     Bsnprintf(NetDataMine.BuildId, sizeof(NetDataMine.BuildId), "%s", name);
     }
 
+// Once per session, at the first level start: a player's data and build do not change, and the others
+// keep what they got (NetDataOf[]) for every later level. A packet less at every later level start, where
+// with 3 or more players the master forwards every slave's (see net.h).
 VOID
 SendDataIdentity(VOID)
     {
-    if (!CommEnabled)
+    static BOOL sent;
+
+    if (!CommEnabled || sent)
         return;
+    sent = TRUE;
     NetDataOf[myconnectindex].known = TRUE;
     NetDataOf[myconnectindex].id = NetDataMine;
     netbroadcastpacket((BYTEp)(&NetDataMine), sizeof(NetDataMine));
@@ -571,8 +577,8 @@ static void ReceiveDataIdentity(int from, BYTEp buf, int len)
     {
     PACKET_DATA_IDp p = (PACKET_DATA_IDp)buf;
 
-    if (from < 0 || from >= MAX_SW_PLAYERS_REG || len < (int)sizeof(PACKET_DATA_ID) || p->Layout != 1)
-        return;     // (a later layout would be longer and start the same way)
+    if (from < 0 || from >= MAX_SW_PLAYERS_REG || len < (int)sizeof(PACKET_DATA_ID) || p->Layout < 1)
+        return;     // (a later layout is to be longer and start the same way: its first part is read)
     NetDataOf[from].known = TRUE;
     NetDataOf[from].id = *p;
     NetDataOf[from].id.Edition[sizeof(p->Edition) - 1] = 0;
@@ -580,14 +586,20 @@ static void ReceiveDataIdentity(int from, BYTEp buf, int len)
     NetDataOf[from].id.BuildId[sizeof(p->BuildId) - 1] = 0;
     }
 
-static const char *DataDescription(const PACKET_DATA_ID *d, char *buf, int size)
+// with_crc: also the CRCs, for two datas whose names alone read the same (another main GRP under the
+// same add-on, for example)
+static const char *DataDescription(const PACKET_DATA_ID *d, char *buf, int size, BOOL with_crc)
     {
-    if (d->Edition[0])
+    if (d->Edition[0] && !with_crc)
         Bsnprintf(buf, size, "%s", d->Edition);
-    else if (d->GrpSize)
-        Bsnprintf(buf, size, "unknown data, CRC %08X", d->GrpCrc);
+    else if (d->Edition[0] && d->AddonSize)
+        Bsnprintf(buf, size, "%s, CRC %08X and %08X", d->Edition, d->GrpCrc, d->AddonCrc);
+    else if (d->Edition[0])
+        Bsnprintf(buf, size, "%s, CRC %08X", d->Edition, d->GrpCrc);
+    else if (d->AddonSize)
+        Bsnprintf(buf, size, "unknown data, CRC %08X and %08X", d->GrpCrc, d->AddonCrc);
     else
-        Bsnprintf(buf, size, "unknown data");
+        Bsnprintf(buf, size, "unknown data, CRC %08X", d->GrpCrc);
     return buf;
     }
 
@@ -602,20 +614,26 @@ static const char *BuildDescription(const PACKET_DATA_ID *d, char *buf, int size
 // page's notice; on the game's screen the two halves as two quotes that stay for 15 s (a quote
 // otherwise lasts 4.5 s and fits about 60 characters).
 #define NET_WARN_QUOTE_TICS (15 * 40)
-static char NetNotice[1024];
+// Room for every line of the biggest game: 7 other players, each with a data (or version) line and a
+// build line of at most about 320 characters. A line that would not fit is left out of the page's
+// notice and said in its place (the log and the screen still have it).
+static char NetNotice[8192];
 
 static void NetWarn(const char *line, const char *screen1, const char *screen2)
     {
+    static const char more[] = "\n(more lines in the game's log)";
     buildprintf("%s\n", line);
     adduserquote((char *)screen1);
     user_quote_time[0] = NET_WARN_QUOTE_TICS;
     adduserquote((char *)screen2);
     user_quote_time[0] = NET_WARN_QUOTE_TICS;
-    if (strlen(NetNotice) + strlen(line) + 2 < sizeof(NetNotice))
+    if (strlen(NetNotice) + strlen(line) + 2 + sizeof(more) < sizeof(NetNotice))
         {
         if (NetNotice[0]) strcat(NetNotice, "\n");
         strcat(NetNotice, line);
         }
+    else if (!strstr(NetNotice, more))
+        strcat(NetNotice, more);
     }
 
 VOID
@@ -638,17 +656,24 @@ CheckVersion(int GameVersion)
             continue;
 
         verdiff = GameVersion != Player[pnum].PlayerVersion;
-        datadiff = known && (o->GrpCrc != me->GrpCrc || o->GrpSize != me->GrpSize ||
-                             o->AddonCrc != me->AddonCrc || o->AddonSize != me->AddonSize);
+        // (size 0: that machine found no GRP to describe; nothing can be said about it)
+        datadiff = known && o->GrpSize && me->GrpSize &&
+                   (o->GrpCrc != me->GrpCrc || o->GrpSize != me->GrpSize ||
+                    o->AddonCrc != me->AddonCrc || o->AddonSize != me->AddonSize);
 
-        if (verdiff)
+        if (verdiff)    // (players counted from 1, as on the screen; brief 05b)
             buildprintf("CheckVersion(): player %d has version %d, expecting %d\n",
-                    pnum, Player[pnum].PlayerVersion, GameVersion);
+                    pnum + 1, Player[pnum].PlayerVersion, GameVersion);
 
         if (datadiff)
             {
-            DataDescription(o, a, sizeof(a));
-            DataDescription(me, b, sizeof(b));
+            DataDescription(o, a, sizeof(a), FALSE);
+            DataDescription(me, b, sizeof(b), FALSE);
+            if (!strcmp(a, b))
+                {
+                DataDescription(o, a, sizeof(a), TRUE);
+                DataDescription(me, b, sizeof(b), TRUE);
+                }
             Bsnprintf(line, sizeof(line), "Player %d has different game data (%s) from yours (%s): the game will probably go out of sync.", pnum + 1, a, b);
             Bsnprintf(s1, sizeof(s1), "Player %d has different game data (%s)", pnum + 1, a);
             Bsnprintf(s2, sizeof(s2), "from yours (%s): it will probably go out of sync.", b);

@@ -134,10 +134,13 @@ typedef struct PACKED
     int AddonSize;
     char Edition[28];       // the known GRP's name (grpscan.c), "" if it is not a known one
     char Build[24];         // game_version (git describe), for people to read
-    char BuildId[40];       // what the build's game code is made from (version-auto.c), "" if not known
-    }PACKET_DATA_ID,*PACKET_DATA_IDp;     // 110 bytes: mmulti puts at most about 214 bytes of packets into one
-                                          // datagram (MAXPAKSIZ 256), and unacknowledged ones go again with the next
-                                          // ones, so it must leave room for the options packet and the ready
+    char BuildId[40];       // what the build's game code is made from (version-auto.c, 16 or 17 characters), "" if not known
+    }PACKET_DATA_ID,*PACKET_DATA_IDp;     // 110 bytes. mmulti puts at most about 214 bytes of packets into one datagram
+                                          // (MAXPAKSIZ 256) and sends every unacknowledged packet again with the next ones,
+                                          // so a big packet holds back the ones after it. It is sent once per session (the
+                                          // first level start): there, with 2 players, it fits beside the options packet
+                                          // and the ready; with 3 or more the master also forwards each slave's (118 bytes
+                                          // with the proxy header), so its ready can take a few round trips (code-facts §22).
 
 #undef PACKED
 #ifdef _MSC_VER

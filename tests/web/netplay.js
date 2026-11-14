@@ -1048,8 +1048,8 @@ SCENARIOS['level-exit'] = {
 async function dataMismatchGame(kinds, modified) {
   // modified: the index of the native machine on the modified copy, or -1 (everyone on the shareware data)
   const relay = await startRelay();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jfsw-05b-'));
   try {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jfsw-05b-'));
     const copy = path.join(dir, 'sw.grp');
     const crc = modified >= 0 ? execSync('python3 -I ' + JSON.stringify(path.join(L.root, 'tests', 'net', 'modgrp.py')) + ' map ' + JSON.stringify(L.GRP) + ' ' + JSON.stringify(copy)).toString().trim() : '';
     console.log('  ' + kinds.map((k, i) => k + (i === modified ? ' (one map changed, CRC ' + crc + ')' : '')).join(' + ') + ' (' + LOAD() + ')');
@@ -1072,8 +1072,12 @@ async function dataMismatchGame(kinds, modified) {
         if (want.length) {
           check(n === want.join('\n'), ms[i].name + '\'s page was given the same lines for its notice', n || 'none');
           check(shown === want.join('\n'), ms[i].name + '\'s page shows the notice (until it is closed)', shown || 'not shown');
-          // when it opened, Close had the focus (so Enter, Space or Escape closes it); Close closes it
-          check(await ms[i].page.evaluate(() => window.jfswNoticeFocus === true), ms[i].name + '\'s notice gave Close the focus when it opened');
+          // it took the focus only from nobody (the game kept it; focus.js presses the keys)
+          const f = await ms[i].page.evaluate(() => ({ took: window.jfswNoticeFocus, before: window.jfswNoticeBefore }));
+          check(f.took === (f.before === 'BODY'), ms[i].name + '\'s notice took the focus only if nothing had it (it had: ' + f.before + '; took it: ' + f.took + ')');
+          // the picture is not pushed out of the window by the notice (fit() counts it)
+          const r = await ms[i].page.evaluate(() => { const c = document.getElementById('canvas').getBoundingClientRect(), n = document.getElementById('notice').getBoundingClientRect(); return { ct: c.top, cb: c.bottom, cl: c.left, cr: c.right, nb: n.bottom, w: innerWidth, h: innerHeight }; });
+          check(r.ct >= 0 && r.cl >= 0 && r.cr <= r.w && r.cb <= r.h && r.nb <= r.h, ms[i].name + ': with the notice open the whole picture and the notice are in the window (picture ' + Math.round(r.ct) + ' to ' + Math.round(r.cb) + ', notice to ' + Math.round(r.nb) + ', window ' + r.h + ' high)');
           const closed = await ms[i].page.evaluate(() => { document.getElementById('noticeclose').click(); return document.getElementById('notice').hidden; });
           check(closed, ms[i].name + '\'s notice closes with its Close button');
         } else {
@@ -1081,8 +1085,7 @@ async function dataMismatchGame(kinds, modified) {
         }
       }
     }
-    fs.rmSync(dir, { recursive: true, force: true });
-  } finally { await cleanup(relay); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); await cleanup(relay); }
 }
 SCENARIOS['data-mismatch'] = {
   what: 'players with different game data are told so, on every machine and on the page (bugs.md L26): browser host and a native joiner with one map changed, a native host with it and a browser joiner, and both on the same data (nothing said)',
