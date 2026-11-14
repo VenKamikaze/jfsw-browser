@@ -1,6 +1,6 @@
 # Deploying the browser game and the relay (Arch Linux, Apache)
 
-This guide puts the browser build of Shadow Warrior on an Apache server and runs the vnet relay that network games go through, on an Arch Linux machine (x86_64 or aarch64). Browser players then host and join games by room code over `wss://`, and desktop players join the same rooms over UDP. WebTransport is an opt-in extra, off by default for now (see [WebTransport](#webtransport-opt-in-off-by-default-for-now)). The paths and package names are Arch's; other distributions differ mainly in where Apache keeps its configuration. What was checked, and where, is at the [end](#what-was-checked-where).
+This guide puts the browser build of Shadow Warrior on an Apache server and runs the vnet relay that network games go through, on an Arch Linux machine (x86_64 or aarch64). Browser players then host and join games by room code over WebTransport (`wss://` where it is not available), and desktop players join the same rooms over UDP. The paths and package names are Arch's; other distributions differ mainly in where Apache keeps its configuration. What was checked, and where, is at the [end](#what-was-checked-where).
 
 Placeholders used throughout (replace them with your own):
 
@@ -20,11 +20,11 @@ The simplest layout, and the one this guide describes first, is **one machine ru
 ```
 browser ──HTTPS (TCP 443)──▶ Apache ──▶ /games/sw/        the page, the game, the game data
         ──WSS  (TCP 443)──▶ Apache ──▶ /vnet ──▶ relay 127.0.0.1:8080 (WebSocket)
-        ──QUIC (UDP 443)───────────────────────▶ relay :443        (WebTransport: only if you opt in)
+        ──QUIC (UDP 443)───────────────────────▶ relay :443        (WebTransport)           
 desktop ──UDP 7777─────────────────────────────▶ relay :7777
 ```
 
-The page takes its relay **only from `config.js`** (the `relay` field): there is no default relay and no link parameter for it, so that a crafted link cannot send visitors through someone else's relay. With the relay behind the same Apache, the page on `https://game.example.org/games/sw/` uses `relay: 'wss://game.example.org/vnet'`. From a `wss://` URL the game also derives the WebTransport address, `https://game.example.org/vnet` on UDP 443, and tries it first; when nothing answers there (the default in this guide) it uses the WebSocket, after up to about 3 s while it joins. A `ws://` URL means WebSocket only.
+The page takes its relay **only from `config.js`** (the `relay` field): there is no default relay and no link parameter for it, so that a crafted link cannot send visitors through someone else's relay. With the relay behind the same Apache, the page on `https://game.example.org/games/sw/` uses `relay: 'wss://game.example.org/vnet'`. From a `wss://` URL the game also derives the WebTransport address, `https://game.example.org/vnet` on UDP 443, and tries it first; when nothing answers there (a firewall, a network that blocks UDP 443, or [the relay without WebTransport](#without-webtransport)) it uses the WebSocket, after up to about 3 s while it joins. A `ws://` URL means WebSocket only.
 
 ### Ports to open
 
@@ -35,7 +35,7 @@ On the machine's firewall, and forwarded from the router if the machine is behin
 | 443 | TCP | Apache: the page, the game data and the browsers' WebSocket (`/vnet`) | yes |
 | 80 | TCP | Apache: Let's Encrypt's HTTP challenge and the redirect to HTTPS | yes, if you use certbot's HTTP challenge |
 | 7777 | UDP | the relay: desktop players | yes, for desktop players |
-| 443 | UDP | the relay: WebTransport (HTTP/3) for browsers | only with the opt-in [WebTransport](#webtransport-opt-in-off-by-default-for-now) section; browsers use the WebSocket without it |
+| 443 | UDP | the relay: WebTransport (HTTP/3) for browsers | yes, unless you run [without WebTransport](#without-webtransport); browsers that cannot reach it use the WebSocket |
 
 Do **not** open 8080 or 8081: the relay's HTTP and stats listeners stay on `127.0.0.1`, and only Apache talks to them. The relay makes no outbound connections.
 
@@ -132,7 +132,7 @@ After you update the repository, compare your copy with the new `web/config.js` 
 
 ### If the relay is on another machine
 
-Set `relay: 'wss://relay.example.org/vnet'`. The game derives WebTransport at `https://relay.example.org/vnet` (UDP 443 on that machine; used only if you opt in to WebTransport). See [The relay on a different machine](#the-relay-on-a-different-machine).
+Set `relay: 'wss://relay.example.org/vnet'`. The game derives WebTransport at `https://relay.example.org/vnet` (UDP 443 on that machine). See [The relay on a different machine](#the-relay-on-a-different-machine).
 
 ### Game data from another server
 
@@ -286,62 +286,9 @@ sudo useradd --system --no-create-home --shell /usr/bin/nologin vnet-relay
 
 Check that it runs: `vnet-relay -udp 127.0.0.1:0 -http 127.0.0.1:0` prints a `LISTEN ...` line (Ctrl+C to stop).
 
-### The service
+### WebTransport's certificate
 
-`/etc/systemd/system/vnet-relay.service` (WebSocket and UDP; WebTransport is the opt-in section below):
-
-<!-- check-deploy: relay-unit -->
-```ini
-[Unit]
-Description=vnet relay (Shadow Warrior network games)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-User=vnet-relay
-Group=vnet-relay
-ExecStart=/usr/local/bin/vnet-relay \
-    -udp :7777 \
-    -http 127.0.0.1:8080 -trust-forwarded-for \
-    -origins game.example.org \
-    -stats 127.0.0.1:8081 \
-    -v
-# No capabilities: the relay binds no privileged port (the WebTransport drop-in below adds one).
-CapabilityBoundingSet=
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-PrivateDevices=yes
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload && sudo systemctl enable --now vnet-relay
-journalctl -u vnet-relay -f        # the LISTEN line, then "room ... created" and "closed"
-```
-
-What the flags do here:
-
-- `-udp :7777`: desktop players, on every interface.
-- `-http 127.0.0.1:8080 -trust-forwarded-for`: the WebSocket listener, reachable only by Apache. The relay takes each browser's address from the `X-Forwarded-For` header Apache adds, so its per-address limits count players, not Apache. **Never use `-trust-forwarded-for` on a listener the internet can reach directly** (`-http :8080`): anyone could then write the header and claim any address.
-- `-origins game.example.org`: only pages from your site may open sessions. It is matched against the browser's `Origin` exactly, **including a port**: a page served on a non-standard port, say 8443, needs `-origins game.example.org:8443`. List several, comma separated. It is the *page's* host, wherever the relay runs.
-- `-stats 127.0.0.1:8081`: counters as JSON, local only (`curl -s 127.0.0.1:8081/stats`): rooms, sessions, `websockets`, `webtransports`, `rate_limited`. Optional; never on a public address.
-- `-v`: log rooms as they are created and closed. The relay's log does not name each member's transport; `/stats` counts them, and each browser's console says which one it got (`relay-ws`, or `relay-wt` with WebTransport).
-
-The unit's last lines keep the relay to itself: its own user, no capabilities, no new privileges, a read-only system, no home directories, a private `/tmp` and no devices. It needs no files (none without WebTransport) and makes no outbound connections.
-
-### WebTransport (opt-in, off by default for now)
-
-**A known problem first (`bugs.md` L31).** In the project's tests, a game hosted by a browser with two or more guests over WebTransport ran at about 25 of its 40 tics a second, and on a busy test machine at 9 to 13: the host's page cannot hand its datagrams to the browser fast enough and drops them (vnet's limit of 16 datagrams in flight; vnet brief 15 is written for the fix), and the game resends them. Two-player games, and every game over WebSocket, ran at full speed. Some of those slow test games also ended with "the host left the game" on a guest, but only at their very end: the test's host stops at a fixed tic and lingers 1.5 s, and a guest that far behind was still waiting for it; a real host does not stop like that (and one WebSocket test game ended the same way at a load of 15). Since a shareware game is usually a browser host with two or three guests, **leave WebTransport off until a vnet release fixes it**; everything else in this guide works without it. It has not been checked on a real network.
-
-To turn it on anyway (or to try a fixed relay): open UDP 443, then give the relay a certificate, bigger UDP buffers and the `-wt` flags.
-
-WebTransport needs the relay to hold a real certificate for the page's relay host name (here the same Let's Encrypt one as Apache's). The relay runs as `vnet-relay`, which cannot read `/etc/letsencrypt`, so give it a copy that a certbot hook refreshes, `/etc/letsencrypt/renewal-hooks/deploy/vnet-relay.sh`. certbot runs every deploy hook after **any** renewal, so the hook copies only the game's certificate:
+The relay serves browsers over WebTransport (QUIC on UDP 443) as well as over the WebSocket. WebTransport needs the relay to hold a real certificate for the page's relay host name (here the same Let's Encrypt one as Apache's). The relay runs as `vnet-relay`, which cannot read `/etc/letsencrypt`, so give it a copy that a certbot hook refreshes, `/etc/letsencrypt/renewal-hooks/deploy/vnet-relay.sh`. certbot runs every deploy hook after **any** renewal, so the hook copies only the game's certificate:
 
 <!-- check-deploy: relay-cert-hook -->
 ```sh
@@ -372,9 +319,67 @@ printf 'net.core.rmem_max=7500000\nnet.core.wmem_max=7500000\n' | sudo tee /etc/
 sudo sysctl --system
 ```
 
-Then a drop-in that adds the `-wt` flags and the one capability they need (binding UDP 443), `/etc/systemd/system/vnet-relay.service.d/webtransport.conf`:
+### The service
 
-<!-- check-deploy: relay-unit-wt -->
+`/etc/systemd/system/vnet-relay.service`:
+
+<!-- check-deploy: relay-unit -->
+```ini
+[Unit]
+Description=vnet relay (Shadow Warrior network games)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=vnet-relay
+Group=vnet-relay
+ExecStart=/usr/local/bin/vnet-relay \
+    -udp :7777 \
+    -http 127.0.0.1:8080 -trust-forwarded-for \
+    -origins game.example.org \
+    -stats 127.0.0.1:8081 \
+    -wt :443 -wt-cert /etc/vnet-relay/certs/fullchain.pem -wt-key /etc/vnet-relay/certs/privkey.pem \
+    -v
+# Binding UDP 443 (WebTransport) needs this one capability, and no other.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now vnet-relay
+journalctl -u vnet-relay -f        # the LISTEN line, then "room ... created" and "closed"
+```
+
+What the flags do here:
+
+- `-udp :7777`: desktop players, on every interface.
+- `-http 127.0.0.1:8080 -trust-forwarded-for`: the WebSocket listener, reachable only by Apache. The relay takes each browser's address from the `X-Forwarded-For` header Apache adds, so its per-address limits count players, not Apache. **Never use `-trust-forwarded-for` on a listener the internet can reach directly** (`-http :8080`): anyone could then write the header and claim any address.
+- `-origins game.example.org`: only pages from your site may open sessions. It is matched against the browser's `Origin` exactly, **including a port**: a page served on a non-standard port, say 8443, needs `-origins game.example.org:8443`. List several, comma separated. It is the *page's* host, wherever the relay runs.
+- `-stats 127.0.0.1:8081`: counters as JSON, local only (`curl -s 127.0.0.1:8081/stats`): rooms, sessions, `websockets`, `webtransports`, and what was dropped: `rate_limited`, `ws_queue_drops`, `wt_datagram_drops` (datagrams to a WebTransport client that did not fit its send queue) and `wt_rx_queue_drops` (datagrams from one that did not fit the relay's receive queue). All the drop counters should stay at 0. Optional; never on a public address.
+- `-wt :443 ...`: WebTransport on UDP 443, so the URL the game derives from `wss://game.example.org/vnet`, `https://game.example.org/vnet`, needs no port. Apache does not use UDP 443 (it has no HTTP/3), so the two do not clash.
+- `-v`: log rooms as they are created and closed. The relay's log does not name each member's transport; `/stats` counts them, and each browser's console says which one it got (`relay-wt` or `relay-ws`).
+
+The unit's last lines keep the relay to itself: its own user, one capability (binding UDP 443), no new privileges, a read-only system, no home directories, a private `/tmp` and no devices. It reads only its certificate copy and makes no outbound connections.
+
+**Memory.** A WebTransport member is a QUIC connection: plan on 250 to 300 KB each in normal play, and up to about 3.5 MB each in the worst case, when every queue is full (`ext/vnet/relay/README.md`, "Sizing WebTransport"; vnet 0.5.0 deepened the queues). `-max-wt` (4000 by default) caps the number of them; for a home server with a few rooms nothing needs changing, and a small machine can lower it (`-max-wt 200`: at most about 700 MB even in the worst case; browsers over the cap use the WebSocket).
+
+The relay is built from `ext/vnet` **0.5.0 or later**: 0.4.0 slowed games hosted by a browser with two or more guests over WebTransport to about 25 of 40 tics a second (`bugs.md` L31, fixed in vnet 0.5.0). A relay built from this repository's `claude` branch is new enough.
+
+### Without WebTransport
+
+To run the relay on the WebSocket and UDP only (no certificate copy, no sysctl, no capability, UDP 443 closed), add a drop-in, `/etc/systemd/system/vnet-relay.service.d/websocket-only.conf`, then `sudo systemctl daemon-reload && sudo systemctl restart vnet-relay`:
+
+<!-- check-deploy: relay-unit-ws -->
 ```ini
 [Service]
 ExecStart=
@@ -383,17 +388,12 @@ ExecStart=/usr/local/bin/vnet-relay \
     -http 127.0.0.1:8080 -trust-forwarded-for \
     -origins game.example.org \
     -stats 127.0.0.1:8081 \
-    -wt :443 -wt-cert /etc/vnet-relay/certs/fullchain.pem -wt-key /etc/vnet-relay/certs/privkey.pem \
     -v
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=
+CapabilityBoundingSet=
 ```
 
-```bash
-sudo systemctl daemon-reload && sudo systemctl restart vnet-relay
-```
-
-`-wt :443 ...` is WebTransport on UDP 443, so the URL the game derives from `wss://game.example.org/vnet`, `https://game.example.org/vnet`, needs no port. Apache does not use UDP 443 (it has no HTTP/3), so the two do not clash. To turn it off again, remove the drop-in, `daemon-reload` and restart.
+The empty assignments clear the main unit's values: no capabilities at all. Browsers then use the WebSocket (`relay-ws`), after up to about 3 s in which they try WebTransport while they join. To turn WebTransport back on, remove the drop-in, `daemon-reload` and restart.
 
 ### Limits and time-outs: the defaults fit this game
 
@@ -501,7 +501,7 @@ Then play:
 1. Open `https://game.example.org/games/sw/?host=3` in one browser and click "Click to host a game of 3". The lobby shows a six-letter room code, an invite link (`https://game.example.org/games/sw/?join=CODE`, with Copy) and "1 of 3 players are in". (Or start the game and use the main menu's **Host Online**.)
 2. Open the invite link in another browser (another machine, a private window, a phone): "Click to join room CODE". Both lobbies say "2 of 3".
 3. A desktop player joins with the code (section 5): the lobbies say "3 of 3" and the game starts; the host picks a co-op game in the menus. (With 3 places and 2 players in, the host can press "Start now".)
-4. The transport: in each browser's console (F12) the game says `mmulti: room code ... (you are 10.0.0.1, relay-ws; ...)` or `joined room ... (relay-ws)`: the WebSocket, as configured here. With the opt-in WebTransport section it says `relay-wt`, and on the server `curl -s 127.0.0.1:8081/stats` shows `"webtransports":2` (no space; the number of WebTransport sessions) while two browsers play. A browser that cannot reach UDP 443 falls back to the WebSocket after about 3 s, so play works either way.
+4. The transport: in each browser's console (F12) the game says `mmulti: room code ... (you are 10.0.0.1, relay-wt; ...)` or `joined room ... (relay-wt)`: WebTransport. On the server `curl -s 127.0.0.1:8081/stats` shows `"webtransports":2` (no space) while two browsers play, and `wt_rx_queue_drops`, `wt_datagram_drops` and `rate_limited` stay 0. A browser that cannot reach UDP 443 says `relay-ws`: it fell back to the WebSocket after about 3 s, so play works either way.
 
 ## Without TLS
 
@@ -532,7 +532,7 @@ Plain HTTP works on a LAN, but browsers allow WebTransport only on HTTPS pages, 
 </VirtualHost>
 ```
 
-Set `relay: 'ws://game.example.org/vnet'` in `config.js`. The relay's unit is the one of section 4, without the WebTransport drop-in. The page is at `http://game.example.org/games/sw/`, and the `curl` checks are the same with `http://` (the WebSocket one with `Origin: http://game.example.org`). Desktop players are not affected: they use UDP 7777 either way.
+Set `relay: 'ws://game.example.org/vnet'` in `config.js`. The relay runs [without WebTransport](#without-webtransport) (the drop-in), and needs no certificate copy. The page is at `http://game.example.org/games/sw/`, and the `curl` checks are the same with `http://` (the WebSocket one with `Origin: http://game.example.org`). Desktop players are not affected: they use UDP 7777 either way.
 
 ## Updating
 
@@ -557,24 +557,25 @@ The page's messages and the desktop game's (in its console, `sw.log` and a messa
 | "The game could not start: ..." or "The game crashed: LinkError: WebAssembly.instantiate(): ..." | `sw.js` and `sw.wasm` from different builds: a cached old `sw.wasm` (check `Cache-Control: no-cache` with `curl`) or a copy still in progress; reload |
 | "GAME OUT OF SYNC! Restart the game." on the host's screen | the players run different builds (see [Builds must match](#builds-must-match)), or a game bug |
 | the game data does not download | see data-hosting.md; the page's message says what failed |
-| browsers always say `relay-ws`, never `relay-wt` | as configured by default here (no WebTransport). With the opt-in WebTransport section: UDP 443 is closed, the drop-in is not loaded (`systemctl cat vnet-relay`), or the relay cannot read its certificate copy (see its log) |
-| with WebTransport on, a game of three or more hosted by a browser runs slow (and lags) | `bugs.md` L31: turn WebTransport off (remove the drop-in) until a vnet release fixes it |
-| joining takes about 3 s longer than it should | the game tries WebTransport first; with UDP 443 closed and silently dropped it waits for that try to time out. Harmless |
+| browsers always say `relay-ws`, never `relay-wt` | UDP 443 is closed or not forwarded, the WebSocket-only drop-in is loaded (`systemctl cat vnet-relay`), or the relay cannot read its certificate copy (see its log) |
+| a game hosted by a browser with two or more guests over WebTransport runs slow | a relay or page built from vnet 0.4.0 (`bugs.md` L31): rebuild both from this repository (vnet 0.5.0 or later) and redeploy them |
+| `wt_rx_queue_drops` or `wt_datagram_drops` grows in `/stats` | the relay's WebTransport queues overflowed (a burst bigger than they hold, or a starved relay): see the relay's README, "Sizing WebTransport" |
+| joining takes about 3 s longer than it should | the game tries WebTransport first; with UDP 443 closed and silently dropped (or the relay without WebTransport) it waits for that try to time out. Harmless |
 | the relay logs a certificate warning | the renewal hook did not run: run it by hand and check `sudo certbot renew --dry-run` |
 | `rate_limited` grows in `/stats` during games | a member sends more than `-client-pps` or `-client-bps` allow: see the limits above |
 
 ## What was checked where
 
-This guide was followed end to end in the project's cloud container, which is Ubuntu 24.04 (x86_64), not Arch, by `tests/deploy/check-deploy.sh` (`doco/browser/building.md` §6.7 says how to run it). It takes this file's blocks as they are (each after a `check-deploy` comment: the `rsync` line, `config.js`, the module lines, `sw.conf` and the one without TLS, the build lines, the `useradd` line, the unit and the WebTransport drop-in, the certificate hook, the sysctl line, the `curl` checks, the desktop player's command) and:
+This guide was followed end to end in the project's cloud container, which is Ubuntu 24.04 (x86_64), not Arch, by `tests/deploy/check-deploy.sh` (`doco/browser/building.md` §6.7 says how to run it). It takes this file's blocks as they are (each after a `check-deploy` comment: the `rsync` line, `config.js`, the module lines, `sw.conf` and the one without TLS, the build lines, the `useradd` line, the unit and the WebSocket-only drop-in, the certificate hook, the sysctl line, the `curl` checks, the desktop player's command) and:
 
 - deploys exactly the files the `rsync` line names, checking them against the file table and `build-wasm/`, into `/srv/http/games/sw`, with the build's `config.js` carrying the settings block of section 2;
 - runs Ubuntu's Apache 2.4.58 with a small `httpd.conf` of its own in Arch's layout (`ServerRoot`, `modules/`, `<Directory "/srv/http">` with `Indexes` as Arch has it, the seven modules the game needs besides the module lines above (autoindex among them, as Arch has it), and `Include` of `sw.conf`; not Arch's full default file with its 26 modules and its other `Include`s), a self-signed certificate for `game.example.org` in Let's Encrypt's layout instead of a real one, and `game.example.org` mapped to 127.0.0.1 in `/etc/hosts`; `apachectl configtest` says "Syntax OK";
-- builds the relay with the server build line and the aarch64 binary with the cross-compile line (checked to be an ARM aarch64 executable, not run), creates the user with the `useradd` line, checks the unit (and the drop-in) with `systemd-analyze verify`, checks the unit's user and hardening lines, and runs the relay as that user with the unit's flags and capabilities, by hand (`setpriv`): the container has no systemd. It checks that the HTTP and stats listeners are on 127.0.0.1;
-- with `--wt`: runs the certificate hook as certbot would (and checks that it ignores another site's renewal), sets the two sysctl values with `sysctl -w` (and checks the file name), and adds the drop-in's flags;
+- builds the relay with the server build line and the aarch64 binary with the cross-compile line (checked to be an ARM aarch64 executable, not run), creates the user with the `useradd` line, runs the certificate hook as certbot would (and checks that it ignores another site's renewal), sets the two sysctl values with `sysctl -w` (and checks the file name), checks the unit with `systemd-analyze verify`, checks the unit's user and hardening lines, and runs the relay as that user with the unit's flags and capabilities, by hand (`setpriv`): the container has no systemd. It checks that the HTTP and stats listeners are on 127.0.0.1;
+- with `--ws`: the same with the WebSocket-only drop-in (no capabilities; the browsers must say `relay-ws`);
 - runs every `curl` check of section 6 as written and compares the answers with the ones given, and a few more: the 403 and the 503, the redirect on port 80, the ACME path, a `304` for a revalidated `sw.wasm` (with `DeflateAlterETag NoChange`), no directory listing, no COOP/COEP headers;
-- opens the deployed page with `?test=1&args=...` (no test hooks, no test line, and the game does not see the arguments) and plays: two Chromium pages from `https://game.example.org/games/sw/` (one with `?host=3`, one from its invite link) and a desktop `sw` joining with section 5's command over UDP 7777 all start the game; then a co-op game of the same three, 1,200 tics, through a test-mode copy of the site that exists only while it runs (for the per-tic records, `-testdump`), in which every machine agrees on every tic;
+- opens the deployed page with `?test=1&args=...` (no test hooks, no test line, and the game does not see the arguments) and plays: two Chromium pages from `https://game.example.org/games/sw/` (one with `?host=3`, one from its invite link) and a desktop `sw` joining with section 5's command over UDP 7777 all start the game, the browsers over WebTransport; then a co-op game of the same three, 1,200 tics, through a test-mode copy of the site that exists only while it runs (for the per-tic records, `-testdump`), in which every machine agrees on every tic, the host runs at least 36 tics a second and no page drops a WebTransport datagram (with vnet 0.5.0: 40.0 tics a second, nothing dropped);
 - with `--no-tls`, the same over plain HTTP and `ws://`.
 
-Chromium reached `game.example.org` through `--host-resolver-rules` and trusted the self-signed certificate by its key hash (`--ignore-certificate-errors-spki-list`); with `--wt` it also needed `--webtransport-developer-mode` (without it Chromium refuses, for QUIC, a certificate that has no public root, even one it trusts otherwise). A real certificate needs none of that. The `rsync` line was run into a local directory.
+Chromium reached `game.example.org` through `--host-resolver-rules` and trusted the self-signed certificate by its key hash (`--ignore-certificate-errors-spki-list`); for WebTransport it also needed `--webtransport-developer-mode` (without it Chromium refuses, for QUIC, a certificate that has no public root, even one it trusts otherwise). A real certificate needs none of that. The `rsync` line was run into a local directory.
 
-Not checked there: certbot and Let's Encrypt (no public host name), the renewal timer and the Apache reload hook, systemd itself (`systemctl`, `journalctl`), `sysctl --system` reading the file (the values were set with `sysctl -w` instead), `pacman`, `ssh` to a server, Arch's own `httpd.conf`, paths and package versions, an aarch64 machine, Firefox, and a real network between the players: in particular WebTransport's slowdown with a browser host and two guests (`bugs.md` L31) was seen only in the container.
+Not checked there: certbot and Let's Encrypt (no public host name), the renewal timer and the Apache reload hook, systemd itself (`systemctl`, `journalctl`), `sysctl --system` reading the file (the values were set with `sysctl -w` instead), `pacman`, `ssh` to a server, Arch's own `httpd.conf`, paths and package versions, an aarch64 machine, Firefox, and a real network between the players. The WebTransport game with a browser host and two guests was also played with Firefox 160 as the host (`tests/web/firefox.js`, part 4), outside this check.

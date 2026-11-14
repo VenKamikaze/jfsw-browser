@@ -4,8 +4,8 @@
 # End-to-end check of doco/browser/deploy.md (brief 06): follows the guide as far as a
 # machine without a public host name allows, and plays through what it set up.
 #
-#   sudo tests/deploy/check-deploy.sh                 # everything (about 3 minutes): WebSocket, the guide's default
-#   sudo tests/deploy/check-deploy.sh --wt            # with the guide's opt-in WebTransport section (bugs.md L31)
+#   sudo tests/deploy/check-deploy.sh                 # everything (about 2 minutes): the guide's default, WebTransport and WebSocket
+#   sudo tests/deploy/check-deploy.sh --ws            # the guide's "Without WebTransport" (the WebSocket-only drop-in)
 #   sudo tests/deploy/check-deploy.sh --no-tls        # the guide's "Without TLS": plain HTTP, ws://
 #   sudo tests/deploy/check-deploy.sh --quick         # the set-up and the curl checks, no browsers
 #   sudo tests/deploy/check-deploy.sh --guide FILE    # take the guide's blocks from another copy (the mutation runs)
@@ -27,7 +27,7 @@
 #   relay-build-server, relay-build
 #                    the relay is built with the server line and cross-compiled for aarch64 with the PC line,
 #                    from the working tree, into this run's directory (nothing cached);
-#   relay-user, relay-unit (and with --wt relay-unit-wt, relay-cert-hook, relay-sysctl)
+#   relay-user, relay-cert-hook, relay-sysctl, relay-unit (and with --ws or --no-tls the drop-in relay-unit-ws)
 #                    the user is made with the guide's useradd line; the unit (and drop-in) go through
 #                    `systemd-analyze verify`; its User=, Group= and hardening lines are checked; the relay runs
 #                    as that user with the unit's flags, capabilities and NoNewPrivileges (setpriv; no systemd
@@ -42,8 +42,8 @@
 # <Directory> settings, and there only while it runs) in which every machine's -testdump must agree on every tic.
 #
 # It changes the machine while it runs: game.example.org in /etc/hosts, the game in /srv/http/games/sw, the
-# vnet-relay user, with --wt /etc/vnet-relay and two sysctl values; it uses the guide's own ports (TCP 80
-# and 443, UDP 7777, with --wt UDP 443, 127.0.0.1:8080 and 8081), which must be free. It refuses to start if
+# vnet-relay user, /etc/vnet-relay and two sysctl values (not with --ws or --no-tls); it uses the guide's own ports
+# (TCP 80 and 443, UDP 7777, UDP 443 unless --ws or --no-tls, 127.0.0.1:8080 and 8081), which must be free. It refuses to start if
 # the hosts line, the site, the user or /etc/vnet-relay already exist, and on every exit it removes what it added,
 # puts back the sysctl values and the modes of /srv/http and /srv/http/games, and stops Apache and the relay
 # (unless --keep). Each check prints "ok:" or "FAIL:"; the script ends with PASS or FAILED.
@@ -51,18 +51,18 @@ set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 guide="$root/doco/browser/deploy.md"
-quick=0; keep=0; tls=1; wt=0
+quick=0; keep=0; tls=1; wt=1
 while [ $# -gt 0 ]; do
     case "$1" in
         --guide) guide="$(readlink -f "$2")"; shift 2 ;;
         --quick) quick=1; shift ;;
         --keep) keep=1; shift ;;
         --no-tls) tls=0; shift ;;
-        --wt) wt=1; shift ;;
+        --ws) wt=0; shift ;;
         *) echo "unknown option $1" >&2; exit 2 ;;
     esac
 done
-[ "$wt" = 1 ] && [ "$tls" = 0 ] && { echo "--wt needs TLS: not with --no-tls" >&2; exit 2; }
+[ "$tls" = 0 ] && wt=0      # browsers allow WebTransport only on HTTPS pages: the guide's no-TLS set-up is WebSocket only
 
 HOST=game.example.org
 SITE=/srv/http/games/sw
@@ -142,7 +142,7 @@ block() {
         inside { print }' "$guide"
 }
 need=(rsync site-config httpd-modules "$site_block" relay-build relay-build-server relay-user relay-unit curl-checks curl-server desktop-join)
-[ "$wt" = 1 ] && need+=(relay-unit-wt relay-cert-hook relay-sysctl)
+if [ "$wt" = 1 ]; then need+=(relay-cert-hook relay-sysctl); else need+=(relay-unit-ws); fi
 for b in "${need[@]}"; do [ -n "$(block "$b")" ] || die "the guide has no block marked check-deploy: $b"; done
 
 # ---- the site: the files the rsync line copies, config.js -------------------------------------------
@@ -263,12 +263,12 @@ fi
 made_user=1
 ok "the user from the guide's line: $ruser"
 
-# the unit (and with --wt the drop-in): what it says, systemd-analyze verify, then its command line
+# the unit (and with --ws the WebSocket-only drop-in): what it says, systemd-analyze verify, then its command line
 unit="$(block relay-unit)"
-dropin=""; [ "$wt" = 1 ] && dropin="$(block relay-unit-wt)"
+dropin=""; [ "$wt" = 0 ] && dropin="$(block relay-unit-ws)"
 mkdir -p "$w/system/vnet-relay.service.d"
 printf '%s\n' "$unit" | sed "s|/usr/local/bin/vnet-relay|$w/vnet-relay|" > "$w/system/vnet-relay.service"
-[ -n "$dropin" ] && printf '%s\n' "$dropin" | sed "s|/usr/local/bin/vnet-relay|$w/vnet-relay|" > "$w/system/vnet-relay.service.d/webtransport.conf"
+[ -n "$dropin" ] && printf '%s\n' "$dropin" | sed "s|/usr/local/bin/vnet-relay|$w/vnet-relay|" > "$w/system/vnet-relay.service.d/websocket-only.conf"
 if command -v systemd-analyze >/dev/null; then
     v="$(cd "$w/system" && systemd-analyze verify "$w/system/vnet-relay.service" 2>&1)"
     [ -z "$(printf '%s\n' "$v" | grep -v -e '^$' -e 'Failed to open' -e 'not running' -e 'Failed to prepare filename' -e 'Unit .* not found' -e 'Failed to connect')" ] \
@@ -286,19 +286,19 @@ for kv in NoNewPrivileges=yes ProtectSystem=strict ProtectHome=yes PrivateTmp=ye
 done
 capb="$(val CapabilityBoundingSet)"; capa="$(val AmbientCapabilities)"
 if [ "$wt" = 1 ]; then
-    [ "$capb" = CAP_NET_BIND_SERVICE ] && [ "$capa" = CAP_NET_BIND_SERVICE ] && ok "with the drop-in: CAP_NET_BIND_SERVICE only (for UDP 443)" \
-        || bad "with the drop-in, the capabilities are bounding \"$capb\", ambient \"$capa\" (want CAP_NET_BIND_SERVICE only)"
+    [ "$capb" = CAP_NET_BIND_SERVICE ] && [ "$capa" = CAP_NET_BIND_SERVICE ] && ok "the unit gives the relay CAP_NET_BIND_SERVICE only (for UDP 443)" \
+        || bad "the unit's capabilities are bounding \"$capb\", ambient \"$capa\" (want CAP_NET_BIND_SERVICE only)"
 else
-    [ -z "$capb" ] && [ -z "$capa" ] && printf '%s\n' "$unit" | grep -q '^CapabilityBoundingSet=$' && ok "the unit gives the relay no capabilities" \
-        || bad "the unit's capabilities: bounding \"$capb\", ambient \"$capa\" (want none: CapabilityBoundingSet= empty)"
+    [ -z "$capb" ] && [ -z "$capa" ] && printf '%s\n' "$dropin" | grep -q '^CapabilityBoundingSet=$' && ok "with the WebSocket-only drop-in, the relay has no capabilities" \
+        || bad "with the WebSocket-only drop-in, the capabilities are bounding \"$capb\", ambient \"$capa\" (want none: CapabilityBoundingSet= empty)"
 fi
 # ExecStart: the last one set (a drop-in clears it with an empty ExecStart= first), continuation lines joined
 flags="$(printf '%s\n%s\n' "$unit" "$dropin" | awk '/^ExecStart=./ {line = ""; on = 1} on { line = line " " $0; if ($0 !~ /\\$/) { last = line; on = 0 } } END { print last }' \
     | sed 's/\\//g; s/^ *ExecStart=[^ ]*//')"
 read -r -a flagv <<< "$flags"
 note "vnet-relay${flags}"
-[ "$wt" = 1 ] && ! printf '%s' "$flags" | grep -q -- ' -wt ' && bad "the drop-in's command line has no -wt"
-[ "$wt" = 0 ] && printf '%s' "$flags" | grep -q -- ' -wt' && bad "the default unit has -wt: the guide's default is WebSocket only (L31)"
+[ "$wt" = 1 ] && ! printf '%s' "$flags" | grep -q -- ' -wt ' && bad "the unit's command line has no -wt: the guide's default is WebTransport"
+[ "$wt" = 0 ] && printf '%s' "$flags" | grep -q -- ' -wt' && bad "the WebSocket-only drop-in's command line has -wt"
 
 if [ "$wt" = 1 ]; then
     [ -e /etc/vnet-relay ] || made_etc=1
