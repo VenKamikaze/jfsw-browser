@@ -241,7 +241,9 @@
   window.jfswLobby = null;        // the game's last report (also without ?test=1: the tests read it)
 
   // The invite link keeps ?data=: every player of a game must have the same game data, so a host who plays with
-  // other data than config.js's sends the guests to it too (the game would refuse mismatched data anyway).
+  // other data than config.js's sends the guests to it too. The game does not refuse other data: players with
+  // different data can play together but will probably go out of sync, and every machine says so (brief 05b,
+  // Module.jfswNotice below).
   function inviteLink(code) { return location.origin + location.pathname + '?join=' + code + (DATA_OVERRIDE ? '&data=' + encodeURIComponent(DATA_OVERRIDE) : ''); }
   function hideLobby() { lobbyEl.hidden = true; }
   function showLobby(info) {
@@ -313,6 +315,44 @@
   // While the lobby is up, keys stay with the page: Tab, Enter and Space work on the buttons as usual.
   ['keydown', 'keyup', 'keypress'].forEach(function (type) {
     window.addEventListener(type, function (e) { if (!lobbyEl.hidden) { e.stopImmediatePropagation(); } }, true);
+  });
+
+  // ---- The notice (brief 05b): the other players' game data or build differs ---------------------------
+  // The game (net.c CheckVersion, through src/netlobby.c NetPageNotice) calls Module.jfswNotice(text) at a network
+  // game's level start when another player's game data, version or build differs from this one's: one line per
+  // difference. The game also says it on its screen, but only for 15 s, and a hidden tab misses that: the notice
+  // stays beside the picture until it is closed. The first time it opens, Close has the focus and the keys stay with
+  // the page (Enter, Space or Escape closes it, and the game gets the keyboard back); the same text again (the next
+  // level) does not open it again. window.jfswNotice is the last text, window.jfswNoticeFocus whether Close got the
+  // focus (the tests read them).
+  var noticeEl = document.getElementById('notice');
+  var noticeTextEl = document.getElementById('noticetext');
+  var noticeCloseBtn = document.getElementById('noticeclose');
+  var noticeShown = '';
+  window.jfswNotice = null;
+  function closeNotice() {
+    noticeEl.hidden = true;
+    if (document.activeElement === noticeCloseBtn) { canvas.focus(); }
+  }
+  Module.jfswNotice = function (text) {
+    text = String(text);
+    window.jfswNotice = text;
+    console.warn(text);
+    if (text === noticeShown) { return; }
+    noticeShown = text;
+    noticeTextEl.textContent = text;
+    noticeEl.hidden = false;
+    noticeCloseBtn.focus();
+    window.jfswNoticeFocus = document.activeElement === noticeCloseBtn;     // (the tests read it)
+  };
+  noticeCloseBtn.addEventListener('click', closeNotice);
+  // While the focus is in the notice, keys are the page's (the game's keyboard handler is on the window).
+  ['keydown', 'keyup', 'keypress'].forEach(function (type) {
+    window.addEventListener(type, function (e) {
+      if (noticeEl.hidden || !noticeEl.contains(document.activeElement)) { return; }
+      e.stopImmediatePropagation();
+      if (type === 'keydown' && e.code === 'Escape') { e.preventDefault(); closeNotice(); }
+    }, true);
   });
 
   // The console's and the menus' host and join (src/netlobby.c): restart the page into the network game (D3).

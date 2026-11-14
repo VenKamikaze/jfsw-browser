@@ -285,6 +285,7 @@ VOID SendVersion(int version);
 struct grpfile;
 VOID NetDataIdentity(const char *grpfile, struct grpfile const *gamegrp);   // brief 05b, from app_main
 VOID SendDataIdentity(VOID);    // brief 05b, right after SendVersion
+VOID NetTestBuildId(const char *name);  // -testbuildid<name> (test-only, sync.c)
 VOID InitNetPlayerOptions(void );
 VOID CheckVersion(int GameVersion);
 VOID SendMessage(short pnum,char *text);

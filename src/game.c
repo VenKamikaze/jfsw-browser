@@ -3100,6 +3100,7 @@ VOID InitRunLevel(VOID)
     #endif
 
     SendVersion(GameVersion + TestVersionSalt());
+    SendDataIdentity();     // brief 05b: the game data and build, for CheckVersion()
 
     waitforeverybody();
 
@@ -3749,6 +3750,7 @@ int app_main(int argc, char const * const argv[])
         GameVariant = gamegrp->game & ~GRPFILE_ADDON;
         }
 
+    NetDataIdentity(grpfile, gamegrp);  // brief 05b: what this machine tells the others in a network game
     buildprintf("GRP file: %s\n", grpfile);
     initgroupfile(grpfile);
     if (!gamegrp && !DetectShareware()) {
@@ -3875,6 +3877,11 @@ int app_main(int argc, char const * const argv[])
         if (Bstrncasecmp(arg, "teststall", 9) == 0)
             {
             TestStallArg(arg+9);    // test-only: this machine stops for a while at tic T of the first level
+            }
+        else
+        if (Bstrncasecmp(arg, "testbuildid", 11) == 0)
+            {
+            NetTestBuildId(arg+11);     // test-only: this machine reports another build (brief 05b)
             }
         else
         if (Bstrncasecmp(arg, "testaimkey", 10) == 0)

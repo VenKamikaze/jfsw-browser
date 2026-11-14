@@ -51,5 +51,6 @@ void NetGoneCheck(void);
 void NetHostQuit(void);
 // After Control(): show why a network game ended, if the reason is not otherwise visible.
 void NetEndMessage(void);
+void NetPageNotice(const char *text);   // brief 05b: the page's notice (browser only)
 
 #endif

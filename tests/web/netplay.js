@@ -157,7 +157,7 @@ async function browserMachine(name, args, o) {
   await page.goto((o.old ? e.oldBase : e.base) + q);
   await L.waitState(page, o.ready || 'ready', 60000);
   const m = {
-    kind: 'browser', name, page, context, errors, started: 0,
+    kind: 'browser', name, page, context, errors, started: 0, otherBuild: !!o.old || !!process.env.WASM_DIR,
     async start() { await page.click('#start'); m.started = now(); },
     lobby: () => page.evaluate(() => ({ info: window.jfswLobby, shown: !document.getElementById('lobby').hidden, code: document.getElementById('lobbycode').textContent,
       link: document.getElementById('lobbylink').value, players: document.getElementById('lobbyplayers').textContent, state: document.getElementById('lobbystate').textContent,
@@ -195,11 +195,11 @@ function nativeMachine(name, args, o) {
   const envv = Object.assign({}, process.env);
   if (o.impair) { envv.VNET_IMPAIR = o.impair; } else { delete envv.VNET_IMPAIR; }
   const m = {
-    kind: 'native', name, wd, started: 0, errors: [],
+    kind: 'native', name, wd, started: 0, errors: [], otherBuild: !!(o.sw || process.env.NETPLAY_SW),
     async start() {
       const out = fs.openSync(outFile, 'w');
       if (o.cfg) { fs.writeFileSync(path.join(wd, 'sw.cfg'), o.cfg); }      // brief 05: e.g. the relay setting
-      m.child = spawn(path.join(L.root, 'scripts', 'run-headless.sh'), ['--workdir', wd, '--timeout', String(o.timeout || 400)].concat(o.sw || process.env.NETPLAY_SW ? ['--sw', o.sw || process.env.NETPLAY_SW] : [], ['--'], args),
+      m.child = spawn(path.join(L.root, 'scripts', 'run-headless.sh'), ['--workdir', wd, '--timeout', String(o.timeout || 400)].concat(o.sw || process.env.NETPLAY_SW ? ['--sw', o.sw || process.env.NETPLAY_SW] : [], o.grp ? ['--grp', o.grp] : [], ['--'], args),
         { env: envv, stdio: [o.stdin ? 'pipe' : 'ignore', out, out], detached: true });
       m.done = new Promise((r) => m.child.on('exit', (c, s) => { m.code = c; r(c); }));
       m.started = now();
@@ -261,6 +261,10 @@ async function cleanup(relay) {
 
 // ---- what a finished game must show ---------------------------------------------------------------
 
+// Brief 05b's lines (net.c CheckVersion): another player's game data or version, and the milder one for another build.
+const DATA_NOTE = /^Player \d+ (has different game data|runs a different version of the game) .*$/m;
+const BUILD_NOTE = /^Player \d+ runs a different build .*$/m;
+
 // All machines: exit 0, the TEST line, no desync, no version mismatch; then the dumps: at least `tics` records
 // each, and identical record for record. Returns the dumps.
 async function checkGame(ms, tics, opts) {
@@ -277,6 +281,21 @@ async function checkGame(ms, tics, opts) {
     }
     check(!/CheckVersion\(\)/.test(out), m.name + ' saw no version mismatch');
     check(m.errors.length === 0, m.name + ' had no page errors', m.errors.join('; '));
+    // brief 05b: the same data and version everywhere says nothing; nor do the same builds (one build of the page and
+    // one native build, both made from this tree: a run with another build, NETPLAY_SW, WASM_DIR or an old one, may
+    // see the build line)
+    if (!opts.dataDiffers) {
+      const note = DATA_NOTE.exec(out);
+      check(!note, m.name + ' said nothing about the others\' game data or version', note ? note[0] : '');
+      if (!ms.some((x) => x.otherBuild)) {
+        const b = BUILD_NOTE.exec(out);
+        check(!b, m.name + ' said nothing about the others\' build', b ? b[0] : '');
+        if (m.kind === 'browser') {
+          const n = await m.page.evaluate(() => window.jfswNotice);
+          check(n === null, m.name + '\'s page showed no notice', n || '');
+        }
+      }
+    }
     dumps.push(await m.readDump());
   }
   if (!opts.desyncExpected) { await compareDumps(ms, dumps, tics); }
@@ -1023,6 +1042,57 @@ SCENARIOS['level-exit'] = {
 // Mouse_Aiming key (-testaimkey, read by getinput with the real key), then every machine puts that player on a sloped floor
 // (-testslope), where PlayerAutoLook tilts the view of a player without mouse aiming. Before the fix only the player's own machine
 // knew of the toggle, so the machines' horiz split there. Co-op without monsters (nothing else moves the players).
+// Brief 05b (bugs.md L26): players with different game data are told so, on every machine and on the page, and the game
+// goes on. A browser has the page's shareware data (the page accepts only GRPs it knows); the native player has a copy of
+// it with one map changed, made here by tests/net/modgrp.py (never kept). Then the same with matching data: nothing.
+async function dataMismatchGame(kinds, modified) {
+  // modified: the index of the native machine on the modified copy, or -1 (everyone on the shareware data)
+  const relay = await startRelay();
+  try {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jfsw-05b-'));
+    const copy = path.join(dir, 'sw.grp');
+    const crc = modified >= 0 ? execSync('python3 -I ' + JSON.stringify(path.join(L.root, 'tests', 'net', 'modgrp.py')) + ' map ' + JSON.stringify(L.GRP) + ' ' + JSON.stringify(copy)).toString().trim() : '';
+    console.log('  ' + kinds.map((k, i) => k + (i === modified ? ' (one map changed, CRC ' + crc + ')' : '')).join(' + ') + ' (' + LOAD() + ')');
+    const tics = 200;
+    const ms = await room(relay, kinds, { tics, autonet: '-autonet 2,0,0,0,0,0,0,0,0,0', machine: (i) => (i === modified ? { grp: copy } : {}) });
+    for (const m of ms) { await m.waitEnd(tics / NOMINAL * 1000 * 3 + 90000 - (now() - ms[0].started)); }
+    // the maps differ (two deathmatch starts' angles), so the state hashes differ from the start: no dump comparison
+    await checkGame(ms, tics, { desyncExpected: modified >= 0, dataDiffers: modified >= 0 });
+    const outs = [];
+    for (const m of ms) { outs.push(await m.out()); }
+    const share = 'Shareware Version', other = 'unknown data, CRC ' + crc;
+    const line = (p, theirs, mine) => 'Player ' + p + ' has different game data (' + theirs + ') from yours (' + mine + '): the game will probably go out of sync.';
+    for (let i = 0; i < ms.length; i++) {
+      const want = modified < 0 ? [] : (i === modified ? ms.map((x, j) => j).filter((j) => j !== i).map((j) => line(j + 1, share, other)) : [line(modified + 1, other, share)]);
+      const got = outs[i].split('\n').filter((l) => DATA_NOTE.test(l) || BUILD_NOTE.test(l));
+      check(JSON.stringify(got.sort()) === JSON.stringify(want.slice().sort()), ms[i].name + ' said ' + (want.length ? 'that ' + want.length + ' player(s) have other data, naming them' : 'nothing about the others'), got.join(' | '));
+      if (ms[i].kind === 'browser') {
+        const n = await ms[i].page.evaluate(() => window.jfswNotice);
+        const shown = await ms[i].page.evaluate(() => !document.getElementById('notice').hidden && document.getElementById('noticetext').textContent);
+        if (want.length) {
+          check(n === want.join('\n'), ms[i].name + '\'s page was given the same lines for its notice', n || 'none');
+          check(shown === want.join('\n'), ms[i].name + '\'s page shows the notice (until it is closed)', shown || 'not shown');
+          // when it opened, Close had the focus (so Enter, Space or Escape closes it); Close closes it
+          check(await ms[i].page.evaluate(() => window.jfswNoticeFocus === true), ms[i].name + '\'s notice gave Close the focus when it opened');
+          const closed = await ms[i].page.evaluate(() => { document.getElementById('noticeclose').click(); return document.getElementById('notice').hidden; });
+          check(closed, ms[i].name + '\'s notice closes with its Close button');
+        } else {
+          check(n === null && shown === false, ms[i].name + '\'s page showed no notice', n || '');
+        }
+      }
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  } finally { await cleanup(relay); }
+}
+SCENARIOS['data-mismatch'] = {
+  what: 'players with different game data are told so, on every machine and on the page (bugs.md L26): browser host and a native joiner with one map changed, a native host with it and a browser joiner, and both on the same data (nothing said)',
+  run: async () => {
+    await dataMismatchGame(['browser', 'native'], 1);
+    await dataMismatchGame(['native', 'browser'], 0);
+    await dataMismatchGame(['browser', 'native'], -1);
+  },
+};
+
 const MA_TICS = 400, MA_AUTONET = '-autonet 2,0,0,0,0,0,0,0,0,0';
 async function mouseAimGame(kinds, who, o) {
   // who: the index of the machine (and player) that presses the key; o: { key, held, slope, when }
