@@ -1,6 +1,6 @@
 # Shadow Warrior in the browser: work briefs
 
-The goal is Shadow Warrior (JFShadowWarrior) playable in a browser (Emscripten/WASM). The game data is downloaded from a URL on startup, and online multiplayer runs over [vnet](https://github.com/VenKamikaze/vnet) `v0.4.0`. Players host or join by room code, and native desktop players can join the same rooms.
+The goal is Shadow Warrior (JFShadowWarrior) playable in a browser (Emscripten/WASM). The game data is downloaded from a URL on startup, and online multiplayer runs over [vnet](https://github.com/VenKamikaze/vnet) `v0.5.0`. Players host or join by room code, and native desktop players can join the same rooms.
 
 Each brief (`NN-*.md`) is one unit of work, sized for a single implement → review → merge cycle, and written so that a fresh session can pick it up.
 
@@ -23,7 +23,7 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 | 04c | [A tab hidden before the level's first frame (L19)](04c-hidden-first-frame.md) | jfsw-browser | 04b | done (play-test pending) |
 | 05 | [Host and join from the game](05-host-and-join.md) | jfsw-browser, jfbuild | 03, 04 | done (play-test pending) |
 | 06 | [Deployment guide](06-deployment-guide.md): [`deploy.md`](deploy.md) | jfsw-browser | 05 | done (play-test pending) |
-| 06b | [vnet 0.5.0: WebTransport at full speed for browser hosts (L31)](06b-vnet-0.5.0.md) | jfsw-browser | 06, vnet `v0.5.0` | written (next) |
+| 06b | [vnet 0.5.0: WebTransport at full speed for browser hosts (L31)](06b-vnet-0.5.0.md) | jfsw-browser | 06, vnet `v0.5.0` | done (play-test pending) |
 | 02c | [A refused pointer lock shows the fatal overlay (L24)](02c-focus-loss.md) | jfsw-browser | 02 | done (play-test pending) |
 | 05b | [Warn every player when the players' game data differs (L26)](05b-data-mismatch-warning.md) | jfsw-browser | 05 | done (play-test pending) |
 
@@ -47,7 +47,7 @@ Don't reopen these inside a brief. If one proves wrong, stop and ask the user.
 - **D1. The browser is the end goal.** The native Linux build must keep working, and native players must be able to join browser rooms.
 - **D2. No joining mid-game.** The player count is fixed when the game starts, as it is today.
 - **D3. "Join" and "Host" restart into a network game.** In the browser: reload the page with `?join=CODE` (or `?host=N`). Natively: re-launch itself with the equivalent arguments. `main` parses these exactly as it parses `-net` today. Nothing is torn down in-process.
-- **D4. The transport is vnet `v0.4.0`**, a git submodule at `ext/vnet`. Use `VNET_BACKEND_RELAY_AUTO` (WebTransport then WebSocket in the browser, the relay over UDP natively). `mmulti.h` stays unchanged: a vnet implementation sits behind it. Plain UDP (today's `-net`) stays for native builds.
+- **D4. The transport is vnet `v0.5.0`** (`v0.4.0` until brief 06b), a git submodule at `ext/vnet`. Use `VNET_BACKEND_RELAY_AUTO` (WebTransport then WebSocket in the browser, the relay over UDP natively). `mmulti.h` stays unchanged: a vnet implementation sits behind it. Plain UDP (today's `-net`) stays for native builds.
 - **D5. Relay games use master/slave mode.** The room creator gets `10.0.0.1`, which is player 0, the master; joiners fill the open slots. Peer-to-peer over the relay is out of scope.
 - **D6. The software renderer comes first.** WebGL through GLES2 is later.
 - **D7. The blocking loops stay.** The browser build uses ASYNCIFY, with a yield in the event or frame pump. No rewrite around `emscripten_set_main_loop`.
@@ -77,7 +77,7 @@ The work spans four GitHub repos:
 | `VenKamikaze/jfaudiolib` (submodule `jfaudiolib/`) | audio | from `68be97f` (pinned; the fork's `master` is newer) |
 | `VenKamikaze/jfmact` (submodule `jfmact/`) | input and config library | **none**; stays on `master` `731c0cc` (see below) |
 
-vnet is a fourth submodule at `ext/vnet`, pinned to the `v0.4.0` tag (`eb1feeb`). It is never changed from here.
+vnet is a fourth submodule at `ext/vnet`, pinned to the `v0.5.0` tag (`8572c74`; `v0.4.0`, `eb1feeb`, until brief 06b). It is never changed from here.
 
 **Rules:**
 

@@ -6,6 +6,7 @@
 //   FIREFOX=/usr/bin/firefox node tests/web/firefox.js           # another Firefox (Arch: the packaged one)
 //   FIREFOX_SABOTAGE=unhandled node tests/web/firefox.js         # the lock's promise left unhandled, as before the fix: must FAIL
 //   WASM_DIR=other node tests/web/firefox.js                     # another build (one from before the fix must FAIL)
+//   FIREFOX_ONLY=4 node tests/web/firefox.js                     # only part 4 (brief 06b: WebTransport)
 //
 // Not part of the default runs: it needs a Firefox that the other tests do not. Without one it prints "NOT RUN" and
 // exits with status 3; that is not a pass.
@@ -19,7 +20,11 @@
 // 3. A network game through a local relay: Chromium (Playwright) hosts by ?host=2, Firefox joins by ?join=CODE with
 //    persistence on; 400 tics; both end by themselves and agree on every tic (-testdump), Firefox showed no overlay on
 //    the way, and its end says "The game has ended." (not a refusal at the exit taken for an error).
-// Ports: 48400 (page), 48401 (relay UDP), 48402 (relay WebSocket).
+// 4. (brief 06b, bugs.md L31) WebTransport: Firefox hosts by ?host=3 and two Chromium pages join, all over WebTransport (a
+//    -dev-cert relay; its certificate hash and URL as the test knobs); 1200 tics; every machine agrees on every tic,
+//    Firefox reports relay-wt, its game runs at least 36 tics a second (its -testlag record), and no page dropped a
+//    WebTransport datagram (Module.vnetWT's drops, sampled during the game).
+// Ports: 48400 (page), 48401 (relay UDP), 48402 (relay WebSocket); part 4: 49702 (relay WebTransport, UDP).
 'use strict';
 const fs = require('fs');
 const os = require('os');
@@ -33,6 +38,8 @@ const CACHE = process.env.FIREFOX_CACHE || path.join(process.env.XDG_CACHE_HOME 
 const FIREFOX = process.env.FIREFOX || path.join(CACHE, 'firefox-' + FIREFOX_VERSION, 'firefox', 'firefox');
 const PUPPETEER = process.env.PUPPETEER_CORE || path.join(CACHE, 'puppeteer-core-' + PUPPETEER_VERSION, 'node_modules', 'puppeteer-core');
 const PORT_WEB = t.port(48400), PORT_UDP = t.port(48401), PORT_HTTP = t.port(48402);   // (JFSW_WEB_PORT_OFFSET, lib.js)
+const PORT_WT = PORT_WEB + 1302;        // 49702 with the default ports (brief 06b)
+const ONLY = process.env.FIREFOX_ONLY || '';
 const SABOTAGE = process.env.FIREFOX_SABOTAGE === 'unhandled';
 const MSG = 'The document is not focused.';
 const TICS = 400;
@@ -152,8 +159,8 @@ function relayBinary() {
   }
   return bin;
 }
-async function startRelay() {
-  const child = spawn(relayBinary(), ['-udp', '127.0.0.1:' + PORT_UDP, '-http', '127.0.0.1:' + PORT_HTTP, '-origins', '127.0.0.1:' + PORT_WEB, '-v'], { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+async function startRelay(extra) {
+  const child = spawn(relayBinary(), ['-udp', '127.0.0.1:' + PORT_UDP, '-http', '127.0.0.1:' + PORT_HTTP, '-origins', '127.0.0.1:' + PORT_WEB, '-v'].concat(extra || []), { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   let text = '';
   child.stdout.on('data', (d) => { text += d; }); child.stderr.on('data', (d) => { text += d; });
   const t0 = Date.now();
@@ -162,7 +169,7 @@ async function startRelay() {
     if (Date.now() - t0 > 15000) { throw new Error('the relay did not start: ' + text); }
     await sleep(100);
   }
-  return { child, stop: async () => { try { process.kill(-child.pid, 'SIGTERM'); } catch (e) { /* gone */ } await sleep(200); try { process.kill(-child.pid, 'SIGKILL'); } catch (e) { /* gone */ } } };
+  return { child, text: () => text, stop: async () => { try { process.kill(-child.pid, 'SIGTERM'); } catch (e) { /* gone */ } await sleep(200); try { process.kill(-child.pid, 'SIGKILL'); } catch (e) { /* gone */ } } };
 }
 
 async function network(puppeteer, base) {
@@ -215,6 +222,86 @@ async function network(puppeteer, base) {
   }
 }
 
+// 4. Firefox hosts two Chromium guests over WebTransport (brief 06b).
+async function wtHost(puppeteer, base) {
+  console.log('4. WebTransport: Firefox hosts a game of 3, two Chromium pages join (brief 06b, bugs.md L31)');
+  const { chromium } = require('playwright');
+  const relay = await startRelay(['-wt', '127.0.0.1:' + PORT_WT, '-dev-cert']);
+  const chrome = await chromium.launch();
+  const browser = await launchFirefox(puppeteer);
+  try {
+    const cert = (/wt_cert_sha256=(\S+)/.exec(relay.text()) || [])[1] || '';
+    const knobs = '&relay_wt=' + encodeURIComponent('https://127.0.0.1:' + PORT_WT + '/vnet') + '&relay_cert=' + cert;
+    const WTICS = 1200;
+    const args = (extra) => encodeURIComponent(['-autonet', '2,0,2,1,0,0,0,0,0,0', '-testsync', '-testquit' + WTICS, '-testdumpd.bin'].concat(extra || []).join(' '));
+    const h = await firefoxPage(browser, base + '?test=1&persist=0&host=3' + knobs + '&args=' + args(['-testlagl.bin']));
+    await h.page.click('#start');
+    try { await h.page.waitForFunction(() => window.jfswLobby && window.jfswLobby.code, { timeout: 40000, polling: 200 }); } catch (e) {
+      const d = await h.page.evaluate(() => ({ state: window.jfswState, status: document.getElementById('status').textContent, out: (window.jfswOut || []).slice(-8), err: (window.jfswErr || []).slice(-8) })).catch((x) => String(x));
+      throw new Error('Firefox never showed a room code: ' + JSON.stringify(d));
+    }
+    const code = await h.page.evaluate(() => window.jfswLobby.code);
+    const guests = [], guestErrors = [];
+    for (let i = 0; i < 2; i++) {
+      const g = await (await chrome.newContext({ viewport: { width: 700, height: 560 } })).newPage();
+      g.on('pageerror', (e) => guestErrors.push('guest ' + (i + 1) + ': ' + ((e && e.message) || e)));
+      await g.goto(base + '?test=1&persist=0&join=' + code + knobs + '&args=' + args());
+      await g.waitForFunction(() => window.jfswState === 'ready', null, { timeout: 120000 });
+      await g.click('#start');
+      await g.waitForFunction((n) => window.jfswOut && window.jfswOut.join('\n').indexOf('joined room') >= 0, null, { timeout: 40000 });
+      guests.push(g);
+      // the next joiner waits until this one is in (the place a joiner gets is the order its first ping reaches the host);
+      // after the last one the game starts at once, so there is nothing to wait for
+      if (i === 0) try { await h.page.waitForFunction((n) => (window.jfswOut || []).join('\n').indexOf('Lobby: ' + n + ' of 3 players are in') >= 0, { timeout: 40000, polling: 200 }, i + 2); } catch (e) {
+        const d = await h.page.evaluate(() => ({ lobby: window.jfswLobby, out: (window.jfswOut || []).slice(-10), err: (window.jfswErr || []).slice(-10) })).catch((x) => String(x));
+        const gd = await g.evaluate(() => ({ out: (window.jfswOut || []).slice(-6) })).catch((x) => String(x));
+        throw new Error('Firefox never saw guest ' + (i + 1) + ': host ' + JSON.stringify(d) + '; guest ' + JSON.stringify(gd));
+      }
+    }
+    const dropsOf = (p) => p.evaluate(() => { const T = window.Module && Module.vnetWT; return T ? Object.values(T.s).reduce((x, q) => x + (q.drops || 0), 0) : 0; }).catch(() => 0);
+    const drops = [0, 0, 0];
+    const t0 = Date.now();
+    const ended = (st) => st === 'ended' || st === 'error';
+    while (Date.now() - t0 < 180000) {
+      const pages = [h.page].concat(guests);
+      let all = true;
+      for (let i = 0; i < 3; i++) {
+        drops[i] = Math.max(drops[i], await dropsOf(pages[i]));
+        if (!ended(await pages[i].evaluate(() => window.jfswState).catch(() => 'gone'))) { all = false; }
+      }
+      if (all) { break; }
+      await sleep(500);
+    }
+    const out = await h.page.evaluate(() => window.jfswOut.join('\n'));
+    const tr = (/(relay-(?:ws|wt))[;)]/.exec(out) || [])[1];
+    t.check(tr === 'relay-wt', 'Firefox hosted over WebTransport (log says ' + tr + ')');
+    for (let i = 0; i < 2; i++) {
+      const o = await guests[i].evaluate(() => window.jfswOut.join('\n'));
+      const tg = (/(relay-(?:ws|wt))[;)]/.exec(o) || [])[1];
+      t.check(tg === 'relay-wt', 'Chromium guest ' + (i + 1) + ' joined over WebTransport (log says ' + tg + ')');
+    }
+    const exits = [];
+    for (const p of [h.page].concat(guests)) { exits.push(await p.evaluate(() => window.jfswExit && window.jfswExit.code).catch(() => null)); }
+    t.check(exits.every((x) => x === 0), 'all three games ended by themselves with status 0 (' + exits.join(', ') + ')');
+    const read = async (p, f) => { const b64 = await p.evaluate((n) => { const b = window.jfswTest.readFile(n); return b ? btoa(Array.from(b, (c) => String.fromCharCode(c)).join('')) : null; }, f); return b64 === null ? null : Buffer.from(b64, 'base64'); };
+    const dumps = [await read(h.page, 'd.bin'), await read(guests[0], 'd.bin'), await read(guests[1], 'd.bin')];
+    const tics = (d) => (d ? Math.floor(d.length / 17) : 0);
+    const n = Math.min(...dumps.map(tics));
+    t.check(n >= WTICS && dumps.every((d) => d.subarray(0, n * 17).equals(dumps[0].subarray(0, n * 17))), `all three played at least ${WTICS} tics and agree on every one (${dumps.map(tics).join(', ')})`);
+    const lag = await read(h.page, 'l.bin');
+    let tps = 0;
+    if (lag && lag.length >= 36 * 400) { const k = Math.floor(lag.length / 36), ran = (i) => lag.readUInt32LE(i * 36 + 12), tic = (i) => lag.readUInt32LE(i * 36); tps = (tic(k - 1) - tic(100)) / ((ran(k - 1) - ran(100)) / 1e6); }
+    t.check(tps >= 36, 'Firefox, the host, ran ' + tps.toFixed(1) + ' tics a second from tic 100 to its last (nominal 40; at least 36)');
+    t.check(drops.every((d) => d === 0), 'no page dropped a WebTransport datagram (Firefox ' + drops[0] + ', Chromium ' + drops[1] + ' and ' + drops[2] + ')');
+    t.check(h.errors.length === 0, 'Firefox: no page error', h.errors.join(' | '));
+    t.check(guestErrors.length === 0, 'the Chromium guests: no page error', guestErrors.join(' | '));
+  } finally {
+    await browser.close().catch(() => {});
+    await chrome.close().catch(() => {});
+    await relay.stop();
+  }
+}
+
 async function main() {
   if (!fs.existsSync(FIREFOX)) {
     if (!process.env.FIREFOX) { versionMismatch('Firefox', FIREFOX_VERSION, 'firefox-'); }
@@ -241,10 +328,10 @@ async function main() {
   const base = 'http://127.0.0.1:' + PORT_WEB + '/index.html';
   try {
     console.log('Firefox: ' + version + ' (' + FIREFOX + ')');
-    await single(puppeteer, base);
-    await trap(puppeteer, base, false);
-    await trap(puppeteer, base, true);
-    await network(puppeteer, base);
+    if (!ONLY || ONLY === '1') { await single(puppeteer, base); }
+    if (!ONLY || ONLY === '2') { await trap(puppeteer, base, false); await trap(puppeteer, base, true); }
+    if (!ONLY || ONLY === '3') { await network(puppeteer, base); }
+    if (!ONLY || ONLY === '4') { await wtHost(puppeteer, base); }
   } finally {
     await new Promise((r) => server.close(r));
     fs.rmSync(path.dirname(cfg), { recursive: true, force: true });

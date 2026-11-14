@@ -35,6 +35,7 @@ const L = require('./lib.js');
 // JFSW_WEB_PORT_OFFSET (F4, lib.js) moves the default base, as it moves the other browser tests' ports.
 const PORT_BASE = +(process.env.NETPLAY_PORT_BASE || L.port(48300));
 const PORT_WEB = PORT_BASE, PORT_UDP = PORT_BASE + 1, PORT_HTTP = PORT_BASE + 2, PORT_WT = PORT_BASE + 3, PORT_NONE = PORT_BASE + 92;
+const PORT_STATS = PORT_BASE + 1401;    // the relay's /stats in the wt-host scenario (brief 06b: 49701 with the default base)
 const NOMINAL = 40;                       // game tics a second (120 Hz clock, 3 clock ticks a game tic)
 const REC = 17;                           // bytes per tic in a -testdump file
 const AUTONET = '-autonet 2,0,2,1,0,0,0,0,0,0';
@@ -51,6 +52,8 @@ const now = () => Date.now();
 // ---- relay ------------------------------------------------------------------------------------------
 
 function relayBinary() {
+  // NETPLAY_RELAY=/path/to/vnet-relay (brief 06b): another relay binary (the v0.4.0 one, for the wt-host mutation)
+  if (process.env.NETPLAY_RELAY) { return path.resolve(process.env.NETPLAY_RELAY); }
   const cache = process.env.JFSW_CACHE || path.join(os.homedir(), '.cache', 'jfsw-browser');
   let rev = 'unknown';
   try { rev = execSync('git -C ' + JSON.stringify(path.join(L.root, 'ext', 'vnet')) + ' rev-parse --short HEAD').toString().trim(); } catch (e) { /* no git */ }
@@ -526,6 +529,65 @@ SCENARIOS.wt = {
   run: async () => {
     await bounded('wt', ['browser', 'browser'], { query: WT }, 'relay-wt');
     await bounded('wt-native', ['native', 'browser', 'browser'], { query: WT }, 'relay-wt');
+  },
+};
+
+// Brief 06b (bugs.md L31): a browser host with two guests over WebTransport. On vnet 0.4.0 the host's page dropped
+// datagrams (at most 16 unsettled writes) and the game ran at about 25 of 40 tics a second; 0.5.0 must run it at full speed.
+// Each game: 1200 tics, every machine agrees, every browser on relay-wt, the host's tic rate from its -testlag record
+// (tic 100 to the end) at least 36 a second, no datagram dropped by any page (Module.vnetWT's drops, sampled during the
+// game: the backend's refusals, and inbound inbox overflow or bad frames) and none by the relay (/stats: wt_rx_queue_drops,
+// wt_datagram_drops, rate_limited, ws_queue_drops). NETPLAY_RELAY, WASM_DIR and NETPLAY_SW run it on other builds.
+function relayStats() {
+  return new Promise((resolve) => {
+    require('http').get('http://127.0.0.1:' + PORT_STATS + '/stats', (res) => { let t = ''; res.on('data', (d) => { t += d; }); res.on('end', () => { try { resolve(JSON.parse(t)); } catch (e) { resolve(null); } }); })
+      .on('error', () => resolve(null));
+  });
+}
+async function wtHostGame(kinds) {
+  const relay = await startRelay(['-stats', '127.0.0.1:' + PORT_STATS]);
+  try {
+    console.log('  ' + kinds.join(' + ') + ', over WebTransport (' + LOAD() + ')');
+    const ms = await room(relay, kinds, { query: WT, lag: true });
+    const limit = TICS / NOMINAL * 1000 * 3 + 90000;
+    const drops = {};
+    let maxStats = null, maxWT = 0;
+    while (now() - ms[0].started < limit) {
+      let running = false;
+      for (const m of ms) {
+        if (m.kind === 'browser') {
+          const d = await m.page.evaluate(() => { const T = window.Module && Module.vnetWT; return T ? Object.values(T.s).reduce((x, q) => x + (q.drops || 0), 0) : 0; }).catch(() => 0);
+          drops[m.name] = Math.max(drops[m.name] || 0, d);
+        }
+        if ((await m.state()) === 'running') { running = true; }
+      }
+      const st = await relayStats();
+      if (st) { maxStats = st; maxWT = Math.max(maxWT, st.webtransports || 0); }
+      if (!running) { break; }
+      await sleep(500);
+    }
+    console.log('  the game took ' + ((now() - ms[0].started) / 1000).toFixed(1) + ' s from the start of the host to the end of the last machine (' + TICS + ' tics)');
+    await checkGame(ms, TICS);
+    for (const m of ms) { if (m.kind === 'browser') { const t = await transportOf(m); check(t === 'relay-wt', m.name + ' used relay-wt (log says ' + t + ')'); } }
+    const rows = parseLag((await ms[0].readFile('l.bin')) || Buffer.alloc(0)).filter((r) => r.ran !== 0xFFFFFFFF);
+    let tps = 0;
+    if (rows.length > 400) { const a = rows[100], b = rows[rows.length - 1]; tps = (b.tic - a.tic) / ((b.ran - a.ran) / 1e6); }
+    check(tps >= 36, 'the browser host ran ' + tps.toFixed(1) + ' tics a second from tic 100 to its last (nominal 40; at least 36)');
+    const total = Object.values(drops).reduce((x, y) => x + y, 0);
+    check(total === 0, 'no page dropped a WebTransport datagram (' + JSON.stringify(drops) + ')');
+    const st = (await relayStats()) || maxStats;
+    if (check(!!st, 'the relay answered /stats')) {
+      const bad = ['wt_rx_queue_drops', 'wt_datagram_drops', 'rate_limited', 'ws_queue_drops'].filter((k) => st[k]);
+      check(bad.length === 0, 'the relay dropped nothing (at most ' + maxWT + ' WebTransport sessions during the game; ' + ['wt_rx_queue_drops', 'wt_datagram_drops', 'rate_limited', 'ws_queue_drops'].map((k) => k + ' ' + st[k]).join(', ') + ')');
+    }
+    return tps;
+  } finally { await cleanup(relay); }
+}
+SCENARIOS['wt-host'] = {
+  what: 'a browser hosts two guests over WebTransport (bugs.md L31): three browsers, then two browsers and a native guest; 40 tics a second, nothing dropped',
+  run: async () => {
+    await wtHostGame(['browser', 'browser', 'browser']);
+    await wtHostGame(['browser', 'browser', 'native']);
   },
 };
 

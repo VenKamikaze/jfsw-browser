@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // The browser and desktop part of tests/deploy/check-deploy.sh (brief 06): plays through a deployment the script
-// set up (Apache with TLS for game.example.org, the relay behind /vnet, UDP 7777, with --wt WebTransport on UDP 443).
+// set up (Apache with TLS for game.example.org, the relay behind /vnet, UDP 7777, WebTransport on UDP 443 unless --ws).
 // Not meant to be run alone: the script passes
 //   DEPLOY_BASE       https://game.example.org/games/sw/        the deployed site (testMode: false)
 //   DEPLOY_TEST_BASE  https://game.example.org/games/sw/check-deploy-test/   the same files with testMode: true, for -testdump only
 //   DEPLOY_SPKI       base64 SHA-256 of the certificate's public key: Chromium trusts it by that hash (and, for WebTransport,
 //                     with --webtransport-developer-mode, below)
 //   DEPLOY_DESKTOP_JOIN  the guide's desktop command after ./sw, e.g. -net -relay game.example.org:7777 -room CODE --
-//   DEPLOY_TRANSPORT  relay-ws (the guide's default) or relay-wt (check-deploy.sh --wt)
+//   DEPLOY_TRANSPORT  relay-wt (the guide's default) or relay-ws (check-deploy.sh --ws, --no-tls)
 //   DEPLOY_STATS      http://127.0.0.1:8081/stats               the relay's counters
 //   DEPLOY_WORK       a directory for the native games
 // Checks:
@@ -34,7 +34,7 @@ const RELAY_UDP = (JOIN || '').split(/\s+/)[(JOIN || '').split(/\s+/).indexOf('-
 if (!BASE || !TBASE || !SPKI || !JOIN || !/ -room CODE --$/.test(' ' + JOIN.trim()) || !STATS || !WORK) { console.error('play.js: run tests/deploy/check-deploy.sh'); process.exit(125); }
 const HOSTNAME = new URL(BASE).hostname;
 const TICS = 1200, REC = 17;
-const WANT = process.env.DEPLOY_TRANSPORT || 'relay-ws';     // relay-ws for the guide's "Without TLS" (--no-tls)
+const WANT = process.env.DEPLOY_TRANSPORT || 'relay-wt';     // relay-ws for the guide's "Without TLS" (--no-tls)
 const AUTONET = ['-autonet', '2,0,2,1,0,0,0,0,0,0'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = () => Date.now();
@@ -211,20 +211,19 @@ async function dumpGame() {
     check(diff < 0, 'all three machines agree on every tic, record for record (' + n + ' tics)', 'first difference at record ' + diff);
   }
   {
-    // How fast the game ran on the host: -testlag's records (36 bytes: tic, made, ready, ran, ...; microseconds). Not a check:
-    // it depends on the machine's load, and a browser host with two guests over WebTransport runs slow (bugs.md L31: the
-    // pages drop datagrams), which this brief records and does not fix (vnet's send queue).
+    // How fast the game ran on the host: -testlag's records (36 bytes: tic, made, ready, ran, ...; microseconds). Brief 06b:
+    // a check (vnet 0.5.0 fixed bugs.md L31, where a browser host with two guests over WebTransport ran at about 25 a second).
     const lag = await a.readFile('lag.bin');
     const load = fs.readFileSync('/proc/loadavg', 'utf8').split(' ').slice(0, 3).join(' ');
-    const drops = wtDrops.A + wtDrops.B;
+    let tps = 0;
     if (lag && lag.length >= 36 * 400) {
-      const n = Math.floor(lag.length / 36), ran = (i) => lag.readUInt32LE(i * 36 + 12);
-      const tps = (n - 101) / ((ran(n - 1) - ran(100)) / 1e6);
-      const why = WANT === 'relay-wt' && drops > 0 ? ' (the browsers dropped WebTransport datagrams: bugs.md L31)' : ' (a busy machine?)';
-      console.log((tps < 36 ? 'WARNING: ' : 'note: ') + 'the host ran tics 100 to ' + (n - 1) + ' at ' + tps.toFixed(1) + ' tics a second (nominal 40; load average ' + load + ')' +
-        (tps < 36 ? ': slower than it should be' + why : ''));
+      const n = Math.floor(lag.length / 36), ran = (i) => lag.readUInt32LE(i * 36 + 12), tic = (i) => lag.readUInt32LE(i * 36);
+      tps = (tic(n - 1) - tic(100)) / ((ran(n - 1) - ran(100)) / 1e6);
     }
-    if (WANT === 'relay-wt') { console.log('note: WebTransport datagrams dropped by the browsers\' send queues (vnet): A ' + wtDrops.A + ', B ' + wtDrops.B); }
+    check(tps >= 36, 'the host ran ' + tps.toFixed(1) + ' tics a second from tic 100 to its last (nominal 40; at least 36; load average ' + load + ')');
+    if (WANT === 'relay-wt') {
+      check(wtDrops.A + wtDrops.B === 0, 'no page dropped a WebTransport datagram (A ' + wtDrops.A + ', B ' + wtDrops.B + '; Module.vnetWT\'s drops: refused sends, and inbound overflow or bad frames)');
+    }
   }
   const r = rates(await a.out());
   if (r.length) {
@@ -234,7 +233,8 @@ async function dumpGame() {
       (payload / frames).toFixed(1) + ' bytes a datagram (relay frames add 9 bytes over WebSocket and WebTransport, 25 over UDP)');
   }
   const st = await stats();
-  check(st && st.rate_limited === 0, 'the relay dropped nothing for its rate limits (rate_limited ' + (st ? st.rate_limited : '?') + ')');
+  const keys = ['rate_limited', 'ws_queue_drops', 'wt_datagram_drops', 'wt_rx_queue_drops'];
+  check(st && keys.every((k) => !st[k]), 'the relay dropped nothing (' + (st ? keys.map((k) => k + ' ' + st[k]).join(', ') : 'no stats') + ')');
   await a.stop(); await b.stop(); await c.stop();
 }
 
