@@ -13,8 +13,9 @@
 #   variant   the joiner on a copy taken for registered data, over plain UDP:
 #             both name the data, and the version differs too (13 against 14,
 #             plus the test salt);
-#   three     three players, only the second differs: players 1 and 3 name
-#             player 2, player 2 names players 1 and 3;
+#   three     three players, only the second to start differs (the joiners start
+#             together, so it is player 2 or 3: the logs say): the other two name
+#             it, it names both of them;
 #   build     same data, the joiner reports another build (-testbuildid): the
 #             milder build line on both, nothing about data.
 # And (no game) the build id has a fixed length, whatever git's abbreviation.
@@ -135,9 +136,13 @@ if run variant; then
 fi
 if run three; then
     game three relay ",," ",$t_tmp/map/sw.grp," ",,"
-    want three 1 "$(data_line 2 "$MAP" "$SHARE")"
-    want three 2 "$(data_line 1 "$SHARE" "$MAP")" "$(data_line 3 "$SHARE" "$MAP")"
-    want three 3 "$(data_line 2 "$MAP" "$SHARE")"
+    # the two joiners start together, so either can get the second place: each machine's log says its number
+    for i in 1 2 3; do n[$i]="$(sed -n 's/^Lobby: the game starts with 3 players; you are player \([0-9]\)\.$/\1/p' "$d/$i/sw.log" | head -1)"; done
+    t_check "three: the machines are players ${n[1]:-?}, ${n[2]:-?} and ${n[3]:-?}" test "$(printf '%s\n' "${n[@]}" | sort | tr -d '\n')" = 123
+    odd="${n[2]:-2}"
+    want three 1 "$(data_line "$odd" "$MAP" "$SHARE")"
+    want three 2 "$(data_line "${n[1]:-1}" "$SHARE" "$MAP")" "$(data_line "${n[3]:-3}" "$SHARE" "$MAP")"
+    want three 3 "$(data_line "$odd" "$MAP" "$SHARE")"
 fi
 if run build; then
     game build relay ",," ",,-testbuildidtest-build-x"
