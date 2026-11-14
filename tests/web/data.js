@@ -16,7 +16,7 @@ const { chromium } = require('playwright');
 const t = require('./lib.js');
 const { serve, route } = require('./dataserver.js');
 
-const PORT = 48201, PORT2 = 48202;
+const PORT = t.port(48201), PORT2 = t.port(48202), PORT_NONE = t.port(48299);
 const SABOTAGE = process.env.DATA_SABOTAGE || '';
 const SIZE = 26056769;
 const GOOD = fs.readFileSync(t.GRP);
@@ -286,7 +286,7 @@ async function main() {
       await waitLoaded(r.page);
       s = await statusText(r.page);
       t.check(server2.hits('/swshare.grp') >= 1, 'cross-origin: the request did reach the other server (the browser blocked reading it)');
-      t.check(/Access-Control-Allow-Origin/.test(s) && /127\.0\.0\.1:48202/.test(s) && /network failure|down or unreachable/.test(s), 'cross-origin without CORS: a message with the CORS hint, naming both origins and the network cause', s);
+      t.check(/Access-Control-Allow-Origin/.test(s) && new RegExp('127\\.0\\.0\\.1:' + PORT2).test(s) && /network failure|down or unreachable/.test(s), 'cross-origin without CORS: a message with the CORS hint, naming both origins and the network cause', s);
       await notStarted(r.page, 'cross-origin');
       t.check(await visible(r.page, '#picklabel') && await visible(r.page, '#retry'), 'cross-origin: the file picker and "Try again" are offered');
       await r.context.close();
@@ -299,10 +299,10 @@ async function main() {
       server2.routes['/swshare.grp'] = route({ body: GOOD });
 
       // Unreachable host: nothing listens there.
-      r = await t.open(env, '?test=1&persist=0&data=' + encodeURIComponent('http://127.0.0.1:48299/swshare.grp'));
+      r = await t.open(env, '?test=1&persist=0&data=' + encodeURIComponent('http://127.0.0.1:' + PORT_NONE + '/swshare.grp'));
       await waitLoaded(r.page);
       s = await statusText(r.page);
-      t.check(/could not be downloaded/.test(s) && /48299/.test(s), 'nothing listening: a clear message naming the URL', s);
+      t.check(/could not be downloaded/.test(s) && new RegExp(String(PORT_NONE)).test(s), 'nothing listening: a clear message naming the URL', s);
       await r.context.close();
     }
 

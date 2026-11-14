@@ -28,7 +28,7 @@ const zlib = require('zlib');
 const { spawnSync } = require('child_process');
 const t = require('./lib.js');
 
-const PORT = 48102;
+const PORT = t.port(48102);
 const WARP = +(process.env.DET_WARP || 1);
 const DATA = path.join(t.root, 'tests', 'data');
 const SW = path.join(t.root, 'sw');

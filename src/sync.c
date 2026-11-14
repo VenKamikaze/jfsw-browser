@@ -32,6 +32,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "net.h"
 #include "mmulti_vnet.h"
 #include "sector.h"
+#include "player.h"
 #include "osd.h"
 #ifndef _WIN32
 #include <time.h>
@@ -610,9 +611,12 @@ void TestNudgeArg(int tic)
 // (the game goes on, and with different sync byte counts the packets are
 // misread): the tests fail on it. -demosync* in a network game also sets
 // NumSyncBytes = 8 and so also changes the version that is sent.
+static int TestSlopeTic, TestSlopeP, TestSlopeLevel = 1;    // -testslope (F4, below)
+
 int TestVersionSalt(void)
     {
-    return (NumSyncBytes - 1) * 1000003 + TestQuitTics * 37 + TestExitTic * 101 + TestExitLevel * 7 + TestSwitchTic * 13;
+    return (NumSyncBytes - 1) * 1000003 + TestQuitTics * 37 + TestExitTic * 101 + TestExitLevel * 7 + TestSwitchTic * 13
+        + (TestSlopeTic ? TestSlopeTic * 17 + TestSlopeP * 3 + TestSlopeLevel * 5 : 0);
     }
 
 // -testdump<name>: every machine writes its own record of every game tic to <name>, so that a test
@@ -1470,6 +1474,122 @@ static void TestStall(void)
     sampletimer();
     }
 
+// -testaimkey<T>[,<N>[,<L>]] (test-only, F4): this machine's Mouse_Aiming key (U) is down while it
+// makes the inputs of game tics T to T+N-1 (N is 1 if left out) of the L-th level it plays (1 if left
+// out), as if the player pressed it there: getinput() reads it with the real key. In the default mode
+// one press toggles mouse aiming; with -testaimheld (held mode, gs.MouseAimingType 1, which the game
+// then also saves in this machine's sw.cfg) aiming is on while the key is down. The state goes to
+// the other machines with the inputs, as the key's does, so every machine plays the same game. Each
+// press logs "TEST: Mouse_Aiming key ... at tic T: mouse aiming on|off". Inert without the argument.
+static int TestAimKeyTic, TestAimKeyLen = 1, TestAimKeyLevel = 1;
+
+void TestAimKeyArg(const char *arg)
+    {
+    sscanf(arg, "%d,%d,%d", &TestAimKeyTic, &TestAimKeyLen, &TestAimKeyLevel);
+    if (TestAimKeyLen < 1) TestAimKeyLen = 1;
+    }
+
+// -testaimon (test-only, F4): this machine starts with mouse aiming on (gs.MouseAimingOn, which the game
+// then also saves in its sw.cfg). -testoldaim: this machine handles mouse aiming as a build without
+// F4's fix does: getinput() sets the player's flag on this machine only, the input carries no
+// SK_MOUSE_AIM, the options packet has no MouseAimInInput byte, and no player's flag is taken from
+// the input here; the stand-in for an older build in a game with newer ones.
+int TestOldAim;
+
+void TestAimOnArg(void)
+    {
+    gs.MouseAimingOn = TRUE;
+    }
+
+void TestAimHeldArg(void)
+    {
+    gs.MouseAimingType = 1;
+    }
+
+static int TestAimKeyAt(int tic)
+    {
+    return TestAimKeyTic > 0 && TestStateLevels == TestAimKeyLevel && tic >= TestAimKeyTic && tic < TestAimKeyTic + TestAimKeyLen;
+    }
+
+// the input being made is fifo index movefifoend, which game tic movefifoend + 1 of this level runs
+int TestAimKeyDown(void)
+    {
+    return TestAimKeyAt(Player[myconnectindex].movefifoend + 1);
+    }
+
+int TestAimKeyPressed(void)
+    {
+    int tic = Player[myconnectindex].movefifoend + 1;
+    return TestAimKeyAt(tic) && !TestAimKeyAt(tic - 1);
+    }
+
+static void TestAimKeyLog(void)
+    {
+    int tic = Player[myconnectindex].movefifoend + 1;
+    if (TestAimKeyAt(tic) || (TestAimKeyAt(tic - 1) && gs.MouseAimingType == 1))
+        buildprintf("TEST: Mouse_Aiming key %s at tic %d of level %d: mouse aiming %s\n",
+            TestAimKeyAt(tic) ? (TestAimKeyAt(tic - 1) ? "held" : "pressed") : "released", tic, TestStateLevels,
+            gs.MouseAimingOn ? "on" : "off");
+    }
+
+// -testslope<T>,<P>[,<L>] (test-only, F4; every machine): at the start of game tic T of the L-th level
+// played (1 if left out) player P is put, standing still, in the middle of a sloped sector (the one
+// with the most walls among the plain ones whose middle is inside them), facing along the slope
+// (at right angles to the sector's first wall, the way a Build slope runs), where PlayerAutoLook()
+// tilts the view of a player without mouse aiming, on any level. It changes the simulation, so it is in the
+// version salt. Logs "TEST: player P put on sloped sector S ...".
+void TestSlopeArg(const char *arg)
+    {
+    sscanf(arg, "%d,%d,%d", &TestSlopeTic, &TestSlopeP, &TestSlopeLevel);
+    }
+
+static void TestSlope(void)
+    {
+    extern unsigned int MoveThingsCount;
+    int sn, best = -1, bestn = 0, w, n, cx = 0, cy = 0;
+    PLAYERp pp = Player + TestSlopeP;
+    SPRITEp sp;
+
+    for (sn = 0; sn < numsectors; sn++)
+        {
+        SECTORp s = &sector[sn];
+        int ax = 0, ay = 0;
+
+        if (!TEST(s->floorstat, FLOOR_STAT_SLOPE) || TEST(s->floorstat, FLOOR_STAT_PLAX) ||
+            labs(s->floorheinum) < 256 || labs(s->floorheinum) > 3000 ||
+            s->extra || s->lotag || s->hitag || s->ceilingz > s->floorz - Z(80) || s->wallnum <= bestn)
+            continue;
+        for (w = s->wallptr, n = 0; n < s->wallnum; n++, w++)
+            {
+            ax += wall[w].x / s->wallnum;
+            ay += wall[w].y / s->wallnum;
+            }
+        if (inside(ax, ay, sn) == 1)
+            {
+            best = sn; bestn = s->wallnum; cx = ax; cy = ay;
+            }
+        }
+    if (best < 0 || TestSlopeP < 0 || TestSlopeP >= MAX_SW_PLAYERS)
+        {
+        buildprintf("TEST: no sloped sector for player %d at tic %u\n", TestSlopeP, MoveThingsCount);
+        return;
+        }
+
+    pp->posx = pp->oposx = cx;
+    pp->posy = pp->oposy = cy;
+    pp->posz = pp->oposz = getflorzofslope(best, cx, cy) - PLAYER_HEIGHT;
+    pp->cursectnum = pp->lastcursectnum = best;
+    pp->xvect = pp->yvect = pp->oxvect = pp->oyvect = 0;
+    w = sector[best].wallptr;
+    pp->pang = pp->oang = NORM_ANGLE(getangle(wall[wall[w].point2].x - wall[w].x, wall[wall[w].point2].y - wall[w].y) + (sector[best].floorheinum > 0 ? -512 : 512));
+    sp = &sprite[pp->PlayerSprite];
+    sp->x = cx; sp->y = cy; sp->z = pp->posz + PLAYER_HEIGHT;
+    sp->ang = pp->pang;
+    changespritesect(pp->PlayerSprite, best);
+    buildprintf("TEST: player %d put on sloped sector %d (heinum %d), facing %d, at tic %u of level %d\n",
+        TestSlopeP, best, sector[best].floorheinum, pp->pang, MoveThingsCount, TestStateLevels);
+    }
+
 // -testfire[<N>] (test-only, F3): from game tic N of the first level on (from its start without N)
 // and in every later level, this machine's own inputs select the shurikens and hold the fire key:
 // its player throws them as fast as the game lets it, about one every 8 tics, until they run
@@ -1486,6 +1606,7 @@ void TestFireArg(int tic)
 
 void TestInputHook(SW_PACKET *loc)
     {
+    TestAimKeyLog();
     // the input being made is fifo index movefifoend, which game tic movefifoend + 1 of this level runs
     if (!TestFireOn || (TestStateLevels <= 1 && Player[myconnectindex].movefifoend + 1 < TestFireFrom))
         return;
@@ -1528,6 +1649,9 @@ void TestTicHook(void)
         TestSwitchDone = 1;
         TestSwitch();
         }
+
+    if (TestSlopeTic > 0 && TestStateLevels == TestSlopeLevel && (int)MoveThingsCount == TestSlopeTic)
+        TestSlope();
 
     if (TestOsdTic > 0 && !TestOsdDone && (int)MoveThingsCount == TestOsdTic)
         {

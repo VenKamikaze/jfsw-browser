@@ -9,7 +9,7 @@
 'use strict';
 const t = require('./lib.js');
 
-const PORT = 48103;
+const PORT = t.port(48103);
 const RELOAD_AFTER_MS = +(process.env.RELOAD_AFTER_MS || 250); const SAVE_TRIES = 3;  // how soon after a save reached its full size the page is reloaded (without quitting)
 const SETTLE_MS = 1500;        // how long after leaving the menus the page is reloaded in the settings test
 

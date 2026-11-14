@@ -8,6 +8,10 @@ const { serve } = require('./server.js');
 const root = path.resolve(__dirname, '..', '..');
 const BUILD = process.env.WASM_DIR ? path.resolve(process.env.WASM_DIR) : path.join(root, 'build-wasm');
 const GRP = path.join(root, 'testdata', 'swshare.grp');
+// JFSW_WEB_PORT_OFFSET=<n>: every port the browser tests use is moved up by n (default 0), so that two
+// checkouts can run their tests on one machine at the same time (F4).
+const PORT_OFFSET = +(process.env.JFSW_WEB_PORT_OFFSET || 0);
+function port(n) { return n + PORT_OFFSET; }
 
 let checks = 0, failures = 0;
 function check(ok, what, detail) {
@@ -192,4 +196,4 @@ async function runGame(env, opts) {
   return Object.assign(result, { state, errors, files, seconds, t0 });
 }
 
-module.exports = { changedPixels, pixelDiff, brightPixels, SLOT1, tap, quitGame, runGame, warpScript, root, BUILD, GRP, check, summary, start, stop, open, waitState, canvasStats, analysePng, notBlank, MIN_COLORS, pct };
+module.exports = { port, changedPixels, pixelDiff, brightPixels, SLOT1, tap, quitGame, runGame, warpScript, root, BUILD, GRP, check, summary, start, stop, open, waitState, canvasStats, analysePng, notBlank, MIN_COLORS, pct };

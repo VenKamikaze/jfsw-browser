@@ -16,7 +16,7 @@
 'use strict';
 const t = require('./lib.js');
 
-const PORT = 48101;
+const PORT = t.port(48101);
 const SABOTAGE = process.env.SMOKE_SABOTAGE === 'blank';
 const SABOTAGE_NOESC = process.env.SMOKE_SABOTAGE === 'noesc';   // release the pointer the way the game does: no Escape reaches it, that check must FAIL
 const SABOTAGE_NOKEY = process.env.SMOKE_SABOTAGE === 'nokey';   // do not press the key: the key check must FAIL

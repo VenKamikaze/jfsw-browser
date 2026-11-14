@@ -963,6 +963,9 @@ InitGame(VOID)
 
     CommPlayers = numplayers;
     OrigCommPlayers = CommPlayers;
+    // nobody's options packet has said yet that they send SK_MOUSE_AIM
+    memset(MouseAimInInput, 0, sizeof(MouseAimInInput));
+
     if (numplayers > 1)
         {
         CommEnabled = TRUE;
@@ -3874,6 +3877,31 @@ int app_main(int argc, char const * const argv[])
             TestStallArg(arg+9);    // test-only: this machine stops for a while at tic T of the first level
             }
         else
+        if (Bstrncasecmp(arg, "testaimkey", 10) == 0)
+            {
+            TestAimKeyArg(arg+10);      // test-only: this machine's Mouse_Aiming key is down at tics T..T+N-1
+            }
+        else
+        if (Bstrncasecmp(arg, "testaimon", 9) == 0)
+            {
+            TestAimOnArg();             // test-only: mouse aiming on from the start
+            }
+        else
+        if (Bstrncasecmp(arg, "testoldaim", 10) == 0)
+            {
+            TestOldAim = 1;             // test-only: mouse aiming as a build without F4's fix
+            }
+        else
+        if (Bstrncasecmp(arg, "testaimheld", 11) == 0)
+            {
+            TestAimHeldArg();           // test-only: mouse aiming in held mode on this machine
+            }
+        else
+        if (Bstrncasecmp(arg, "testslope", 9) == 0)
+            {
+            TestSlopeArg(arg+9);        // test-only: every machine puts player P on a sloped floor at tic T
+            }
+        else
         if (Bstrncasecmp(arg, "testfire", 8) == 0)
             {
             TestFireArg(atoi(arg+8));   // test-only: this machine's player throws shurikens from tic N on
@@ -5226,6 +5254,7 @@ getinput(SW_PACKET *loc)
     int32 momx, momy;
     int aimvel;
     int mouseaxis;
+    BOOL aiming;
 
     extern BOOL MenuButtonAutoRun;
     extern BOOL MenuButtonAutoAim;
@@ -5242,19 +5271,26 @@ getinput(SW_PACKET *loc)
     // MAKE SURE THIS WILL GET SET
     SET_LOC_KEY(loc->bits, SK_QUIT_GAME, MultiPlayQuitFlag);
 
+    // Mouse aiming. PlayerAutoLook() reads PF_MOUSE_AIMING_ON, so in a network game
+    // every machine must change a player's flag at the same tic: here only this
+    // machine's own state (gs.MouseAimingOn) changes, it goes out with the input
+    // (SK_MOUSE_AIM) and DoPlayerMouseAimSync() sets the flag in the tic that
+    // input is played. Single player sets the flag here, as it always did.
+    aiming = (CommEnabled && !TestOldAim) ? gs.MouseAimingOn : !!TEST(pp->Flags, PF_MOUSE_AIMING_ON);    // (TestOldAim: test-only, sync.c)
+
     if (gs.MouseAimingType == 1) // while held
         {
-        if (BUTTON(gamefunc_Mouse_Aiming))
+        if (BUTTON(gamefunc_Mouse_Aiming) || TestAimKeyDown())     // (test-only: -testaimkey, sync.c)
             {
-            SET(pp->Flags, PF_MOUSE_AIMING_ON);
+            aiming = TRUE;
             gs.MouseAimingOn = TRUE;
             }
         else
             {
-            if (TEST(pp->Flags, PF_MOUSE_AIMING_ON))
+            if (aiming)
                 {
                 SET_LOC_KEY(loc->bits, SK_LOOK_UP, TRUE);
-                RESET(pp->Flags, PF_MOUSE_AIMING_ON);
+                aiming = FALSE;
                 gs.MouseAimingOn = FALSE;
                 }
             }
@@ -5262,11 +5298,11 @@ getinput(SW_PACKET *loc)
     else
     if (gs.MouseAimingType == 0) // togglable button
         {
-        if (BUTTON(gamefunc_Mouse_Aiming) && !BUTTONHELD(gamefunc_Mouse_Aiming))
+        if ((BUTTON(gamefunc_Mouse_Aiming) && !BUTTONHELD(gamefunc_Mouse_Aiming)) || TestAimKeyPressed())   // (test-only: -testaimkey)
             {
-            FLIP(pp->Flags, PF_MOUSE_AIMING_ON);
+            aiming = !aiming;
             gs.MouseAimingOn = !gs.MouseAimingOn;
-            if (!TEST(pp->Flags, PF_MOUSE_AIMING_ON))
+            if (!aiming)
                 {
                 SET_LOC_KEY(loc->bits, SK_LOOK_UP, TRUE);
                 PutStringInfo(pp, "Mouse Aiming Off");
@@ -5278,7 +5314,14 @@ getinput(SW_PACKET *loc)
             }
         }
 
-    if (TEST(pp->Flags, PF_MOUSE_AIMING_ON))
+    if (CommEnabled && !TestOldAim)
+        SET_LOC_KEY(loc->bits, SK_MOUSE_AIM, aiming);
+    else if (aiming)
+        SET(pp->Flags, PF_MOUSE_AIMING_ON);
+    else
+        RESET(pp->Flags, PF_MOUSE_AIMING_ON);
+
+    if (aiming)
         {
         mouseaxis = analog_lookingupanddown;
         }

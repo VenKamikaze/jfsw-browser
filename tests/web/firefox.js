@@ -32,7 +32,7 @@ const FIREFOX_VERSION = '160.0', PUPPETEER_VERSION = '25.17.0';   // as scripts/
 const CACHE = process.env.FIREFOX_CACHE || path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'jfsw-browser');
 const FIREFOX = process.env.FIREFOX || path.join(CACHE, 'firefox-' + FIREFOX_VERSION, 'firefox', 'firefox');
 const PUPPETEER = process.env.PUPPETEER_CORE || path.join(CACHE, 'puppeteer-core-' + PUPPETEER_VERSION, 'node_modules', 'puppeteer-core');
-const PORT_WEB = 48400, PORT_UDP = 48401, PORT_HTTP = 48402;
+const PORT_WEB = t.port(48400), PORT_UDP = t.port(48401), PORT_HTTP = t.port(48402);   // (JFSW_WEB_PORT_OFFSET, lib.js)
 const SABOTAGE = process.env.FIREFOX_SABOTAGE === 'unhandled';
 const MSG = 'The document is not focused.';
 const TICS = 400;

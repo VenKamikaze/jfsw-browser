@@ -26,7 +26,7 @@ const { chromium } = require('playwright');
 const t = require('./lib.js');
 const { serve } = require('./server.js');
 
-const PORT = 48104;
+const PORT = t.port(48104);
 const SABOTAGE = process.env.FOCUS_SABOTAGE === 'unhandled';
 const VIEW = { x: 20, y: 10, width: 960, height: 540 };   // the 3D view above the status bar (viewport 1000x800, as smoke.js)
 const MSG = 'The document is not focused.';
