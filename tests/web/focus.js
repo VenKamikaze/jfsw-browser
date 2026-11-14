@@ -18,6 +18,12 @@
 // 2. A real failure is still fatal: a wasm trap (an out-of-bounds access in free()) and an error thrown by the
 //    game's own scripts, both inside the game's frame (from Module.jfswShowframes, which sdlayer2.c updates for every
 //    picture, in sw.js), show the overlay with the message as one sentence; the trap also with persistence on.
+// 3. The page's notice (brief 05b: another player's game data or build differs; the test opens it with
+//    Module.jfswNotice in a single player game) and the keyboard, with real key presses and the pointer locked: it
+//    does not take the focus from the game, the picture stays in the window, a key held while the focus moves into
+//    it is released for the game, keys on Close are the page's, Escape on Close closes it and does not open the
+//    game's menu (no Escape keydown reaches the game, real or sent by the page for the lost lock; keyups always do), Tab from the page reaches
+//    Close, Enter and Space on Close close it, and with nothing focused it gives Close the focus.
 // Port 48104. The full Chromium build in headless mode, not the headless shell (see startEnv()).
 'use strict';
 const fs = require('fs');
@@ -146,6 +152,77 @@ async function refused(env) {
   await r.context.close();
 }
 
+async function notice(env) {
+  console.log('3. the notice (brief 05b) and the keyboard');
+  const r = await openPage(env, '?test=1&persist=0&args=' + encodeURIComponent('-level3 -s1'));
+  const { page } = r;
+  t.check((await t.waitState(page, 'ready')) === 'ready', 'the page is ready');
+  await page.click('#start');
+  await page.waitForTimeout(5000);
+  let s = await lockByClicking(page);
+  t.check(s.locked && s.state === 'running', 'the game runs and a click locks the pointer');
+  // what reaches the game: SDL's handlers are on the window too, after the page's own capturing ones
+  await page.evaluate(() => { window.__keys = []; ['keydown', 'keyup'].forEach((ty) => window.addEventListener(ty, (e) => window.__keys.push(ty + ' ' + e.code))); });
+  const keys = () => page.evaluate(() => window.__keys.splice(0));
+  const st = () => page.evaluate(() => {
+    const c = document.getElementById('canvas').getBoundingClientRect(), n = document.getElementById('notice').getBoundingClientRect();
+    const a = document.activeElement;
+    return { open: !document.getElementById('notice').hidden, took: window.jfswNoticeFocus, active: a ? (a.id || a.tagName) : '',
+      inView: c.top >= 0 && c.left >= 0 && c.right <= innerWidth && c.bottom <= innerHeight && n.bottom <= innerHeight,
+      rect: Math.round(c.top) + '..' + Math.round(c.bottom) + ' and notice to ' + Math.round(n.bottom) + ' of ' + innerHeight,
+      locked: !!document.pointerLockElement };
+  });
+  // a held key while the notice opens
+  await page.keyboard.down('KeyW');
+  await page.evaluate(() => Module.jfswNotice('Player 2 has different game data (test) from yours (test): the game will probably go out of sync.'));
+  await page.waitForTimeout(600);      // fit() runs at once and every 500 ms
+  s = await st();
+  t.check(s.open && s.took === false && s.active === 'canvas', 'with the game playing, the notice opens and leaves the focus with the game (' + s.active + ')');
+  t.check(s.inView, 'the whole picture and the notice are in the window (' + s.rect + ')');
+  // the worst case: the focus moves into the notice while the key is down; its keyup still reaches the game
+  await page.evaluate(() => document.getElementById('noticeclose').focus());
+  await page.keyboard.up('KeyW');
+  let k = await keys();
+  t.check(k.includes('keyup KeyW'), 'a key held while the focus moved into the notice is released for the game', k.join(', '));
+  await page.keyboard.press('KeyQ');
+  k = await keys();
+  t.check(!k.includes('keydown KeyQ'), 'with the focus on Close, a key is the page\'s, not the game\'s', k.join(', '));
+  // Escape on Close with the pointer locked: the notice closes; no Escape reaches the game, neither the key nor the one
+  // the page sends the game for a lost lock (02c), so its menu does not open
+  s = await st();
+  const lockedBefore = s.locked;
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(1000);
+  k = await keys();
+  s = await st();
+  // (its keyup does go on, as every keyup: alone it presses nothing)
+  t.check(lockedBefore && !s.open && !k.includes('keydown Escape'), 'Escape on Close (pointer locked) closes the notice and no Escape keydown reaches the game, the key\'s or one the page sends for the lost lock (keys: ' + (k.join(', ') || 'none') + ')');
+  t.check(s.active === 'canvas', 'and the game has the focus again (' + s.active + ')');
+  // Tab from the page (not the game) reaches Close; Enter on Close closes it
+  await page.evaluate(() => Module.jfswNotice('Player 2 runs a different build (test) from yours (test): if the game logic differs, the game may go out of sync.'));
+  await page.evaluate(() => document.activeElement.blur());
+  await page.keyboard.press('Tab');
+  s = await st();
+  k = await keys();
+  t.check(s.open && s.active === 'noticeclose' && !k.includes('keydown Tab'), 'with the page focused, Tab reaches Close and not the game (' + s.active + ')');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(300);
+  s = await st(); k = await keys();
+  t.check(!s.open && !k.includes('keydown Enter'), 'Enter on Close closes the notice, and the game does not see the Enter');
+  // with nothing focused, the notice gives Close the focus; Space closes it
+  await page.evaluate(() => document.activeElement.blur());
+  await page.evaluate(() => Module.jfswNotice('Player 3 has different game data (test) from yours (test): the game will probably go out of sync.'));
+  s = await st();
+  t.check(s.open && s.took === true && s.active === 'noticeclose', 'with nothing focused, the notice gives Close the focus (' + s.active + ')');
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(300);
+  s = await st(); k = await keys();
+  t.check(!s.open && !k.includes('keydown Space'), 'Space on Close closes it, and the game does not see the Space');
+  s = await pageState(page);
+  t.check(s.state === 'running' && !s.overlay && r.errors.length === 0, `the game is still running, no page error (state ${s.state})`, r.errors.join(' | '));
+  await r.context.close();
+}
+
 // A failure inside the game's frame: sdlayer2.c reads and increments Module.jfswShowframes for every picture it presents
 // (an EM_JS function in sw.js). `how` is 'trap' (wasm: free() of an address beyond memory) or 'throw' (an Error from the script).
 // `persist`: with the game's folder kept in IndexedDB, as on every real page (the exit's save then delays "The game has
@@ -201,6 +278,7 @@ async function main() {
     await fatal(env, 'trap', false);
     await fatal(env, 'throw', false);
     await fatal(env, 'trap', true);
+    await notice(env);
   } finally {
     await t.stop(env);
   }

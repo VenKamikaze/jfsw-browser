@@ -26,6 +26,8 @@ window.JFSW_CONFIG = { data: { url: 'swshare.grp', size: 26056769, crc32: '08a7f
 
 `?data=<url>` on the page address overrides `url` (the declared `size` and `crc32` are then ignored; the file must still be a known GRP).
 
+**Players with different data** (`?data=`, "Use your own copy...", or another site's page) can still join one network game, but it will probably go out of sync: shareware and registered data differ in the maps, the items and even the number of deathmatch start spots the game picks from. Since brief 05b every player is told at each level start, on the game's screen and in a notice on the page ("Player 2 has different game data (Registered Version) from yours (Shareware Version): the game will probably go out of sync."); the game is not refused. Give every player the same file (the invite link keeps `?data=` for that).
+
 The same file has two more fields (brief 05): `relay`, the vnet relay's WebSocket URL for network games (empty: none; see `building.md` §6.6), and `testMode`, which **must stay `false` on a public site**: with `true`, a link with `?test=1` could pass the game test arguments, among them another relay.
 
 `scripts/build-wasm.sh` copies `web/config.js` into `build-wasm/` whenever `web/config.js` is newer than that copy (after a `git pull` that changes it, for example), so an edit in `build-wasm/` can be lost. Keep your own `config.js` outside the build and deploy that one ([`deploy.md`](deploy.md) §2).

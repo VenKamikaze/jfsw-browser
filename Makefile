@@ -281,11 +281,16 @@ clean::
 veryclean::
 	$(MAKE) -C $(ENGINEROOT) $@
 
+# Brief 05b: what the game code is made from, for a network game's "different build" line
+# (scripts/build-id.sh): commits that change only the docs or the tests' scripts keep the same id.
+BUILD_ID = $(shell scripts/build-id.sh 2>/dev/null)
+
 .PHONY: $(SRC)/version-auto.c
 $(SRC)/version-auto.c:
 	printf "const char *game_version = \"%s\";\n" "$(shell git describe --always || echo git error)" > $@
 	echo "const char *game_date = __DATE__;" >> $@
 	echo "const char *game_time = __TIME__;" >> $@
+	printf "const char *game_build_id = \"%s\";\n" "$(BUILD_ID)" >> $@
 
 # NETWORK TESTS (brief 01; see doco/browser/building.md). The top-level rule
 # above never re-makes an existing jfbuild/libengine.a, so these bring the
@@ -307,7 +312,7 @@ test-mmulti: engine-current
 
 # three game processes (relay and plain UDP), plain UDP against the old build, errors,
 # (F3) a level exit while the host holds the inputs of later tics, (F4) mouse aiming
-# toggled mid-level and then a slope, and (brief 05) the
+# toggled mid-level and then a slope, (05b) players with different game data, and (brief 05) the
 # GTK startup window's online host and join under xvfb-run (skipped without it)
 test-net: engine-current
 	for i in $$(seq $(GAME_RUNS)); do tests/net/test-three-games.sh --relay || exit 1; done
@@ -316,6 +321,7 @@ test-net: engine-current
 	tests/net/test-errors.sh
 	tests/net/test-level-exit.sh --runs $(GAME_RUNS)
 	tests/net/test-mouse-aim.sh --runs $(GAME_RUNS)
+	tests/net/test-data-mismatch.sh
 	tests/net/test-startwin.sh
 	tests/net/test-rejoin.sh
 

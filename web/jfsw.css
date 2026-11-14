@@ -104,4 +104,12 @@ button:focus-visible { outline: 3px solid var(--fg); outline-offset: 3px; }
 #lobbylink:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
 #lobbyplayers { font-weight: 600; }
 #lobby .buttons { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 6px; }
+/* Brief 05b: a warning about the other players' game data or build, beside the game (it does not cover it),
+   until the player closes it. */
+#notice { width: min(46em, 100%); padding: 10px 14px; border: 1px solid var(--bad); border-radius: 6px; line-height: 1.45; }
+#notice[hidden] { display: none; }
+#notice .box { display: flex; flex-direction: column; gap: 6px; text-align: left; }
+#notice h2 { margin: 0; font-size: .95rem; letter-spacing: .08em; text-transform: uppercase; color: var(--bad); }
+#notice p { margin: 0; white-space: pre-line; }
+#notice .buttons { display: flex; justify-content: flex-end; }
 @media (max-width: 520px) { body { padding: 0 8px; } #lobbycode { font-size: 1.7rem; } }

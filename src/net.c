@@ -39,6 +39,9 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "weapon.h"
 #include "text.h"
 #include "menus.h"
+#include "grpscan.h"
+#include "version.h"
+#include "mmulti_vnet.h"
 
 
 /*
@@ -485,43 +488,220 @@ SendVersion(int version)
     netbroadcastpacket((BYTEp)(&p), sizeof(p));
     }
 
+// ---- Brief 05b: the game data and the build every player has ----------------------------------
+// Each machine tells the others at every level start, right after its version; CheckVersion()
+// compares. Kept per player for the whole session (a player's data does not change): a packet can
+// arrive before this machine reaches the level start, so nothing is cleared there.
+typedef struct
+    {
+    BOOL known;
+    PACKET_DATA_ID id;
+    } NET_DATA_ID;
+static PACKET_DATA_ID NetDataMine;
+static NET_DATA_ID NetDataOf[MAX_SW_PLAYERS_REG];
+
+static const char *basename_of(const char *p)
+    {
+    const char *s = strrchr(p, '/'), *b = strrchr(p, '\\');
+    if (b > s) s = b;
+    return s ? s + 1 : p;
+    }
+
+// From app_main, once the GRP is chosen (before FreeGroups()): grpfile is the file the game uses and
+// gamegrp what grpscan made of it (NULL: not a known GRP).
+VOID
+NetDataIdentity(const char *grpfile, struct grpfile const *gamegrp)
+    {
+    struct grpfile const *fg, *main = NULL, *addon = NULL;
+
+    memset(&NetDataMine, 0, sizeof(NetDataMine));
+    NetDataMine.PacketType = PACKET_TYPE_DATA_ID;
+    NetDataMine.Layout = 1;
+
+    if (gamegrp && (gamegrp->game & GRPFILE_ADDON))
+        {
+        addon = gamegrp;
+        for (fg = GroupsFound(); fg; fg = fg->next)
+            if (fg->game == GRPFILE_GAME_REG && fg->ref) { main = fg; break; }
+        }
+    else if (gamegrp)
+        main = gamegrp;
+    else
+        {
+        for (fg = GroupsFound(); fg; fg = fg->next)
+            if (!Bstrcasecmp(basename_of(fg->name), basename_of(grpfile))) { main = fg; break; }
+        }
+
+    if (main)
+        {
+        NetDataMine.GrpCrc = main->crcval;
+        NetDataMine.GrpSize = main->size;
+        }
+    if (addon)
+        {
+        NetDataMine.AddonCrc = addon->crcval;
+        NetDataMine.AddonSize = addon->size;
+        }
+    if (gamegrp && gamegrp->ref && gamegrp->ref->name)
+        Bsnprintf(NetDataMine.Edition, sizeof(NetDataMine.Edition), "%s", gamegrp->ref->name);
+    Bsnprintf(NetDataMine.Build, sizeof(NetDataMine.Build), "%s", game_version);
+    Bsnprintf(NetDataMine.BuildId, sizeof(NetDataMine.BuildId), "%s", game_build_id);
+    }
+
+// -testbuildid<name> (test-only, brief 05b; the argument is parsed in game.c): this machine reports the
+// build <name> (both the name and the id), as a different build would.
+VOID
+NetTestBuildId(const char *name)
+    {
+    Bsnprintf(NetDataMine.Build, sizeof(NetDataMine.Build), "%s", name);
+    Bsnprintf(NetDataMine.BuildId, sizeof(NetDataMine.BuildId), "%s", name);
+    }
+
+// Once per session, at the first level start: a player's data and build do not change, and the others
+// keep what they got (NetDataOf[]) for every later level. A packet less at every later level start, where
+// with 3 or more players the master forwards every slave's (see net.h).
+VOID
+SendDataIdentity(VOID)
+    {
+    static BOOL sent;
+
+    if (!CommEnabled || sent)
+        return;
+    sent = TRUE;
+    NetDataOf[myconnectindex].known = TRUE;
+    NetDataOf[myconnectindex].id = NetDataMine;
+    netbroadcastpacket((BYTEp)(&NetDataMine), sizeof(NetDataMine));
+    }
+
+static void ReceiveDataIdentity(int from, BYTEp buf, int len)
+    {
+    PACKET_DATA_IDp p = (PACKET_DATA_IDp)buf;
+
+    if (from < 0 || from >= MAX_SW_PLAYERS_REG || len < (int)sizeof(PACKET_DATA_ID) || p->Layout < 1)
+        return;     // (a later layout is to be longer and start the same way: its first part is read)
+    NetDataOf[from].known = TRUE;
+    NetDataOf[from].id = *p;
+    NetDataOf[from].id.Edition[sizeof(p->Edition) - 1] = 0;
+    NetDataOf[from].id.Build[sizeof(p->Build) - 1] = 0;
+    NetDataOf[from].id.BuildId[sizeof(p->BuildId) - 1] = 0;
+    }
+
+// with_crc: also the CRCs, for two datas whose names alone read the same (another main GRP under the
+// same add-on, for example)
+static const char *DataDescription(const PACKET_DATA_ID *d, char *buf, int size, BOOL with_crc)
+    {
+    if (d->Edition[0] && !with_crc)
+        Bsnprintf(buf, size, "%s", d->Edition);
+    else if (d->Edition[0] && d->AddonSize)
+        Bsnprintf(buf, size, "%s, CRC %08X and %08X", d->Edition, d->GrpCrc, d->AddonCrc);
+    else if (d->Edition[0])
+        Bsnprintf(buf, size, "%s, CRC %08X", d->Edition, d->GrpCrc);
+    else if (d->AddonSize)
+        Bsnprintf(buf, size, "unknown data, CRC %08X and %08X", d->GrpCrc, d->AddonCrc);
+    else
+        Bsnprintf(buf, size, "unknown data, CRC %08X", d->GrpCrc);
+    return buf;
+    }
+
+static const char *BuildDescription(const PACKET_DATA_ID *d, char *buf, int size)
+    {
+    int n = strlen(d->BuildId);
+    Bsnprintf(buf, size, "%s%s", d->Build[0] ? d->Build : "unknown", n > 0 && d->BuildId[n - 1] == '+' ? " with local changes" : "");
+    return buf;
+    }
+
+// A warning about another player: the whole line in the log, the console and (in the browser) the
+// page's notice; on the game's screen the two halves as two quotes that stay for 15 s (a quote
+// otherwise lasts 4.5 s and fits about 60 characters).
+#define NET_WARN_QUOTE_TICS (15 * 40)
+// Room for every line of the biggest game: 7 other players, each with a data (or version) line and a
+// build line of at most about 320 characters. A line that would not fit is left out of the page's
+// notice and said in its place (the log and the screen still have it).
+static char NetNotice[8192];
+
+static void NetWarn(const char *line, const char *screen1, const char *screen2)
+    {
+    static const char more[] = "\n(more lines in the game's log)";
+    buildprintf("%s\n", line);
+    adduserquote((char *)screen1);
+    user_quote_time[0] = NET_WARN_QUOTE_TICS;
+    adduserquote((char *)screen2);
+    user_quote_time[0] = NET_WARN_QUOTE_TICS;
+    if (strlen(NetNotice) + strlen(line) + 2 + sizeof(more) < sizeof(NetNotice))
+        {
+        if (NetNotice[0]) strcat(NetNotice, "\n");
+        strcat(NetNotice, line);
+        }
+    else if (!strstr(NetNotice, more))
+        strcat(NetNotice, more);
+    }
+
 VOID
 CheckVersion(int GameVersion)
     {
     short pnum;
+    char line[400], s1[128], s2[128], a[80], b[80];
     #define VERSION_MSG "You cannot play with different versions!"
 
     if (!CommEnabled)
         return;
 
+    NetNotice[0] = 0;
     TRAVERSE_CONNECT(pnum)
         {
-        if (pnum != myconnectindex)
+        const PACKET_DATA_ID *me = &NetDataMine, *o = &NetDataOf[pnum].id;
+        BOOL known = NetDataOf[pnum].known, datadiff, verdiff;
+
+        if (pnum == myconnectindex)
+            continue;
+
+        verdiff = GameVersion != Player[pnum].PlayerVersion;
+        // (size 0: that machine found no GRP to describe; nothing can be said about it)
+        datadiff = known && o->GrpSize && me->GrpSize &&
+                   (o->GrpCrc != me->GrpCrc || o->GrpSize != me->GrpSize ||
+                    o->AddonCrc != me->AddonCrc || o->AddonSize != me->AddonSize);
+
+        if (verdiff)    // (players counted from 1, as on the screen; brief 05b)
+            buildprintf("CheckVersion(): player %d has version %d, expecting %d\n",
+                    pnum + 1, Player[pnum].PlayerVersion, GameVersion);
+
+        if (datadiff)
             {
-            if (GameVersion != Player[pnum].PlayerVersion)
+            DataDescription(o, a, sizeof(a), FALSE);
+            DataDescription(me, b, sizeof(b), FALSE);
+            if (!strcmp(a, b))
                 {
-                buildprintf("CheckVersion(): player %d has version %d, expecting %d\n",
-                        pnum, Player[pnum].PlayerVersion, GameVersion);
-
-                adduserquote(VERSION_MSG);
-                adduserquote(VERSION_MSG);
-                adduserquote(VERSION_MSG);
-                adduserquote(VERSION_MSG);
-                adduserquote(VERSION_MSG);
-                adduserquote(VERSION_MSG);
-
-                if (!Player[pnum].PlayerVersion)
-                    {
-                    SendMessage(pnum, VERSION_MSG);
-                    SendMessage(pnum, VERSION_MSG);
-                    SendMessage(pnum, VERSION_MSG);
-                    SendMessage(pnum, VERSION_MSG);
-                    SendMessage(pnum, VERSION_MSG);
-                    SendMessage(pnum, VERSION_MSG);
-                    }
+                DataDescription(o, a, sizeof(a), TRUE);
+                DataDescription(me, b, sizeof(b), TRUE);
                 }
+            Bsnprintf(line, sizeof(line), "Player %d has different game data (%s) from yours (%s): the game will probably go out of sync.", pnum + 1, a, b);
+            Bsnprintf(s1, sizeof(s1), "Player %d has different game data (%s)", pnum + 1, a);
+            Bsnprintf(s2, sizeof(s2), "from yours (%s): it will probably go out of sync.", b);
+            NetWarn(line, s1, s2);
             }
+        else if (verdiff)
+            {
+            Bsnprintf(line, sizeof(line), "Player %d runs a different version of the game (%d) from yours (%d): the game will probably go out of sync.", pnum + 1, Player[pnum].PlayerVersion, GameVersion);
+            Bsnprintf(s1, sizeof(s1), "Player %d runs a different game version (%d)", pnum + 1, Player[pnum].PlayerVersion);
+            Bsnprintf(s2, sizeof(s2), "from yours (%d): it will probably go out of sync.", GameVersion);
+            NetWarn(line, s1, s2);
+            }
+
+        if (known && o->BuildId[0] && me->BuildId[0] && strcmp(o->BuildId, me->BuildId))
+            {
+            BuildDescription(o, a, sizeof(a));
+            BuildDescription(me, b, sizeof(b));
+            Bsnprintf(line, sizeof(line), "Player %d runs a different build (%s) from yours (%s): if the game logic differs, the game may go out of sync.", pnum + 1, a, b);
+            Bsnprintf(s1, sizeof(s1), "Player %d runs a different build (%s)", pnum + 1, a);
+            Bsnprintf(s2, sizeof(s2), "from yours (%s): it may go out of sync.", b);
+            NetWarn(line, s1, s2);
+            }
+
+        if (verdiff && !Player[pnum].PlayerVersion)
+            SendMessage(pnum, VERSION_MSG);
         }
+    if (NetNotice[0])
+        NetPageNotice(NetNotice);
     }
 
 VOID
@@ -552,6 +732,11 @@ waitforeverybody(void)
     size++;
 #endif
     netbroadcastpacket(tempbuf, size);
+    // Brief 05b: on the wire now, with whatever was queued before it, not at the next dosendpackets() after
+    // mmulti's 25 ms window: a machine that leaves this wait at once (it already has everyone's ready) and
+    // is then busy without reading the network (precaching, or netplay.js tic1's -testslowstart) would
+    // otherwise keep the others waiting for its ready until it next reads.
+    mmulti_vnet_flush();
 
     #if 0
     TRAVERSE_CONNECT(i)
@@ -1526,6 +1711,10 @@ getpackets(VOID)
             pp->PlayerVersion = p->Version;
             break;
             }
+
+        case PACKET_TYPE_DATA_ID:
+            ReceiveDataIdentity(otherconnectindex, packbuf, packbufleng);
+            break;
 
         case PACKET_TYPE_PLAYER_OPTIONS:
             {

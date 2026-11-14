@@ -267,6 +267,25 @@ int NetLobbyWait(void)
     return 1;
 }
 
+// ---- Brief 05b: a warning about the other players' game data or build ---------------------------
+
+#ifdef __EMSCRIPTEN__
+// The page's notice (web/jfsw.js, Module.jfswNotice): it stays until the player closes it, so that a
+// hidden tab, which misses the game's on-screen lines, still shows it.
+EM_JS(void, jfsw_page_notice, (const char *text), {
+    if (Module.jfswNotice) { Module.jfswNotice(UTF8ToString(text)); }
+});
+#endif
+
+void NetPageNotice(const char *text)
+{
+#ifdef __EMSCRIPTEN__
+    jfsw_page_notice(text);
+#else
+    (void)text;
+#endif
+}
+
 // ---- Host and join: restarting into a network game (D3) ----------------------------------------
 
 #ifndef __EMSCRIPTEN__

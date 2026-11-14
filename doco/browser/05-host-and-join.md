@@ -235,7 +235,7 @@ Commits: jfbuild `70bf3f4`; jfsw-browser `3c1944a`, `685eeee` and the Outcome co
 - **S3:** `netplay.js compaction`: `?host=4`; A (browser) and B (native) join; A cancels, so B moves down from place 2 to place 1; C (browser) joins; Start now with 3. B is player 2 and C is player 3 on every machine, and all three agree on every tic.
 - **N1:** Start now with fewer than 2 players in is refused and not remembered (natively: "starting needs at least 2 players"; the `start-now` scenario checks that a second player coming in afterwards does not start the game). A request whose players fall below 2 is dropped. The lobby shows a pending request ("Starting as soon as every player in the room has answered...") and offers the button again when the game drops it.
 - **N2:** the page's reload and back-to-start addresses are `location.origin + location.pathname + ...`.
-- **N3:** the invite link keeps `?data=`: every player of a game needs the same game data.
+- **N3:** the invite link keeps `?data=`: every player of a game needs the same game data. (Corrected by brief 05b: the game does not refuse other data, as the page's comment said; players with different data can play together but will probably go out of sync, and since 05b every machine says so.)
 - **N4:** in the GTK window, Online with Join and no code, a bad code or no relay address shows a message and stays open. `test-startwin.sh` checks the no-code case: the window says so and starts nothing.
 - **N5: the re-launch.**
   - `argv[0]` is made absolute at the start of `app_main`, before its `chdir`. Linux uses `/proc/self/exe` anyway.
