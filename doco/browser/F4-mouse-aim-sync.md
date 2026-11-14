@@ -299,3 +299,23 @@ Before the fix round (13 Nov):
 
 - Mixed old and new builds still desync on any mid-level toggle, as the original game does. That cannot be avoided without the older build's help. Nothing warns about it beyond the existing version check, which does not see this.
 - The options packet is one byte longer. An older build ignores the extra byte; a newer build treats the shorter packet as an older build. Upstream may want this noted in its changelog.
+
+### Coordinator verification and merge (14 Nov 2026)
+
+- **Read** the whole upstream fix (`git diff befcdd0 fix/mouse-aim-sync -- src`, 6 files):
+  - in a network game, `getinput` changes only `gs.MouseAimingOn` and sends the state in `SK_MOUSE_AIM`;
+  - `DoPlayerMouseAimSync()` sets `PF_MOUSE_AIMING_ON` from it in `domovethings` for every player whose options packet said they send it (`MouseAimInInput[]`, cleared in `InitGame`);
+  - single player is as before;
+  - `ChopsCheck` ignores the bit.
+
+  It agrees with the review.
+- **Rebuilt from a fresh worktree** at `9068e90`: native, 14 warnings as before.
+- **Reran `tests/net/test-mouse-aim.sh`:** PASS. With `--old` (every machine with the old behaviour): FAILED, 25 checks.
+- **The implementer's final runs stand** (rebuilt from clean, one at a time):
+  - `netplay.js`, every default scenario: 1346/0;
+  - `make test GAME_RUNS=1`: 9 PASS, draw 16/0;
+  - `smoke.js` 29/0, `persist.js` 15/0, `data.js` 172/0, `grptable.js` 8/0, `focus.js` 24/0;
+  - `determinism.js` 20/1 twice: the known stall check; the native `.dms` equals the committed one.
+- **Merged** `browser/F4-mouse-aim-sync` into `claude` with `--no-ff`.
+- **For upstream:** `fix/mouse-aim-sync` (`5eec5fa`, `dace2e9`) carries only the `Co-Authored-By` trailer and cherry-picks cleanly onto `befcdd0`. Note for them: the options packet is one byte longer.
+
