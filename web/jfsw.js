@@ -407,8 +407,14 @@
     else { console.warn('page error (not from the game):', describe(e)); }
   });
   window.addEventListener('unhandledrejection', function (e) {
-    if (gameError(e.reason)) { finish('Something went wrong: ' + sentence(describe(e)) + ' Reload the page to try again.', true, true); }
-    else { console.warn('unhandled rejection (not from the game):', describe(e)); }
+    if (gameError(e.reason)) { finish('Something went wrong: ' + sentence(describe(e)) + ' Reload the page to try again.', true, true); return; }
+    // Brief 06b: closing a WebTransport session (vnet's relay_wt.c, at the game's exit) while the datagram writer still has
+    // writes in flight makes Chromium reject a promise of its own with "The session is closed." Harmless: noted, not reported.
+    var r = e.reason;
+    var wt = r && (r.name === 'WebTransportError' || (typeof WebTransportError !== 'undefined' && r instanceof WebTransportError));
+    var lateDom = exitedAt > 0 && typeof DOMException !== 'undefined' && r instanceof DOMException;
+    if (wt || lateDom) { e.preventDefault(); console.info('expected rejection (' + (wt ? 'a closed WebTransport session' : 'after the game ended') + '):', describe(e)); return; }
+    console.warn('unhandled rejection (not from the game):', describe(e));
   });
 
   // ---- Files ------------------------------------------------------------------------------------------

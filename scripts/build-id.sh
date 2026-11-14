@@ -14,5 +14,7 @@ m=$(git -C jfmact rev-parse HEAD 2>/dev/null) || exit 0
 a=$(git -C jfaudiolib rev-parse HEAD 2>/dev/null) || exit 0
 h=$(printf 'src %s\njfbuild %s\njfmact %s\njfaudiolib %s\n' "$t" "$b" "$m" "$a" | git hash-object --stdin 2>/dev/null) || exit 0
 d=""
-if [ -n "$(git status --porcelain -- src jfbuild jfmact jfaudiolib 2>/dev/null)" ]; then d="+"; fi
+# Untracked files do not count (brief 06b: Emscripten's *.wasm-<hash>.o.tmp files sit in src/ and the submodules
+# while version-auto.c is generated in the middle of a parallel build); a change to a tracked file does.
+if [ -n "$(git status --porcelain --untracked-files=no --ignore-submodules=untracked -- src jfbuild jfmact jfaudiolib 2>/dev/null)" ]; then d="+"; fi
 printf '%s%s\n' "$(printf '%s' "$h" | cut -c1-16)" "$d"
