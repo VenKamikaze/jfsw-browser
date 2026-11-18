@@ -10,6 +10,8 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 
 **Reading order:** this file, then the brief, then [`code-facts.md`](code-facts.md) (what the code actually does, with file:line refs), then the **Outcome** sections of every brief yours depends on: they record what actually landed.
 
+**Porting to jfDuke3D:** [`porting-jfduke3d.md`](porting-jfduke3d.md) (what carries over, what to redo, the bugs and gotchas).
+
 ## Status
 
 | # | Brief | Repos touched | Depends on | Status |
