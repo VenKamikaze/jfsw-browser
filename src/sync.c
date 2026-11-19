@@ -33,6 +33,8 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "mmulti_vnet.h"
 #include "sector.h"
 #include "player.h"
+#include "sprite.h"
+#include "weapon.h"
 #include "osd.h"
 #ifndef _WIN32
 #include <time.h>
@@ -612,11 +614,12 @@ void TestNudgeArg(int tic)
 // misread): the tests fail on it. -demosync* in a network game also sets
 // NumSyncBytes = 8 and so also changes the version that is sent.
 static int TestSlopeTic, TestSlopeP, TestSlopeLevel = 1;    // -testslope (F4, below)
+static int TestRandomTic, TestRandomDone;                    // -testrandom (F5, below)
 
 int TestVersionSalt(void)
     {
     return (NumSyncBytes - 1) * 1000003 + TestQuitTics * 37 + TestExitTic * 101 + TestExitLevel * 7 + TestSwitchTic * 13
-        + (TestSlopeTic ? TestSlopeTic * 17 + TestSlopeP * 3 + TestSlopeLevel * 5 : 0);
+        + (TestSlopeTic ? TestSlopeTic * 17 + TestSlopeP * 3 + TestSlopeLevel * 5 : 0) + TestRandomTic * 19;
     }
 
 // -testdump<name>: every machine writes its own record of every game tic to <name>, so that a test
@@ -1629,6 +1632,71 @@ void TestLevelEnd(void)
     buildprintf("TEST: left the level after tic %u, with the inputs of %d more tics here\n", MoveThingsCount, more);
     }
 
+// -testrandom<T> (test-only, F5; every machine): at the start of game tic T of the first level the two
+// functions whose random draws were put in a fixed order (bugs.md L35) are run, as the shareware game
+// never gets to them (DoRail(), the rail gun rod, and InitRail() that makes it, are the registered
+// game's; SpawnGrenadeExp() draws its numbers for Zilla's missiles only, the boss of level 20):
+//  * a missile with Zilla's ID is made where the first player is, and SpawnGrenadeExp() is called on it;
+//  * the first player fires a rail gun rod (InitRail()) and DoRail() is called on it.
+// GameVariant is the registered game's for the length of the two. Logs "TEST: random: ..." lines: the
+// explosion's position and the rail puffs' velocities, which are what the order of the draws decides
+// (a puff's velocity is in no state hash; the explosion's position is). The simulation changes, so
+// the argument is in the version salt. Inert without it.
+extern int InitRail(PLAYERp pp);
+extern int DoRail(SHORT Weapon);
+
+void TestRandomArg(int tic)
+    {
+    TestRandomTic = tic;
+    }
+
+static void TestRandom(void)
+    {
+    extern unsigned int MoveThingsCount;
+    PLAYERp pp = Player + connecthead;
+    SPRITEp ep;
+    SHORT w, e, head;
+    int variant = GameVariant, i, n = 0, sum[3] = {0, 0, 0};
+    unsigned int h = 2166136261u;
+
+    GameVariant = GRPFILE_GAME_REG;
+
+    w = SpawnSprite(STAT_MISSILE, ZILLA_RUN_R0, NULL, pp->cursectnum, pp->posx, pp->posy, pp->posz, pp->pang, 0);
+    e = SpawnGrenadeExp(w);
+    ep = &sprite[e];
+    buildprintf("TEST: random: at tic %u an explosion for Zilla's missile at %d %d %d is at %d %d %d, seed now %d\n",
+        MoveThingsCount, sprite[w].x, sprite[w].y, sprite[w].z, ep->x, ep->y, ep->z, randomseed);
+    KillSprite(w);
+
+    head = headspritestat[STAT_MISSILE];
+    InitRail(pp);
+    w = headspritestat[STAT_MISSILE];
+    if (w == head)
+        {
+        buildprintf("TEST: random: no rail gun rod was made\n");
+        }
+    else
+        {
+        DoRail(w);
+        for (i = headspritestat[STAT_MISSILE]; i >= 0 && i != head; i = nextspritestat[i])
+            {
+            if (!User[i] || User[i]->ID != PUFF)
+                continue;
+            n++;
+            sum[0] += sprite[i].xvel; sum[1] += sprite[i].yvel; sum[2] += sprite[i].zvel;
+            h = (h ^ (unsigned short)sprite[i].xvel) * 16777619u;
+            h = (h ^ (unsigned short)sprite[i].yvel) * 16777619u;
+            h = (h ^ (unsigned short)sprite[i].zvel) * 16777619u;
+            if (n <= 2)
+                buildprintf("TEST: random: rail puff %d: velocity %d %d %d\n", n, sprite[i].xvel, sprite[i].yvel, sprite[i].zvel);
+            }
+        buildprintf("TEST: random: %d rail puffs, velocities summed %d %d %d, hash %08x, seed now %d\n",
+            n, sum[0], sum[1], sum[2], h, randomseed);
+        }
+
+    GameVariant = variant;
+    }
+
 void TestTicHook(void)
     {
     extern unsigned int MoveThingsCount;
@@ -1652,6 +1720,12 @@ void TestTicHook(void)
 
     if (TestSlopeTic > 0 && TestStateLevels == TestSlopeLevel && (int)MoveThingsCount == TestSlopeTic)
         TestSlope();
+
+    if (TestRandomTic > 0 && !TestRandomDone && TestStateLevels <= 1 && (int)MoveThingsCount == TestRandomTic)
+        {
+        TestRandomDone = 1;
+        TestRandom();
+        }
 
     if (TestOsdTic > 0 && !TestOsdDone && (int)MoveThingsCount == TestOsdTic)
         {

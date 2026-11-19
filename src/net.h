@@ -202,6 +202,7 @@ void TestSwitchArg(int tic);    // -testswitch<T>: every machine operates the le
 void TestOsdArg(const char *arg);   // -testosd<T>,<command>: this machine runs a console command at tic T (sync.c)
 void TestStallArg(const char *arg);   // -teststall<T>,<ms>: this machine stops <ms> ms at the start of tic T (sync.c)
 void TestFireArg(int tic);      // -testfire[<N>]: this machine's player throws shurikens from tic N on (sync.c)
+void TestRandomArg(int tic);    // -testrandom<T>: every machine runs SpawnGrenadeExp() and DoRail() at tic T (sync.c)
 void TestInputHook(SW_PACKET *loc);   // from faketimerhandler, after getinput
 void TestAimKeyArg(const char *arg);  // -testaimkey<T>[,<N>[,<L>]]: this machine's Mouse_Aiming key is down at tics T..T+N-1 (sync.c)
 void TestAimHeldArg(void);      // -testaimheld: mouse aiming in held mode on this machine (sync.c)
