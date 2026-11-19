@@ -170,7 +170,7 @@ def main():
     if not files:
         # the C files of src/ that differ between the two trees (header changes are not looked at: name the files)
         names = sorted(set(os.path.basename(f) for t in (old_tree, new_tree) for f in glob.glob(os.path.join(t, 'src', '*.c'))))
-        files = [n for n in names if not (os.path.exists(os.path.join(old_tree, 'src', n)) and os.path.exists(os.path.join(new_tree, 'src', n))
+        files = [n for n in names if not n.endswith('-auto.c') and not (os.path.exists(os.path.join(old_tree, 'src', n)) and os.path.exists(os.path.join(new_tree, 'src', n))
                  and filecmp.cmp(os.path.join(old_tree, 'src', n), os.path.join(new_tree, 'src', n), shallow=False))
                  and n != 'startwin_game.c']
     bad = nev = nfunc = 0
