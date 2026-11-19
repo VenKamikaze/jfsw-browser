@@ -1639,13 +1639,14 @@ void TestLevelEnd(void)
 // game's; SpawnGrenadeExp() draws its numbers for Zilla's missiles only, the boss of level 20):
 //  * a missile with Zilla's ID is made in the middle of the sector farthest from the first player, and
 //    SpawnGrenadeExp() is called on it;
-//  * the first player fires a rail gun rod (InitRail()) and DoRail() is called on it.
+//  * a rail gun rod is made in the same place, sent along the longest line to a wall, and DoRail() is called on it.
 // GameVariant is the registered game's for the length of the two. Logs "TEST: random: ..." lines: the
 // explosion's position and the rail puffs' velocities, which are what the order of the draws decides
 // (a puff's velocity is in no state hash; the explosion's position is). The simulation changes, so
 // the argument is in the version salt. Inert without it.
-extern int InitRail(PLAYERp pp);
 extern int DoRail(SHORT Weapon);
+extern STATE s_Rail[5][1];
+extern STATEp sg_Rail[];
 
 void TestRandomArg(const char *arg)
     {
@@ -1658,10 +1659,11 @@ static void TestRandom(void)
     {
     extern unsigned int MoveThingsCount;
     PLAYERp pp = Player + connecthead;
-    SPRITEp ep;
+    SPRITEp ep, wp;
+    USERp wu;
     SHORT w, e, head;
     int variant = GameVariant, i, n = 0, sum[3] = {0, 0, 0};
-    int sn, wl, k, best = -1, cx, cy, bx = 0, by = 0;
+    int sn, wl, k, best = -1, cx, cy, bx = 0, by = 0, rz, ra = 0;
     long long d, bestd = -1;
     unsigned int h = 2166136261u;
 
@@ -1705,31 +1707,58 @@ static void TestRandom(void)
         MoveThingsCount, sprite[w].x, sprite[w].y, sprite[w].z, ep->x, ep->y, ep->z, randomseed);
     KillSprite(w);
 
+    // a rail gun rod, made as InitRail() makes one but in the middle of that sector and flying along a
+    // direction in which it has the longest way to a wall (a little different each call), so that it
+    // leaves many puffs, wherever the first player happens to be
     head = headspritestat[STAT_MISSILE];
-    InitRail(pp);
-    w = headspritestat[STAT_MISSILE];
-    if (w == head)
+    bestd = -1;
+    rz = (sector[best].ceilingz + sector[best].floorz) / 2;
+    for (k = 0; k < 2048; k += 64)
         {
-        buildprintf("TEST: random: no rail gun rod was made\n");
-        }
-    else
-        {
-        DoRail(w);
-        for (i = headspritestat[STAT_MISSILE]; i >= 0 && i != head; i = nextspritestat[i])
+        short hs, hw, hsp;
+        int hx, hy, hz;
+
+        hitscan(bx, by, rz, best, sintable[(k + 512) & 2047], sintable[k & 2047], 0, &hs, &hw, &hsp, &hx, &hy, &hz, CLIPMASK_MISSILE);
+        d = (long long)(hx - bx) * (hx - bx) + (long long)(hy - by) * (hy - by);
+        if (d > bestd)
             {
-            if (!User[i] || User[i]->ID != PUFF)
-                continue;
-            n++;
-            sum[0] += sprite[i].xvel; sum[1] += sprite[i].yvel; sum[2] += sprite[i].zvel;
-            h = (h ^ (unsigned short)sprite[i].xvel) * 16777619u;
-            h = (h ^ (unsigned short)sprite[i].yvel) * 16777619u;
-            h = (h ^ (unsigned short)sprite[i].zvel) * 16777619u;
-            if (n <= 2)
-                buildprintf("TEST: random: rail puff %d: velocity %d %d %d\n", n, sprite[i].xvel, sprite[i].yvel, sprite[i].zvel);
+            bestd = d; ra = k;
             }
-        buildprintf("TEST: random: %d rail puffs, velocities summed %d %d %d, hash %08x, seed now %d\n",
-            n, sum[0], sum[1], sum[2], h, randomseed);
         }
+    w = SpawnSprite(STAT_MISSILE, BOLT_THINMAN_R1, &s_Rail[0][0], best, bx, by, rz, NORM_ANGLE(ra + ((int)MoveThingsCount * 7 & 31)), 1200);
+    wp = &sprite[w];
+    wu = User[w];
+    SetOwner(pp->PlayerSprite, w);
+    wp->yrepeat = 52;
+    wp->xrepeat = 52;
+    wp->shade = -15;
+    wu->RotNum = 5;
+    NewStateGroup(w, &sg_Rail[0]);
+    wu->WeaponNum = WPN_RAIL;
+    wu->Radius = RAIL_RADIUS;
+    wu->ceiling_dist = Z(1);
+    wu->floor_dist = Z(1);
+    SET(wp->cstat, CSTAT_SPRITE_YCENTER|CSTAT_SPRITE_INVISIBLE);
+    SET(wp->cstat, CSTAT_SPRITE_BLOCK|CSTAT_SPRITE_BLOCK_HITSCAN);
+    wp->clipdist = 32L>>2;
+    wu->xchange = MOVEx(wp->xvel, wp->ang);
+    wu->ychange = MOVEy(wp->xvel, wp->ang);
+    wu->zchange = 0;
+    DoRail(w);
+    for (i = headspritestat[STAT_MISSILE]; i >= 0 && i != head; i = nextspritestat[i])
+        {
+        if (!User[i] || User[i]->ID != PUFF)
+            continue;
+        n++;
+        sum[0] += sprite[i].xvel; sum[1] += sprite[i].yvel; sum[2] += sprite[i].zvel;
+        h = (h ^ (unsigned short)sprite[i].xvel) * 16777619u;
+        h = (h ^ (unsigned short)sprite[i].yvel) * 16777619u;
+        h = (h ^ (unsigned short)sprite[i].zvel) * 16777619u;
+        if (n <= 2)
+            buildprintf("TEST: random: rail puff %d: velocity %d %d %d\n", n, sprite[i].xvel, sprite[i].yvel, sprite[i].zvel);
+        }
+    buildprintf("TEST: random: %d rail puffs, velocities summed %d %d %d, hash %08x, seed now %d\n",
+        n, sum[0], sum[1], sum[2], h, randomseed);
 
     GameVariant = variant;
     }
