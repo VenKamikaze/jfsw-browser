@@ -10133,6 +10133,7 @@ DoRail(SHORT Weapon)
     USERp nu;
     short new;
     short spawn_count = 0;
+    int r0, r1;
 
     if (SW_SHAREWARE) return FALSE;	// JBF: verify
 
@@ -10187,9 +10188,17 @@ DoRail(SHORT Weapon)
             np = &sprite[new];
             nu = User[new];
 
-            np->xvel += (RANDOM_RANGE(140)-RANDOM_RANGE(140));
-            np->yvel += (RANDOM_RANGE(140)-RANDOM_RANGE(140));
-            np->zvel += (RANDOM_RANGE(140)-RANDOM_RANGE(140));
+            // The order in which the two operands of a - are evaluated is unspecified,
+            // so draw the numbers one after the other, first operand first.
+            r0 = RANDOM_RANGE(140);
+            r1 = RANDOM_RANGE(140);
+            np->xvel += r0 - r1;
+            r0 = RANDOM_RANGE(140);
+            r1 = RANDOM_RANGE(140);
+            np->yvel += r0 - r1;
+            r0 = RANDOM_RANGE(140);
+            r1 = RANDOM_RANGE(140);
+            np->zvel += r0 - r1;
 
             nu->RotNum = 5;
             NewStateGroup(new, sg_RailPuff);
@@ -11618,6 +11627,7 @@ SpawnGrenadeExp(SHORT Weapon)
     short explosion;
     ANIMATOR InitMineShrap;
     int dx,dy,dz;
+    int r0, r1;
 
     ASSERT(u);
     if (u && TEST(u->Flags, SPR_SUICIDE))
@@ -11640,9 +11650,17 @@ SpawnGrenadeExp(SHORT Weapon)
 
     if (u->ID == ZILLA_RUN_R0)
         {
-        dx += RANDOM_RANGE(1000)-RANDOM_RANGE(1000);
-        dy += RANDOM_RANGE(1000)-RANDOM_RANGE(1000);
-        dz = SPRITEp_MID(sp) + RANDOM_RANGE(1000)-RANDOM_RANGE(1000);
+        // The order in which the two operands of a - are evaluated is unspecified,
+        // so draw the numbers one after the other, first operand first.
+        r0 = RANDOM_RANGE(1000);
+        r1 = RANDOM_RANGE(1000);
+        dx += r0 - r1;
+        r0 = RANDOM_RANGE(1000);
+        r1 = RANDOM_RANGE(1000);
+        dy += r0 - r1;
+        r0 = RANDOM_RANGE(1000);
+        r1 = RANDOM_RANGE(1000);
+        dz = SPRITEp_MID(sp) + r0 - r1;
         }
 
     explosion = SpawnSprite(STAT_MISSILE, GRENADE_EXP, s_GrenadeExp, sp->sectnum,
