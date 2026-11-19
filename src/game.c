@@ -3914,6 +3914,11 @@ int app_main(int argc, char const * const argv[])
             TestFireArg(atoi(arg+8));   // test-only: this machine's player throws shurikens from tic N on
             }
         else
+        if (Bstrncasecmp(arg, "testrandom", 10) == 0)
+            {
+            TestRandomArg(arg+10);    // test-only: every machine runs SpawnGrenadeExp() and DoRail() at tic T, N times
+            }
+        else
         if (Bstrncasecmp(arg, "teststate", 9) == 0)
             {
             TestStateArg(atoi(arg+9));  // test-only: with -testdump, full state dumps (start, tics 1-3, tic T)

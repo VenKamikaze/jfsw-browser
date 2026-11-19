@@ -295,7 +295,7 @@ $(SRC)/version-auto.c:
 # NETWORK TESTS (brief 01; see doco/browser/building.md). The top-level rule
 # above never re-makes an existing jfbuild/libengine.a, so these bring the
 # engine library up to date first.
-.PHONY: test test-mmulti test-net test-draw engine-current
+.PHONY: test test-mmulti test-net test-draw test-random-order engine-current
 MMULTI_RUNS ?= 10
 GAME_RUNS ?= 1
 engine-current: sw$(EXESUFFIX)
@@ -329,4 +329,9 @@ test-net: engine-current
 test-draw: sw$(EXESUFFIX)
 	tests/draw-setup.sh
 
-test: test-mmulti test-net test-draw
+# F5: no place draws two or more numbers from the synced random generator in one expression, where the C standard leaves
+# the order of evaluation open (needs clang; exit 3 is NOT RUN, exit 1 a site or a file that did not compile)
+test-random-order:
+	@tests/tools/random-order.py; st=$$?; if [ $$st -eq 3 ]; then echo '*** random-order.py: NOT RUN (not counted as passed; see its message above)'; elif [ $$st -ne 0 ]; then exit $$st; fi
+
+test: test-random-order test-mmulti test-net test-draw

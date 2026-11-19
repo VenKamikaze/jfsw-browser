@@ -33,6 +33,8 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "mmulti_vnet.h"
 #include "sector.h"
 #include "player.h"
+#include "sprite.h"
+#include "weapon.h"
 #include "osd.h"
 #ifndef _WIN32
 #include <time.h>
@@ -612,11 +614,12 @@ void TestNudgeArg(int tic)
 // misread): the tests fail on it. -demosync* in a network game also sets
 // NumSyncBytes = 8 and so also changes the version that is sent.
 static int TestSlopeTic, TestSlopeP, TestSlopeLevel = 1;    // -testslope (F4, below)
+static int TestRandomTic, TestRandomCount = 1, TestRandomStep = 10, TestRandomDone;   // -testrandom (F5, below)
 
 int TestVersionSalt(void)
     {
     return (NumSyncBytes - 1) * 1000003 + TestQuitTics * 37 + TestExitTic * 101 + TestExitLevel * 7 + TestSwitchTic * 13
-        + (TestSlopeTic ? TestSlopeTic * 17 + TestSlopeP * 3 + TestSlopeLevel * 5 : 0);
+        + (TestSlopeTic ? TestSlopeTic * 17 + TestSlopeP * 3 + TestSlopeLevel * 5 : 0) + (TestRandomTic ? TestRandomTic * 19 + TestRandomCount * 23 + TestRandomStep * 29 : 0);
     }
 
 // -testdump<name>: every machine writes its own record of every game tic to <name>, so that a test
@@ -1629,6 +1632,137 @@ void TestLevelEnd(void)
     buildprintf("TEST: left the level after tic %u, with the inputs of %d more tics here\n", MoveThingsCount, more);
     }
 
+// -testrandom<T>[,<N>[,<S>]] (test-only, F5; every machine): at the start of game tic T of the first level, and
+// N times in all (1 if left out), S tics (10) apart, the two
+// functions whose random draws were put in a fixed order (bugs.md L35) are run, as the shareware game
+// never gets to them (DoRail(), the rail gun rod, and InitRail() that makes it, are the registered
+// game's; SpawnGrenadeExp() draws its numbers for Zilla's missiles only, the boss of level 20):
+//  * a missile with Zilla's ID is made in the middle of the sector farthest from the first player, and
+//    SpawnGrenadeExp() is called on it;
+//  * a rail gun rod is made in the same place, sent along the longest line to a wall, and DoRail() is called on it.
+// GameVariant is the registered game's for the length of the two. Logs "TEST: random: ..." lines: the
+// explosion's position and the rail puffs' velocities, which are what the order of the draws decides
+// (a puff's velocity is in no state hash; the explosion's position is). The simulation changes, so
+// the argument is in the version salt. Inert without it.
+extern int DoRail(SHORT Weapon);
+extern STATE s_Rail[5][1];
+extern STATEp sg_Rail[];
+
+void TestRandomArg(const char *arg)
+    {
+    sscanf(arg, "%d,%d,%d", &TestRandomTic, &TestRandomCount, &TestRandomStep);
+    if (TestRandomCount < 1) TestRandomCount = 1;
+    if (TestRandomStep < 1) TestRandomStep = 1;
+    }
+
+static void TestRandom(void)
+    {
+    extern unsigned int MoveThingsCount;
+    PLAYERp pp = Player + connecthead;
+    SPRITEp ep, wp;
+    USERp wu;
+    SHORT w, e, head;
+    int variant = GameVariant, i, n = 0, sum[3] = {0, 0, 0};
+    int sn, wl, k, best = -1, cx, cy, bx = 0, by = 0, rz, ra = 0;
+    long long d, bestd = -1;
+    unsigned int h = 2166136261u;
+
+    // the explosion goes in the sector whose middle is farthest from the player (an explosion
+    // at the player throws him about), well away from anything that it could damage
+    for (sn = 0; sn < numsectors; sn++)
+        {
+        SECTORp s = &sector[sn];
+        long long ax = 0, ay = 0;
+
+        if (s->wallnum < 3 || s->ceilingz > s->floorz - Z(100))
+            continue;
+        for (wl = s->wallptr, k = 0; k < s->wallnum; k++, wl++)
+            {
+            ax += wall[wl].x;
+            ay += wall[wl].y;
+            }
+        cx = (int)(ax / s->wallnum);
+        cy = (int)(ay / s->wallnum);
+        if (inside(cx, cy, sn) != 1)
+            continue;
+        d = (long long)(cx - pp->posx) * (cx - pp->posx) + (long long)(cy - pp->posy) * (cy - pp->posy);
+        if (d > bestd)
+            {
+            bestd = d; best = sn; bx = cx; by = cy;
+            }
+        }
+    if (best < 0)
+        best = pp->cursectnum, bx = pp->posx, by = pp->posy;
+
+    GameVariant = GRPFILE_GAME_REG;
+
+    w = SpawnSprite(STAT_MISSILE, ZILLA_RUN_R0, NULL, best, bx, by, (sector[best].ceilingz + sector[best].floorz) / 2, pp->pang, 0);
+    // the floor and ceiling the explosion's height is kept between (SpawnExpZadjust) are far off, so that
+    // the draws for its height show in it
+    User[w]->hiz = sprite[w].z - Z(400);
+    User[w]->loz = sprite[w].z + Z(400);
+    e = SpawnGrenadeExp(w);
+    ep = &sprite[e];
+    buildprintf("TEST: random: at tic %u an explosion for Zilla's missile at %d %d %d is at %d %d %d, seed now %d\n",
+        MoveThingsCount, sprite[w].x, sprite[w].y, sprite[w].z, ep->x, ep->y, ep->z, randomseed);
+    KillSprite(w);
+
+    // a rail gun rod, made as InitRail() makes one but in the middle of that sector and flying along a
+    // direction in which it has the longest way to a wall (a little different each call), so that it
+    // leaves many puffs, wherever the first player happens to be
+    head = headspritestat[STAT_MISSILE];
+    bestd = -1;
+    rz = (sector[best].ceilingz + sector[best].floorz) / 2;
+    for (k = 0; k < 2048; k += 64)
+        {
+        short hs, hw, hsp;
+        int hx, hy, hz;
+
+        hitscan(bx, by, rz, best, sintable[(k + 512) & 2047], sintable[k & 2047], 0, &hs, &hw, &hsp, &hx, &hy, &hz, CLIPMASK_MISSILE);
+        d = (long long)(hx - bx) * (hx - bx) + (long long)(hy - by) * (hy - by);
+        if (d > bestd)
+            {
+            bestd = d; ra = k;
+            }
+        }
+    w = SpawnSprite(STAT_MISSILE, BOLT_THINMAN_R1, &s_Rail[0][0], best, bx, by, rz, NORM_ANGLE(ra + ((int)MoveThingsCount * 7 & 31)), 1200);
+    wp = &sprite[w];
+    wu = User[w];
+    SetOwner(pp->PlayerSprite, w);
+    wp->yrepeat = 52;
+    wp->xrepeat = 52;
+    wp->shade = -15;
+    wu->RotNum = 5;
+    NewStateGroup(w, &sg_Rail[0]);
+    wu->WeaponNum = WPN_RAIL;
+    wu->Radius = RAIL_RADIUS;
+    wu->ceiling_dist = Z(1);
+    wu->floor_dist = Z(1);
+    SET(wp->cstat, CSTAT_SPRITE_YCENTER|CSTAT_SPRITE_INVISIBLE);
+    SET(wp->cstat, CSTAT_SPRITE_BLOCK|CSTAT_SPRITE_BLOCK_HITSCAN);
+    wp->clipdist = 32L>>2;
+    wu->xchange = MOVEx(wp->xvel, wp->ang);
+    wu->ychange = MOVEy(wp->xvel, wp->ang);
+    wu->zchange = 0;
+    DoRail(w);
+    for (i = headspritestat[STAT_MISSILE]; i >= 0 && i != head; i = nextspritestat[i])
+        {
+        if (!User[i] || User[i]->ID != PUFF)
+            continue;
+        n++;
+        sum[0] += sprite[i].xvel; sum[1] += sprite[i].yvel; sum[2] += sprite[i].zvel;
+        h = (h ^ (unsigned short)sprite[i].xvel) * 16777619u;
+        h = (h ^ (unsigned short)sprite[i].yvel) * 16777619u;
+        h = (h ^ (unsigned short)sprite[i].zvel) * 16777619u;
+        if (n <= 2)
+            buildprintf("TEST: random: rail puff %d: velocity %d %d %d\n", n, sprite[i].xvel, sprite[i].yvel, sprite[i].zvel);
+        }
+    buildprintf("TEST: random: %d rail puffs, velocities summed %d %d %d, hash %08x, seed now %d\n",
+        n, sum[0], sum[1], sum[2], h, randomseed);
+
+    GameVariant = variant;
+    }
+
 void TestTicHook(void)
     {
     extern unsigned int MoveThingsCount;
@@ -1652,6 +1786,13 @@ void TestTicHook(void)
 
     if (TestSlopeTic > 0 && TestStateLevels == TestSlopeLevel && (int)MoveThingsCount == TestSlopeTic)
         TestSlope();
+
+    if (TestRandomTic > 0 && TestRandomDone < TestRandomCount && TestStateLevels <= 1 && (int)MoveThingsCount >= TestRandomTic &&
+        ((int)MoveThingsCount - TestRandomTic) % TestRandomStep == 0)
+        {
+        TestRandomDone++;
+        TestRandom();
+        }
 
     if (TestOsdTic > 0 && !TestOsdDone && (int)MoveThingsCount == TestOsdTic)
         {

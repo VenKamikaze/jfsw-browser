@@ -123,7 +123,8 @@ The page downloads the GRP named in `config.js` (default: `swshare.grp` next to 
 ```sh
 scripts/build-wasm.sh && make -j4           # the determinism test needs the native ./sw too
 node tests/web/smoke.js                     # canvas is drawn, menu reached, keyboard, audio, pointer, Escape, no errors
-node tests/web/determinism.js               # native against wasm: sync bytes, frame times
+node tests/web/determinism.js               # native against wasm: sync bytes, frame times, and (F5, part 7) the random-number order of DoRail and SpawnGrenadeExp
+DET_ONLY=random node tests/web/determinism.js    # part 7 alone, about 45 s
 node tests/web/persist.js                   # settings and saves survive a reload (also one without quitting, and one 500 ms after a save)
 node tests/web/data.js                      # game data: download, cache, errors, picker, quota, config changes (about 2 minutes)
 node tests/web/grptable.js                  # web/grptable.js agrees with src/grpscan.c (no browser)
@@ -246,6 +247,20 @@ It takes the guide's blocks as they are (each follows a `<!-- check-deploy: NAME
 
 While it runs it adds `game.example.org` to `/etc/hosts`, the game to `/srv/http/games/sw` (and a test-mode copy inside it, `check-deploy-test/`, during the game with per-tic records, so that the guide's `<Directory>` settings apply to it too), the system user `vnet-relay`, `/etc/vnet-relay` and two sysctl values (not the last two with `--ws` or `--no-tls`). **It refuses to start if any of these already exists** (a real relay's user or certificate copy is never reused or overwritten), and on every exit it removes what it added, puts the sysctl values and the modes of an existing `/srv/http` and `/srv/http/games` back, and stops Apache and the relay. Apache runs with a small configuration of its own (an Arch-layout `httpd.conf` under a temporary `ServerRoot`), so the distribution's Apache configuration is not touched. Chromium reaches `game.example.org` through `--host-resolver-rules` and trusts the self-signed certificate by its key hash (`--ignore-certificate-errors-spki-list`); for WebTransport it also needs `--webtransport-developer-mode` to accept it (`tests/deploy/play.js`, which stops its native games and the browser on SIGINT or SIGTERM).
 
+### 6.8 The order of random draws (F5, bugs.md L35)
+
+```sh
+make test-random-order                      # tests/tools/random-order.py: no expression draws two synced random numbers in no fixed order; about 1 minute, needs clang (exit 3 is NOT RUN)
+tests/tools/random-order.py -v              # ... and what it looked at but does not count (the local generator, a draw next to a pointer call)
+RANDOM_ORDER_CFLAGS=-DDEBUG=1 tests/tools/random-order.py   # the same for the code a DEBUG build compiles in
+tests/tools/random-equiv.py OLD_TREE NEW_TREE [FILE.c ...]   # AST proof that a rewrite draws the same numbers in the same order (trees are worktrees with their submodules)
+tests/tools/random-asm-order.py [-C TREE] [--cc gcc|clang] [-l LINE,..] weapon.c   # which order the compiler really draws in, from its assembly, at -O0 to -O3, -Og, -Os
+tests/tools/random-asm-order.py -f DoRail -f SpawnGrenadeExp weapon.c               # ... for code that draws into locals: the whole sequence rises
+./sw -level1 -s1 -testrandom100,20,15 -testquit500 -testdumpr.bin   # run DoRail() and SpawnGrenadeExp() 20 times, from tic 100, 15 tics apart (the game then waits at the shareware "Give up?" page: stop it)
+```
+
+`-testrandom<T>[,<N>[,<S>]]` is test-only (sync.c; in the version salt) and runs the two functions the shareware game never reaches: see `code-facts.md` 24. It logs `TEST: random: ...` lines; with `-testdump` the per-tic records show their effect on the whole state. `tests/web/determinism.js` part 7 plays that game natively (gcc, twice) and in wasm and compares the records and the numbers; `DET_ONLY=random` runs it alone.
+
 ## 7. Layout of what brief 00 added
 
 | Path | What |
@@ -282,7 +297,7 @@ Native players can play through a vnet relay as well as over plain UDP. The rela
 Tests (all local, on 127.0.0.1, ports 47000 to 47999 from `JFSW_TEST_PORT_BASE`, default 47100; they build the relay with Go into `~/.cache/jfsw-browser` the first time; each stops every process it started):
 
 ```sh
-make test                      # everything below, about 12 minutes
+make test                      # everything below, about 12 minutes (and test-random-order, F5: the random-draw order, about 1 minute)
 make test-mmulti               # test 1, 10 runs (no game data needed), about 2 minutes
 make test-net GAME_RUNS=3      # tests 2 to 4, the level exit (F3) and mouse aiming (F4); needs testdata/swshare.grp
 make test-draw                 # brief 04c: DrawSetupLevelStats against a drawn frame, every shareware level (tests/draw-setup.sh), about 10 s
