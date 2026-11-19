@@ -39,6 +39,7 @@ Each brief (`NN-*.md`) is one unit of work, sized for a single implement → rev
 | F2 | [Native crash in the ALSA MIDI music driver](F2-alsa-midi-lock.md) | `fix/alsa-midi-lock` (jfaudiolib fork, from `68be97f`) | 00 | done (verified by the user on Arch, 7 Nov 2026) |
 | F3 | [Machines play different numbers of tics after a level exit (L20)](F3-level-exit-tics.md) | `fix/level-exit-tics` (from `master`), integrated on `browser/F3-level-exit-tics` | 04c (for the tests) | done (play-test pending) |
 | F4 | [Toggling mouse aiming mid-level desyncs the game (L25)](F4-mouse-aim-sync.md) | `fix/mouse-aim-sync` (from `master`), integrated on `browser/F4-mouse-aim-sync` | F3 (for the tests) | done (play-test pending) |
+| F5 | [The order of two random draws is left to the compiler (L35)](F5-random-arg-order.md) | `fix/random-arg-order` (from `master`), integrated on `browser/F5-random-arg-order` | F3, F4 (for the tests) | done (review pending) |
 
 Later, not briefed: music (Q4), WebGL rendering through the GLES2 path, touch controls, the Wanton Destruction and Twin Dragon add-ons in the browser, mouse turns drawn between tics (view angle only), smoothing prediction corrections.
 
