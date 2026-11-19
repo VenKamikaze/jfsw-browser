@@ -19,13 +19,16 @@
 //   4. frame times while the demo plays (at 1x only);
 //   5. the comparison fails when it should: a .dms of another demo, and one flipped byte;
 //   6. the other direction: a demo recorded in the wasm build (the page types the keys) plays back
-//      natively and in wasm with the same sync bytes.
+//      natively and in wasm with the same sync bytes;
+//   7. (F5) the two functions whose random draws are made in a fixed order, DoRail() and SpawnGrenadeExp(), which the
+//      shareware game never reaches, are run by -testrandom in a game of its own: the per-tic records (-testdump,
+//      17 bytes a tic, the hash of the whole state) and the numbers the draws gave are the same natively (gcc) and in wasm.
 'use strict';
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const t = require('./lib.js');
 
 const PORT = t.port(48102);
@@ -54,14 +57,102 @@ function native(dmoName, dmo, extraArgs, dms) {
 }
 function level() { return 1; }   // both demos are of E1L1
 
+// 7. -testrandom100,20,15: at tic 100 and every 15 tics after, 20 times, every machine runs SpawnGrenadeExp() and DoRail(); the
+// game quits at tic 500 (-testquit500). A game of its own in E1L1 (no demo): nobody presses a key.
+const RANDOM_TICS = 500;
+const RANDOM_ARGS = ['-level1', '-s1', '-testrandom100,20,15', '-testquit' + RANDOM_TICS, '-testdumpr.bin'];
+const RANDOM_RUNS = 20;
+
+// Native, a game of its own: the game says it quit at -testquit's tic, and then waits for a key at the shareware "Give up?" page,
+// so the run is stopped (SIGTERM, which makes the game leave cleanly) once the dump holds every record.
+function nativeGame(args, dumpName, records) {
+  const dir = fs.mkdtempSync(path.join(tmp, 'g-'));
+  const dump = path.join(dir, dumpName);
+  return new Promise((resolve) => {
+    const p = spawn(path.join(t.root, 'scripts', 'run-headless.sh'), ['--workdir', dir, '--timeout', '300', '--sw', SW].concat(args),
+      { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    p.stdout.on('data', (d) => { out += d; });
+    p.stderr.on('data', (d) => { out += d; });
+    let stopped = false;
+    const poll = setInterval(() => {
+      let size = 0;
+      try { size = fs.statSync(dump).size; } catch (e) { /* not there yet */ }
+      if (!stopped && size >= 17 * records) {
+        stopped = true;
+        setTimeout(() => { try { process.kill(-p.pid, 'SIGTERM'); } catch (e) { /* gone */ } }, 1500);
+      }
+    }, 200);
+    p.on('close', () => {
+      clearInterval(poll);
+      resolve({ out, dump: fs.existsSync(dump) ? fs.readFileSync(dump) : null });
+    });
+  });
+}
+const randomLines = (out) => out.split('\n').filter((l) => l.startsWith('TEST: random:')).map((l) => l.replace(/\r$/, ''));
+
 function firstDiff(a, b) {
   const n = Math.min(a.length, b.length);
   for (let i = 0; i < n; i++) { if (a[i] !== b[i]) { return { byte: i, tic: Math.floor(i / 9), func: i % 9, a: a[i], b: b[i] }; } }
   return a.length === b.length ? null : { byte: n, tic: Math.floor(n / 9), length: [a.length, b.length] };
 }
 
+
+// 7. (F5) see the header: DoRail() and SpawnGrenadeExp() run by -testrandom, gcc native against wasm.
+async function randomOrder(env) {
+  // --- 7. the random-number order (F5) ---------------------------------------------------------------
+  // DoRail() and SpawnGrenadeExp() draw pairs of numbers for a difference (bugs.md L35). Both are out of the shareware
+  // game's reach, so -testrandom runs them (with GameVariant of the registered game for the two calls) 20 times in a game
+  // of its own. Every machine must get the same records and the same numbers: gcc native against wasm, and native twice.
+  {
+    const n7 = await nativeGame(RANDOM_ARGS, 'r.bin', RANDOM_TICS);
+    const n7b = await nativeGame(RANDOM_ARGS, 'r.bin', RANDOM_TICS);
+    const ln = randomLines(n7.out);
+    const explosions = ln.filter((l) => / an explosion for /.test(l)).length;
+    const puffLines = ln.filter((l) => / rail puffs, /.test(l));
+    const puffs = puffLines.reduce((a, l) => a + +l.match(/: (\d+) rail puffs/)[1], 0);
+    t.check(!!n7.dump && n7.dump.length >= 17 * RANDOM_TICS, `random: native: ${n7.dump ? n7.dump.length / 17 : 0} records of the game's tics (at least ${RANDOM_TICS})`);
+    t.check(explosions === RANDOM_RUNS, `random: native: SpawnGrenadeExp() ran ${explosions} times (expected ${RANDOM_RUNS})`);
+    t.check(puffLines.length === RANDOM_RUNS && puffs >= RANDOM_RUNS * 5 && !/no rail gun rod/.test(n7.out),
+      `random: native: DoRail() ran ${puffLines.length} times and left ${puffs} puffs (expected ${RANDOM_RUNS} runs)`);
+    t.check(!!n7b.dump && !!n7.dump && Buffer.compare(n7.dump.subarray(0, 17 * RANDOM_TICS), n7b.dump.subarray(0, 17 * RANDOM_TICS)) === 0 &&
+      randomLines(n7b.out).join('\n') === ln.join('\n'), 'random: native twice: the same records and the same numbers');
+    const r7 = await t.runGame(env, {
+      args: RANDOM_ARGS, warp: 1, read: ['r.bin'], timeoutMs: 120000,
+      script: async (page) => {
+        // the game says it quit at tic 500, then waits for a key at the "Give up?" page
+        for (let i = 0; i < 400; i++) {
+          if (await page.evaluate(() => window.jfswOut.some((l) => /TEST: quitting after/.test(l)))) { break; }
+          await page.waitForTimeout(250);
+        }
+        for (let i = 0; i < 12; i++) {
+          if (['ended', 'error'].includes(await page.evaluate(() => window.jfswState))) { break; }
+          await t.tap(page, 'Space'); await page.waitForTimeout(700);
+        }
+      },
+    });
+    const wd7 = r7.files['r.bin'];
+    const lw = randomLines(r7.out);
+    t.check(r7.state === 'ended' && !!wd7 && wd7.length >= 17 * RANDOM_TICS, `random: wasm: played the game (${wd7 ? wd7.length / 17 : 0} records, ${r7.state})`);
+    t.check(lw.length === ln.length && lw.join('\n') === ln.join('\n'), `random: wasm: the numbers the draws gave (positions, velocities, hashes: ${lw.length} lines) equal the native ones`,
+      lw.length === ln.length ? (lw.find((l, i) => l !== ln[i]) || '') + ' | ' + (ln.find((l, i) => l !== lw[i]) || '') : `${lw.length} lines against ${ln.length}`);
+    const a7 = n7.dump ? n7.dump.subarray(0, 17 * RANDOM_TICS) : Buffer.alloc(0), b7 = wd7 ? wd7.subarray(0, 17 * RANDOM_TICS) : Buffer.alloc(1);
+    const d7 = firstDiff(a7, b7);
+    t.check(a7.length > 0 && d7 === null, `random: wasm: the ${RANDOM_TICS} per-tic records (hash of the whole state) equal gcc native's, byte for byte`,
+      d7 ? 'first difference at tic ' + (Math.floor(d7.byte / 17) + 1) + ' ' + JSON.stringify(d7) : '');
+    // the comparison sees a difference: one flipped byte in the last tic, and the first record's tic number
+    const f7 = Buffer.from(a7); f7[f7.length - 3] ^= 0x01;
+    t.check(a7.length > 0 && firstDiff(a7, f7) && firstDiff(a7, f7).byte === f7.length - 3, 'negative: the record comparison finds one flipped byte');
+  }
+}
+
 async function main() {
   if (!fs.existsSync(SW)) { throw new Error('./sw not found: run make (the native build) first'); }
+  if (process.env.DET_ONLY === 'random') {      // only part 7 (about 40 s): for trying a build against it
+    const env7 = await t.start(PORT, {});
+    try { await randomOrder(env7); } finally { await t.stop(env7); }
+    return t.summary('determinism (random order only)');
+  }
   const dmo = gunzip(path.join(DATA, NAME + '.dmo.gz'));
   const golden = gunzip(path.join(DATA, NAME + '.dms.gz'));
   const other = gunzip(path.join(DATA, 'jfsw2.dms.gz'));     // sync bytes of a different demo (another level)
@@ -167,6 +258,8 @@ async function main() {
       const d6 = nd6 && wd6 ? firstDiff(nd6, wd6) : { missing: true };
       t.check(r6b.state === 'ended' && wd6 && d6 === null, 'wasm-recorded demo: native and wasm sync bytes are identical', JSON.stringify(d6));
     }
+
+    await randomOrder(env);
   } finally {
     await t.stop(env);
   }
