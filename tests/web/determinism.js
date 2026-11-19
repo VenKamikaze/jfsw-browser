@@ -3,8 +3,9 @@
 //
 //   node tests/web/determinism.js           # needs ./sw (make), build-wasm/ and testdata/swshare.grp
 //   DET_WARP=4 node tests/web/determinism.js    # play the long demos 4x faster (CI shortcut; the default is 1)
+//   DET_ONLY=random node tests/web/determinism.js    # only part 7, the random-number order (about 45 s)
 //
-// The game's own checks are used and no hook was added (code-facts section 7): a demo (-dp) plays
+// Parts 1 to 6 use the game's own checks and no hook (code-facts section 7); part 7 uses -testrandom and -testdump. A demo (-dp) plays
 // back its recorded inputs, -demosyncrecord writes nine bytes per tic to <name>.dms and
 // -demosynctest compares against them. A mismatch only prints "Demo out of sync" and still exits 0,
 // so the output is checked, not the status.
