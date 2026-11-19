@@ -3916,7 +3916,7 @@ int app_main(int argc, char const * const argv[])
         else
         if (Bstrncasecmp(arg, "testrandom", 10) == 0)
             {
-            TestRandomArg(atoi(arg+10));    // test-only: every machine runs SpawnGrenadeExp() and DoRail() at tic T
+            TestRandomArg(arg+10);    // test-only: every machine runs SpawnGrenadeExp() and DoRail() at tic T, N times
             }
         else
         if (Bstrncasecmp(arg, "teststate", 9) == 0)
